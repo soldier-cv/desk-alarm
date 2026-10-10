@@ -21,14 +21,11 @@ steps:
       # 同步服务端构建与运行所需目录（仅服务端与网关，保留宿主机已有 .env 生产配置）
       - cp -rf docker server shared mockups docker-compose.yml .dockerignore .env.example /opt/code/desk-alarm/
       - if [ ! -f /opt/code/desk-alarm/.env ]; then cp .env.example /opt/code/desk-alarm/.env; fi
-      # tag 事件用 CI_COMMIT_TAG；manual 用页面参数 deploy_tag（Deploy variables 填 deploy_tag=v1.x.y）
+      # tag 事件用 CI_COMMIT_TAG；manual 用页面参数 deploy_tag（大小写都认，Woodpecker 不做大写映射）
       - >-
-        if [ -n "$${CI_COMMIT_TAG}" ]; then echo "$${CI_COMMIT_TAG}"; else echo "$${DEPLOY_TAG:-latest}"; fi | tr -d ' ' > /tmp/release_tag
+        if [ -n "$${CI_COMMIT_TAG}" ]; then echo "$${CI_COMMIT_TAG}"; elif [ -n "$${deploy_tag:-}" ]; then echo "$${deploy_tag}"; elif [ -n "$${DEPLOY_TAG:-}" ]; then echo "$${DEPLOY_TAG}"; else echo latest; fi | tr -d ' ' > /tmp/release_tag
       - echo "RELEASE_TAG=$$(cat /tmp/release_tag)"
       - cp /tmp/release_tag /opt/code/desk-alarm/.release_tag
-    environment:
-      # manual 触发时可在页面 Deploy variables 填 deploy_tag=v1.x.y
-      DEPLOY_TAG: ${DEPLOY_TAG}
 
   - name: verify-server
     image: docker.1ms.run/library/node:22-alpine
@@ -50,7 +47,23 @@ steps:
       - /opt/code/desk-alarm:/opt/code/desk-alarm
     commands:
       - cd /opt/code/desk-alarm
-      - RELEASE_TAG=$$(cat /opt/code/desk-alarm/.release_tag 2>/dev/null || echo $${CI_COMMIT_TAG:-latest}) && docker build -f docker/api.Dockerfile -t "deskalarm-api:$${RELEASE_TAG}" -t "deskalarm-api:latest" .
-      - RELEASE_TAG=$$(cat /opt/code/desk-alarm/.release_tag 2>/dev/null || echo $${CI_COMMIT_TAG:-latest}) && docker build -f docker/Dockerfile -t "deskalarm-web:$${RELEASE_TAG}" -t "deskalarm-web:latest" .
-      - RELEASE_TAG=$$(cat /opt/code/desk-alarm/.release_tag 2>/dev/null || echo $${CI_COMMIT_TAG:-latest}) IMAGE_TAG="$${RELEASE_TAG}" docker compose up -d --force-recreate
+      - RELEASE_TAG=$$(cat .release_tag)
+      - echo "$$REGISTRY_PASS" | docker login 100.64.0.88:5000 -u $$REGISTRY_USER --password-stdin
+      # 镜像铁律：推内网 registry，固定版本 + latest 同 digest
+      - docker build -f docker/api.Dockerfile -t "100.64.0.88:5000/deskalarm-api:$${RELEASE_TAG}" -t "100.64.0.88:5000/deskalarm-api:latest" .
+      - docker build -f docker/Dockerfile -t "100.64.0.88:5000/deskalarm-web:$${RELEASE_TAG}" -t "100.64.0.88:5000/deskalarm-web:latest" .
+      - docker push "100.64.0.88:5000/deskalarm-api:$${RELEASE_TAG}"
+      - docker push "100.64.0.88:5000/deskalarm-api:latest"
+      - docker push "100.64.0.88:5000/deskalarm-web:$${RELEASE_TAG}"
+      - docker push "100.64.0.88:5000/deskalarm-web:latest"
+      - docker logout 100.64.0.88:5000
+      # compose 拉起（.env 保留宿主机生产配置）+ 健康验证
+      - IMAGE_TAG=$${RELEASE_TAG} docker compose up -d --force-recreate
       - docker compose ps
+      - >-
+        for i in $$(seq 1 30); do st=$$(docker inspect -f '{{.State.Health.Status}}' deskalarm-api 2>/dev/null || echo missing); if [ "$$st" = "healthy" ]; then echo "deploy OK: desk-alarm $${RELEASE_TAG} healthy"; exit 0; fi; echo "waiting health ($$i): $$st"; sleep 5; done; echo "health check failed" >&2; exit 1
+    environment:
+      REGISTRY_USER:
+        from_secret: registry_user
+      REGISTRY_PASS:
+        from_secret: registry_pass

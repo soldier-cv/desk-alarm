@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: deskalarm-web:${IMAGE_TAG:-latest}
+    image: 100.64.0.88:5000/deskalarm-web:${IMAGE_TAG:-latest}
     container_name: deskalarm-web
     ports:
       # 8080/8088/8090 都被本机其它服务占着（8090 上还跑着一个 Python/FastAPI，
@@ -30,7 +30,7 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-    image: deskalarm-api:${IMAGE_TAG:-latest}
+    image: 100.64.0.88:5000/deskalarm-api:${IMAGE_TAG:-latest}
     container_name: deskalarm-api
     ports:
       # 直连端口，客户端默认连这个。走网关也行，见 web 的 /api/
