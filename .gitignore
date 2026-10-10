@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+*.db
+*.db-wal
+*.db-shm
+target
+app-icon.png
+.openchamber
+.openchamber/screenshots
+
+.env
+!.env.example
+.release_tag

@@ -1,0 +1,76 @@
+name: desk-alarm
+
+services:
+  # 静态原型 + API 网关
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: deskalarm-web:${IMAGE_TAG:-latest}
+    container_name: deskalarm-web
+    ports:
+      # 8080/8088/8090 都被本机其它服务占着（8090 上还跑着一个 Python/FastAPI，
+      # 会抢走回环流量），所以走 8091。要改端口只动 .env 的 WEB_PORT
+      - "${WEB_PORT:-8091}:80"
+    volumes:
+      - ./mockups:/usr/share/nginx/html:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+
+  # 同步与触发服务
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: deskalarm-api:${IMAGE_TAG:-latest}
+    container_name: deskalarm-api
+    ports:
+      # 直连端口，客户端默认连这个。走网关也行，见 web 的 /api/
+      - "8787:8787"
+    environment:
+      PGHOST: "${PGHOST}"
+      PGPORT: "${PGPORT:-5432}"
+      PGDATABASE: "${PGDATABASE}"
+      PGSCHEMA: "${PGSCHEMA:-desk_alarm}"
+      PGUSER: "${PGUSER}"
+      PGPASSWORD: "${PGPASSWORD}"
+      PG_POOL_MAX: "10"
+
+      # 首次部署必须改掉这个口令
+      DESKALARM_PASSCODE: "${DESKALARM_PASSCODE:-deskalarm}"
+
+      # 调度器判定频率与投递轮转频率
+      TICK_MS: "1000"
+      ROTATE_MS: "400"
+
+      # 超过这个时间还没确认的触发，客户端上线时补发
+      MISSED_AFTER_MS: "60000"
+      # 投递重试上限。超了就留给补发，别让坏 token 无限重试
+      DELIVERY_RETRY_MS: "120000"
+      DELIVERY_MAX_ATTEMPTS: "5"
+
+      # Firebase。没配就走不了 FCM，Android 到点只会走 missed 补发
+      FCM_PROJECT_ID: "${FCM_PROJECT_ID:-}"
+      FCM_CLIENT_EMAIL: "${FCM_CLIENT_EMAIL:-}"
+      FCM_PRIVATE_KEY: "${FCM_PRIVATE_KEY:-}"
+
+      # agent 用的独立 token。配了就别和登录口令混用
+      MCP_TOKEN: "${MCP_TOKEN:-}"
+
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+        reservations: { cpus: "0.1", memory: 64M }

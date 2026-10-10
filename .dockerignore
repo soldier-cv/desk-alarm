@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+*.db
+*.db-wal
+*.db-shm
+.git
+.openchamber
+app/src-tauri/target
+app/app-icon.png
+mockups
+*.md
+.env
+.release_tag

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>提醒器正在呼叫你</title>
+</head>
+<body>
+  <div class="tk" id="tk">
+    <div class="tk-top">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7"/><path d="M10.5 20a2 2 0 0 0 3 0"/></svg>
+      <b>提醒器正在呼叫你</b>
+      <div class="sp"></div>
+      <span class="esc" id="tk-esc">关不掉，只能选一个处理方式</span>
+    </div>
+
+    <div class="tk-main">
+      <div class="tk-clock" id="tk-clock">--:--</div>
+      <h2 class="tk-title" id="tk-title"></h2>
+      <div class="tk-note" id="tk-note" hidden></div>
+      <div class="tk-target" id="tk-target"></div>
+      <div class="tk-where" id="tk-where"></div>
+
+      <div class="tk-prog">
+        <div class="meta">
+          <span id="tk-stage">首次提示 0 秒，30 秒未确认升级全屏，5 分钟后每 2 分钟重复</span>
+          <span id="tk-elapsed">已响 0 秒</span>
+        </div>
+        <div class="bar"><i id="tk-bar"></i></div>
+      </div>
+    </div>
+
+    <div class="tk-acts" id="tk-acts">
+      <button class="btn solid" data-act="done">完成</button>
+      <button class="btn ghost" data-act="open">打开链接</button>
+      <button class="btn" data-act="silence" style="margin-left:auto;color:#FF8A7C">静音 10 分钟</button>
+    </div>
+
+    <div class="tk-snooze" id="tk-snooze">
+      <span class="lb">推迟到</span>
+      <button class="btn sm ghost" data-act="sn10">10 分钟后</button>
+      <button class="btn sm ghost" data-act="sn30">30 分钟后</button>
+      <button class="btn sm ghost" data-act="sn60">1 小时后</button>
+      <button class="btn sm ghost" data-act="sntom">明天同一时间</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/ui/takeover.ts"></script>
+</body>
+</html>

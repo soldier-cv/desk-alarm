@@ -1,0 +1,943 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>提醒器 DeskAlarm - 原型</title>
+<style>
+/* ============================================================
+   设计约定
+   主题：整页锁定 DARK，不做明暗切换
+   色板：近黑基底 + 唯一强调色 #FF5C2B（仅用于「到点/逾期/主行动」）
+         --ok 为唯一的「状态绿」，只用于设备在线与已完成，不做装饰
+   字体：Segoe UI Variable（Windows 原生）+ Cascadia Mono（数字/路径）
+   圆角：一套刻度 6 / 8 / 12，交互件 8，面板 12
+   动效：MOTION_INTENSITY 3，只做状态反馈，不做装饰动画
+   ============================================================ */
+:root{
+  --bg:#0B0C0D;
+  --surface:#121315;
+  --raised:#191B1E;
+  --hover:#1E2024;
+  --line:#24262A;
+  --line-soft:#1B1D20;
+  --text:#ECEDEF;
+  --muted:#8C9097;
+  --dim:#5C6067;
+  --flare:#FF5C2B;
+  --flare-tint:rgba(255,92,43,.12);
+  --flare-line:rgba(255,92,43,.38);
+  --ok:#5E8C7F;
+  --r-sm:6px; --r:8px; --r-lg:12px;
+  --sans:"Segoe UI Variable Text","Segoe UI",-apple-system,system-ui,"Microsoft YaHei",sans-serif;
+  --mono:"Cascadia Mono","JetBrains Mono",Consolas,"SFMono-Regular",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--text);font-family:var(--sans);
+  font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+button,input,select,textarea{font:inherit;color:inherit;background:none;border:none;outline:none}
+button{cursor:pointer}
+::selection{background:var(--flare);color:#0B0C0D}
+:focus-visible{outline:2px solid var(--flare);outline-offset:2px;border-radius:var(--r-sm)}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#2A2D31;border:3px solid transparent;background-clip:content-box;border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:#3A3E44;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- 布局骨架 ---------- */
+.app{display:flex;flex-direction:column;height:100dvh;max-width:1560px;margin:0 auto;
+  border-inline:1px solid var(--line-soft)}
+
+/* 标题栏（模拟 Windows 窗口） */
+.titlebar{height:38px;display:flex;align-items:center;gap:8px;padding-left:14px;
+  background:var(--surface);border-bottom:1px solid var(--line-soft);flex:none}
+.titlebar .logo{width:15px;height:15px;border-radius:4px;background:var(--flare);
+  display:grid;place-items:center;flex:none}
+.titlebar .logo i{width:6px;height:6px;border-radius:2px;background:var(--bg);display:block}
+.titlebar b{font-size:12.5px;font-weight:600;letter-spacing:.01em}
+.wctrl{margin-left:auto;display:flex;height:38px}
+.wctrl button{width:46px;display:grid;place-items:center;color:var(--muted)}
+.wctrl button:hover{background:var(--hover);color:var(--text)}
+.wctrl button.close:hover{background:#C42B1C;color:#fff}
+
+/* 快速捕获 */
+.capture{flex:none;padding:14px 16px 12px;background:var(--surface);border-bottom:1px solid var(--line-soft)}
+.capture-in{display:flex;align-items:center;gap:10px;background:var(--raised);
+  border:1px solid var(--line);border-radius:var(--r);padding:0 10px 0 12px;height:44px;
+  transition:border-color .14s,background .14s}
+.capture-in:focus-within{border-color:var(--flare-line);background:#1D1F23}
+.capture-in .prompt{color:var(--dim);font-size:15px;font-family:var(--mono);flex:none}
+.capture-in input{flex:1;font-size:14px;min-width:0}
+.capture-in input::placeholder{color:#5F636A}
+.capture-tools{display:flex;align-items:center;gap:6px;flex:none}
+
+.btn{height:30px;padding:0 12px;border-radius:var(--r);font-size:12.5px;font-weight:500;
+  color:var(--muted);border:1px solid transparent;white-space:nowrap;
+  transition:background .12s,color .12s,border-color .12s}
+.btn:hover{background:var(--hover);color:var(--text)}
+.btn:active{transform:translateY(1px)}
+.btn.solid{background:var(--flare);color:#140A06;font-weight:600;border-color:var(--flare)}
+.btn.solid:hover{background:#ff7448;color:#140A06}
+.btn.ghost{border-color:var(--line);color:var(--text)}
+.btn.ghost:hover{background:var(--hover)}
+.btn.danger{color:#FF6B5A}
+.btn.danger:hover{background:rgba(255,107,90,.1);color:#FF8A7C}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+
+/* 解析预览 */
+.parse{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  border:1px solid var(--line);border-radius:var(--r);background:var(--raised);padding:8px 10px}
+.parse-label{font-size:11px;color:var(--dim);margin-right:2px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;
+  border-radius:var(--r-sm);font-size:11.5px;border:1px solid var(--line);
+  background:#15171A;color:var(--muted)}
+.chip.hot{border-color:var(--flare-line);background:var(--flare-tint);color:#FFB292}
+.chip.path{font-family:var(--mono);font-size:11px}
+.chip svg{opacity:.8}
+
+/* 主体三栏 */
+.body{flex:1;display:grid;grid-template-columns:196px minmax(0,1fr) 336px;min-height:0}
+.body.no-editor{grid-template-columns:196px minmax(0,1fr)}
+.body.no-editor .editor{display:none}
+
+/* 侧栏 */
+.sidebar{background:var(--surface);border-right:1px solid var(--line-soft);
+  padding:12px 10px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:9px;height:32px;padding:0 9px;
+  border-radius:var(--r-sm);color:var(--muted);font-size:13px;width:100%;text-align:left}
+.nav-item:hover{background:var(--hover);color:var(--text)}
+.nav-item.on{background:var(--raised);color:var(--text);font-weight:600}
+.nav-item .count{margin-left:auto;font-size:11px;font-family:var(--mono);color:var(--dim)}
+.nav-item.on .count{color:var(--muted)}
+.nav-item .due{color:var(--flare)}
+.nav-sep{height:1px;background:var(--line-soft);margin:9px 4px}
+.nav-head{font-size:11px;color:var(--dim);padding:4px 9px 5px;letter-spacing:.02em}
+.dev-line{display:flex;align-items:center;gap:8px;height:30px;padding:0 9px;
+  border-radius:var(--r-sm);color:var(--muted);font-size:12.5px;width:100%;text-align:left}
+.dev-line:hover{background:var(--hover);color:var(--text)}
+.dev-line.on{background:var(--raised);color:var(--text)}
+.sdot{width:6px;height:6px;border-radius:2px;flex:none;background:var(--ok)}
+.sdot.off{background:var(--dim)}
+.sdot.alert{background:var(--flare)}
+.dev-line .cnt{margin-left:auto;font-size:10.5px;font-family:var(--mono);color:var(--dim)}
+
+/* 列表 */
+.list{min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.list-head{padding:18px 22px 12px;flex:none}
+.list-head h1{font-size:19px;font-weight:650;letter-spacing:-.01em}
+.list-head p{font-size:12.5px;color:var(--dim);margin-top:3px}
+.list-head .row{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
+.list-scroll{flex:1;overflow-y:auto;padding:0 12px 24px}
+.group-head{display:flex;align-items:center;gap:10px;padding:14px 10px 7px;
+  font-size:11.5px;color:var(--dim)}
+.group-head .line{flex:1;height:1px;background:var(--line-soft)}
+.group-head.hot{color:var(--flare)}
+
+/* 条目行 */
+.item{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:start;
+  padding:9px 10px;border-radius:var(--r);border:1px solid transparent;cursor:pointer;
+  transition:background-color .1s,border-color .1s}
+.item:hover{background-color:var(--surface)}
+.item.on{background-color:var(--raised);border-color:var(--line)}
+/* 临近梯度：强调色从行首渗入，越近越浓。
+   背景色（hover/选中）和背景图（梯度）是两层，互不覆盖 */
+.item.u-soon{background-image:linear-gradient(90deg,rgba(255,92,43,.05),transparent 55%)}
+.item.u-close{background-image:linear-gradient(90deg,rgba(255,92,43,.09),transparent 62%)}
+.item.u-due{background-image:linear-gradient(90deg,rgba(255,92,43,.14),transparent 70%)}
+.item.u-over{background-image:linear-gradient(90deg,rgba(255,92,43,.19),transparent 70%)}
+.cbox{width:17px;height:17px;border-radius:5px;border:1.5px solid #3A3E44;margin-top:2px;
+  display:grid;place-items:center;transition:background .12s,border-color .12s;flex:none}
+.cbox:hover{border-color:var(--dim)}
+.item.done .cbox{background:var(--ok);border-color:var(--ok)}
+.item.u-close .cbox,.item.u-due .cbox,.item.u-over .cbox{border-color:var(--flare-line)}
+.cbox svg{opacity:0;transform:scale(.7);transition:opacity .12s,transform .12s}
+.item.done .cbox svg{opacity:1;transform:scale(1)}
+.it-time{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-bottom:2px;
+  display:flex;align-items:center;gap:6px}
+.item.u-close .it-time{color:#C9A186}
+.item.u-due .it-time,.item.u-over .it-time{color:var(--flare)}
+/* 时间前面的级别点。due 档呼吸一次 2.6 秒，只动透明度 */
+.udot{width:5px;height:5px;border-radius:2px;flex:none}
+.udot.soon{background:#6B5A4E}
+.udot.close{background:#B07A52}
+.udot.due,.udot.over{background:var(--flare)}
+.udot.due{animation:breathe 2.6s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.udot.due{animation:none}}
+.it-title{font-size:13.5px;line-height:1.45;word-break:break-word}
+.item.done .it-title{color:var(--dim);text-decoration:line-through;text-decoration-color:#3A3E44}
+.it-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:5px}
+.it-meta:empty{display:none}
+.tag{font-size:11px;color:var(--dim);display:inline-flex;align-items:center;gap:4px;
+  max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag.host{color:var(--muted)}
+.tag.path{font-family:var(--mono);font-size:10.5px;color:#7E838A;background:#16181B;
+  border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:1px 6px;max-width:250px}
+.tag.due{color:var(--flare)}
+.tag.elsewhere{color:var(--ok)}
+.it-act{display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .1s}
+.item:hover .it-act,.item.on .it-act{opacity:1}
+.iconbtn{width:26px;height:26px;border-radius:var(--r-sm);display:grid;place-items:center;color:var(--dim)}
+.iconbtn:hover{background:var(--hover);color:var(--text)}
+.iconbtn.act:hover{color:var(--flare)}
+
+/* 右侧编辑 */
+.editor{border-left:1px solid var(--line-soft);background:var(--surface);
+  display:flex;flex-direction:column;min-height:0}
+.ed-head{padding:14px 16px 10px;border-bottom:1px solid var(--line-soft);display:flex;gap:8px;align-items:center}
+.ed-head h2{font-size:13px;font-weight:650}
+.ed-head .sp{flex:1}
+.ed-body{flex:1;overflow-y:auto;padding:16px}
+.fld{margin-bottom:18px}
+.fld label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:6px}
+.input{width:100%;background:var(--raised);border:1px solid var(--line);border-radius:var(--r);
+  padding:8px 10px;font-size:13px;transition:border-color .12s}
+.input:focus{border-color:var(--flare-line)}
+textarea.input{resize:vertical;min-height:66px;line-height:1.6}
+select.input{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235C6067' stroke-width='2.4'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 10px center;padding-right:30px;cursor:pointer}
+.hint{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.5}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;background:var(--raised);
+  border:1px solid var(--line);border-radius:var(--r);padding:3px}
+.seg button{height:28px;border-radius:var(--r-sm);font-size:12.5px;color:var(--muted);
+  display:flex;align-items:center;justify-content:center;gap:5px;transition:background .12s,color .12s}
+.seg button:hover{color:var(--text)}
+.seg button.on{background:#2A2D32;color:var(--text);font-weight:600}
+.seg button.on.hot{background:var(--flare);color:#140A06}
+
+/* 设备选择 */
+.dev-pick{display:flex;flex-direction:column;gap:4px}
+.dev-opt{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:var(--r-sm);
+  border:1px solid var(--line-soft);background:var(--raised);cursor:pointer;
+  transition:border-color .12s,background .12s}
+.dev-opt:hover{border-color:var(--line)}
+.dev-opt.on{border-color:var(--flare-line);background:#1E2024}
+.dev-opt input{appearance:none;width:15px;height:15px;border:1.5px solid #3A3E44;border-radius:4px;
+  flex:none;position:relative;cursor:pointer}
+.dev-opt input:checked{background:var(--flare);border-color:var(--flare)}
+.dev-opt input:checked::after{content:"";position:absolute;left:4.2px;top:1.4px;width:4px;height:7.5px;
+  border:solid #140A06;border-width:0 2px 2px 0;transform:rotate(42deg)}
+.dev-opt .nm{flex:1;min-width:0}
+.dev-opt .nm b{display:block;font-size:12.5px;font-weight:550}
+.dev-opt .nm span{font-size:11px;color:var(--dim)}
+.ed-foot{padding:12px 16px;border-top:1px solid var(--line-soft);display:flex;gap:8px}
+.ed-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;padding:32px;text-align:center;color:var(--dim)}
+.ed-empty .box{width:46px;height:46px;border-radius:var(--r-lg);border:1px dashed var(--line);
+  display:grid;place-items:center}
+.ed-empty b{font-size:13px;color:var(--muted);font-weight:550}
+.ed-empty p{font-size:12px;line-height:1.6;max-width:230px}
+
+/* 状态栏 */
+.statusbar{flex:none;height:28px;background:var(--surface);border-top:1px solid var(--line-soft);
+  display:flex;align-items:center;gap:14px;padding:0 14px;font-size:11.5px;color:var(--dim)}
+.statusbar .sp{flex:1}
+.statusbar .sync{display:flex;align-items:center;gap:6px}
+.statusbar b{color:var(--muted);font-weight:500}
+.statusbar .mono{font-family:var(--mono)}
+
+/* 空状态 */
+.empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:56px 24px;text-align:center}
+.empty .box{width:52px;height:52px;border-radius:14px;border:1px dashed var(--line);display:grid;place-items:center;color:var(--dim)}
+.empty b{font-size:13.5px;font-weight:600;color:var(--muted)}
+.empty p{font-size:12.5px;color:var(--dim);line-height:1.7;max-width:280px}
+
+/* ---------- 强提示接管层 ---------- */
+.takeover{position:fixed;inset:0;z-index:60;display:none;place-items:center;padding:28px;
+  background:radial-gradient(1100px 620px at 50% 26%,rgba(255,92,43,.13),transparent 70%),#07080A}
+.takeover.on{display:grid;animation:flashIn .3s ease-out}
+@keyframes flashIn{0%{opacity:0}60%{opacity:1}62%{opacity:.55}100%{opacity:1}}
+.tk-card{width:min(680px,100%);background:var(--surface);border:1px solid var(--flare-line);
+  border-radius:16px;overflow:hidden;box-shadow:0 40px 120px rgba(0,0,0,.7)}
+.tk-top{display:flex;align-items:center;gap:10px;padding:13px 18px;background:var(--flare);color:#140A06}
+.tk-top .bell{animation:shake 1.1s ease-in-out infinite}
+@keyframes shake{0%,72%,100%{transform:rotate(0)}76%{transform:rotate(-13deg)}82%{transform:rotate(12deg)}88%{transform:rotate(-8deg)}94%{transform:rotate(5deg)}}
+.tk-top b{font-size:12.5px;font-weight:700;letter-spacing:.02em}
+.tk-top .sp{flex:1}
+.tk-top .esc{font-size:11.5px;font-weight:600;opacity:.75}
+.tk-main{padding:30px 30px 26px}
+.tk-clock{font-family:var(--mono);font-size:52px;font-weight:600;letter-spacing:-.03em;line-height:1}
+.tk-clock span{font-size:20px;color:var(--dim);margin-left:8px;letter-spacing:0}
+.tk-title{font-size:26px;font-weight:650;line-height:1.28;margin-top:16px;letter-spacing:-.015em}
+.tk-note{font-size:13.5px;color:var(--muted);line-height:1.65;margin-top:12px;
+  max-height:76px;overflow:auto;word-break:break-all}
+.tk-target{margin-top:16px;display:flex;flex-direction:column;gap:6px}
+.tk-target .t{display:flex;align-items:center;gap:8px;background:var(--raised);border:1px solid var(--line);
+  border-radius:var(--r);padding:8px 11px;font-size:12.5px}
+.tk-target .t.path{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.tk-progress{margin-top:18px}
+.tk-progress .meta{display:flex;justify-content:space-between;font-size:11.5px;color:var(--dim);margin-bottom:6px}
+.bar{height:3px;border-radius:99px;background:#232629;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--flare);width:0}
+.tk-acts{display:flex;gap:8px;padding:0 30px 26px;flex-wrap:wrap}
+.tk-acts .btn{height:36px;padding:0 16px;font-size:13px}
+.tk-snooze{display:flex;gap:6px;padding:0 30px 24px;align-items:center;flex-wrap:wrap}
+.tk-snooze .lb{font-size:11.5px;color:var(--dim);margin-right:4px}
+
+/* ---------- 原型屏幕切换条 ---------- */
+.prototype{position:fixed;left:16px;bottom:44px;z-index:70;display:flex;gap:3px;padding:4px;
+  background:rgba(18,19,21,.94);border:1px solid var(--line);border-radius:99px;
+  backdrop-filter:blur(12px);box-shadow:0 12px 40px rgba(0,0,0,.55)}
+.prototype button{height:26px;padding:0 11px;border-radius:99px;font-size:11.5px;color:var(--dim)}
+.prototype button:hover{color:var(--text);background:var(--hover)}
+.prototype button.on{background:var(--raised);color:var(--text)}
+.prototype .div{width:1px;background:var(--line);margin:4px 2px}
+
+/* ---------- 辅助 ---------- */
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+::-webkit-search-cancel-button{display:none}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+@media (max-width:1180px){
+  .body{grid-template-columns:180px minmax(0,1fr) 300px}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <span class="logo"><i></i></span>
+    <b>提醒器</b>
+    <div class="wctrl">
+      <button aria-label="最小化"><svg width="11" height="11" viewBox="0 0 12 12"><rect x="1" y="6" width="10" height="1.2" fill="currentColor"/></svg></button>
+      <button aria-label="最大化"><svg width="11" height="11" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="close" aria-label="关闭"><svg width="11" height="11" viewBox="0 0 12 12"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" stroke-width="1.3"/></svg></button>
+    </div>
+  </div>
+
+  <!-- 快速捕获 -->
+  <div class="capture">
+    <div class="capture-in">
+      <span class="prompt">&gt;</span>
+      <input id="cap" type="text" autocomplete="off" spellcheck="false"
+             placeholder="粘一句话、链接或目录，按 Enter 直接进收集箱，填时间则变提醒">
+      <div class="capture-tools">
+        <button class="btn sm ghost" id="btn-now">30 分钟后</button>
+        <button class="btn sm solid" id="btn-save">存为提醒</button>
+      </div>
+    </div>
+    <div class="parse" id="parse" hidden>
+      <span class="parse-label">已识别</span>
+      <span class="chip" id="p-kind"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h7"/></svg><span>普通文本</span></span>
+      <span class="chip hot" id="p-time"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg><span>未识别到时间</span></span>
+      <span class="chip" id="p-dev">推送：全部在线设备</span>
+    </div>
+  </div>
+
+  <!-- 主体 -->
+  <div class="body" id="body">
+    <!-- 侧栏 -->
+    <nav class="sidebar">
+      <button class="nav-item on" data-view="today"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>今天<span class="count" id="c-today">3</span></button>
+      <button class="nav-item" data-view="upcoming"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>即将到来<span class="count" id="c-up">2</span></button>
+      <button class="nav-item" data-view="inbox"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 5h14l2 8v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5z"/></svg>收集箱<span class="count" id="c-inbox">3</span></button>
+      <button class="nav-item" data-view="all"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/></svg>全部条目<span class="count" id="c-all">8</span></button>
+      <button class="nav-item" data-view="done"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h9"/></svg>已完成<span class="count" id="c-done">2</span></button>
+
+      <div class="nav-sep"></div>
+      <div class="nav-head">推送设备</div>
+      <button class="dev-line" data-view="devices"><span class="sdot"></span>我的笔记本<span class="cnt">本机</span></button>
+      <button class="dev-line"><span class="sdot"></span>工位台式机<span class="cnt">在线</span></button>
+      <button class="dev-line"><span class="sdot off"></span>小米手机<span class="cnt">2h</span></button>
+      <button class="dev-line"><span class="sdot alert"></span>会议室电脑<span class="cnt">离线 3d</span></button>
+
+      <div style="flex:1"></div>
+      <button class="nav-item" id="btn-settings"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>提醒设置</button>
+    </nav>
+
+    <!-- 列表 -->
+    <main class="list">
+      <div class="list-head">
+        <div class="row">
+          <div>
+            <h1 id="view-title">今天</h1>
+            <p id="view-sub">3 条需要处理，1 条已逾期</p>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn sm ghost" id="btn-test">预览强提醒</button>
+            <button class="btn sm" id="btn-add">新建条目</button>
+          </div>
+        </div>
+      </div>
+      <div class="list-scroll" id="list"></div>
+    </main>
+
+    <!-- 编辑面板 -->
+    <aside class="editor" id="editor"></aside>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="statusbar">
+    <div class="sync"><span class="sdot"></span><b>已连接</b> sync.deskalarm.app</div>
+    <span>下次同步 <span class="mono">14:02:30</span></span>
+    <span>全屏提醒 <b>开</b></span>
+    <div class="sp"></div>
+    <span>自启 <b>开</b></span>
+    <span>离线队列 <span class="mono">0</span></span>
+  </div>
+</div>
+
+<!-- 强提醒接管层 -->
+<div class="takeover" id="tk" role="alertdialog" aria-labelledby="tk-title">
+  <div class="tk-card">
+    <div class="tk-top">
+      <span class="bell"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7"/><path d="M10.5 20a2 2 0 0 0 3 0"/></svg></span>
+      <b>提醒器正在呼叫你</b>
+      <div class="sp"></div>
+      <span class="esc">ESC 无效，必须选择处理方式</span>
+    </div>
+    <div class="tk-main">
+      <div class="tk-clock" id="tk-clock">15:00<span>周一 9 月 28 日</span></div>
+      <h2 class="tk-title" id="tk-title">给张伟回邮件，确认周四评审时间</h2>
+      <div class="tk-note" id="tk-note">他上周问过一次排期，今天下班前必须给答复，不然评审要顺延一周。</div>
+      <div class="tk-target" id="tk-target">
+        <div class="t"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8C9097" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg><span>https://mail.example.com/inbox/2f8a1c</span></div>
+      </div>
+      <div class="tk-progress">
+        <div class="meta"><span id="tk-stage">首次提示 0 秒 · 全屏升级 30 秒 · 重复提醒 5 分钟</span><span id="tk-elapsed">已响 12 秒</span></div>
+        <div class="bar"><i id="tk-bar"></i></div>
+      </div>
+    </div>
+    <div class="tk-acts">
+      <button class="btn solid" data-tk="done">完成</button>
+      <button class="btn ghost" data-tk="open">打开链接</button>
+      <button class="btn" data-tk="snooze">推迟</button>
+      <button class="btn danger" data-tk="silence" style="margin-left:auto">静音 10 分钟</button>
+    </div>
+    <div class="tk-snooze">
+      <span class="lb">推迟到</span>
+      <button class="btn sm ghost" data-tk="sn10">10 分钟后</button>
+      <button class="btn sm ghost" data-tk="sn30">30 分钟后</button>
+      <button class="btn sm ghost" data-tk="sn60">1 小时后</button>
+      <button class="btn sm ghost" data-tk="sntom">明天同一时间</button>
+    </div>
+  </div>
+</div>
+
+<!-- 原型屏幕切换 -->
+<div class="prototype">
+  <button data-scr="app" class="on">主界面</button>
+  <div class="div"></div>
+  <button data-scr="tk">强提醒接管</button>
+  <button data-scr="set">设置与升级策略</button>
+</div>
+
+<script>
+/* ===================== 数据 ===================== */
+const DEVICES = [
+  {id:'d1',name:'我的笔记本',  os:'Windows 11', self:true, online:true,  last:'刚刚'},
+  {id:'d2',name:'工位台式机',  os:'Windows 10', self:false,online:true,  last:'刚刚'},
+  {id:'d3',name:'小米手机',    os:'Android 15', self:false,online:false, last:'2 小时前'},
+  {id:'d4',name:'会议室电脑',  os:'Windows 10', self:false,online:false, last:'3 天前'}
+];
+
+let E = [
+  {id:1, text:'站起来走两步，顺便把水喝了', kind:'text', remind:'09:30', day:'today', status:'done', doneDev:null, devices:['*'], repeat:'none', note:''},
+  {id:2, text:'给张伟回邮件，确认周四评审时间', kind:'link', url:'https://mail.example.com/inbox/2f8a1c', remind:'15:00', day:'today', status:'pending', overdue:false, min:42, devices:['*'], repeat:'none', note:'他上周问过一次排期，今天下班前必须给答复。'},
+  {id:3, text:'提交本周周报到共享盘', kind:'path', path:'D:\\工作\\周报\\2026-W39.docx', remind:'18:30', day:'today', status:'pending', overdue:true, devices:['d1','d2'], repeat:'weekly', note:''},
+  {id:4, text:'牙医复诊，改约到下午', kind:'text', remind:'20:00', day:'today', status:'inbox', devices:['d3'], repeat:'none', note:''},
+  {id:5, text:'看这篇文章讲的注意力恢复方法', kind:'link', url:'https://example.com/notes/attention-recovery', remind:'10:30', day:'up', status:'pending', min:900, devices:['*'], repeat:'none', note:''},
+  {id:6, text:'取干洗的西装', kind:'text', remind:'19:00', day:'up', status:'pending', min:2000, devices:['d1','d3'], repeat:'none', note:''},
+  {id:7, text:'D:\\资料\\待读\\认知负荷.pdf', kind:'path', path:'D:\\资料\\待读\\认知负荷.pdf', day:'inbox', status:'inbox', devices:['*'], repeat:'none', note:'这周找时间读，不着急。'},
+  {id:8, text:'把旧显示器挂二手平台', kind:'text', day:'inbox', status:'inbox', devices:['*'], repeat:'none', note:''},
+  {id:9, text:'https://example.com/reading/2026/state-of-focus', kind:'link', url:'https://example.com/reading/2026/state-of-focus', day:'inbox', status:'inbox', devices:['*'], repeat:'none', note:''},
+  {id:10, text:'倒垃圾 + 换床单', kind:'text', remind:'08:00', day:'done', status:'done', doneDev:'工位台式机', devices:['*'], repeat:'none', note:''}
+];
+
+const VIEWS = {
+  today:   {t:'今天',     s:'3 条需要处理，1 条已逾期'},
+  upcoming:{t:'即将到来', s:'未来 7 天'},
+  inbox:   {t:'收集箱',   s:'没定时间，先存着'},
+  all:     {t:'全部条目', s:'8 条'},
+  done:    {t:'已完成',   s:'保留 7 天后自动清理'},
+  devices: {t:'推送设备', s:'一次提醒可以同时发到多台设备'}
+};
+
+let view = 'today', sel = 2;
+
+/* ===================== 图标 ===================== */
+const I = {
+  bell:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7"/><path d="M10.5 20a2 2 0 0 0 3 0"/></svg>',
+  check:'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#0B0C0D" stroke-width="3.4"><path d="M4 12.5l5 5L20 6.5"/></svg>',
+  clock:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>',
+  more:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>',
+  link:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg>',
+  folder:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  repe:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11a8 8 0 0 1 13.7-5.7L20 7.5"/><path d="M20 4v3.5h-3.5"/><path d="M20 13a8 8 0 0 1-13.7 5.7L4 16.5"/><path d="M4 20v-3.5h3.5"/></svg>',
+  down:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M6 13l6 6 6-6"/></svg>',
+  trash:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>',
+  win:'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.5l7.5-1v7H3zM11.5 4.3L21 3v8.5h-9.5zM3 12.5h7.5v7L3 18.4zM11.5 12.5H21V21l-9.5-1.3z"/></svg>'
+};
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const host = u => { try { return new URL(u).hostname.replace(/^www\./,''); } catch { return u; } };
+
+/* ===================== 列表渲染 ===================== */
+function pool(){
+  if(view==='done') return E.filter(e=>e.status==='done');
+  if(view==='inbox') return E.filter(e=>e.status==='inbox');
+  if(view==='all') return E.filter(e=>e.status!=='done');
+  if(view==='upcoming') return E.filter(e=>e.day==='up' && e.status==='pending');
+  if(view==='today') return E.filter(e=>e.day==='today' && e.status!=='done');
+  return E.filter(e=>e.status!=='done');
+}
+
+/* 临近度：和客户端同一套规则。
+   min = 距到点的分钟数（原型用固定值演示） */
+function tierOf(e){
+  if(e.status==='done'||e.remind==null) return 'none';
+  if(e.overdue) return 'over';
+  if(e.min<=15) return 'due';
+  if(e.min<=60) return 'close';
+  if(e.min<=24*60) return 'soon';
+  return 'none';
+}
+function timeTxt(e){
+  if(e.remind==null) return '收集箱 · 不定时';
+  if(e.overdue) return `${e.remind} · 已逾期 2 小时`;
+  const t = tierOf(e);
+  if(t==='due'||t==='close'){
+    const m = Math.max(1, Math.round(e.min));
+    return m<60 ? `还有 ${m} 分钟` : `还有 ${Math.round(m/60)} 小时`;
+  }
+  return e.remind;
+}
+
+function row(e){
+  const t = tierOf(e);
+  const devTxt = e.devices[0]==='*' ? '全部设备' : e.devices.map(d=>DEVICES.find(x=>x.id===d).name).join(' / ');
+  const devDead = e.devices.some(d=>{const v=DEVICES.find(x=>x.id===d); return v && !v.online;});
+
+  let meta = '';
+  if(e.url) meta += `<span class="tag host">${I.link}${esc(host(e.url))}</span>`;
+  if(e.path) meta += `<span class="tag path">${I.folder}${esc(e.path)}</span>`;
+  if(e.repeat && e.repeat!=='none') meta += `<span class="tag">${I.repe}${({daily:'每天',weekly:'每周',monthly:'每月'})[e.repeat]}</span>`;
+  meta += `<span class="tag${devDead?' due':''}">${e.devices[0]==='*'?'推送：全部在线设备':'仅推送到：'+esc(devTxt)}</span>`;
+  if(e.status==='done' && e.doneDev) meta += `<span class="tag elsewhere">已在「${esc(e.doneDev)}」完成</span>`;
+
+  const time = `<span class="it-time">${t==='none'?'':`<i class="udot ${t}"></i>`}${I.clock}${esc(timeTxt(e))}</span>`;
+
+  return `<div class="item ${e.status==='done'?'done':''} ${t==='none'?'':`u-${t}`} ${sel===e.id?'on':''}" data-id="${e.id}">
+    <div class="cbox" data-act="toggle" data-id="${e.id}">${I.check}</div>
+    <div>
+      ${time}
+      <div class="it-title">${esc(e.text)}</div>
+      <div class="it-meta">${meta}</div>
+    </div>
+    <div class="it-act">
+      <button class="iconbtn" data-act="snooze" data-id="${e.id}" title="推迟到明天">${I.down}</button>
+      <button class="iconbtn" data-act="more" data-id="${e.id}" title="更多">${I.more}</button>
+    </div>
+  </div>`;
+}
+
+function renderList(){
+  const box = document.getElementById('list');
+  if(view==='devices'){ box.innerHTML = renderDevices(); document.getElementById('body').classList.add('no-editor'); return; }
+  document.getElementById('body').classList.remove('no-editor');
+
+  const items = pool();
+  if(!items.length){
+    box.innerHTML = `<div class="empty">
+      <div class="box">${I.bell}</div>
+      <b>${view==='done'?'还没有完成的条目':view==='inbox'?'收集箱是空的':'这一段没有待办'}</b>
+      <p>${view==='inbox'?'在上面直接粘贴一句话、链接或目录，先存下来，等有空再安排时间。':view==='done'?'完成后的条目会留在这里 7 天，方便回看。':'换个分类看看，或者新建一条。'}</p>
+    </div>`;
+    return;
+  }
+
+  let html = '';
+  if(view==='today' || view==='all'){
+    const late  = items.filter(e=>e.overdue);
+    const timed = items.filter(e=>!e.overdue && e.remind);
+    const loose = items.filter(e=>!e.remind);
+    const seg = (label,arr,hot)=> arr.length ? `<div class="group-head ${hot?'hot':''}">${label}<div class="line"></div><span style="font-family:var(--mono)">${arr.length}</span></div>` + arr.map(row).join('') : '';
+    html += seg('已逾期', late, true);
+    html += seg('今天定时', timed, false);
+    html += seg('收集箱 · 不定时', loose, false);
+  } else {
+    html = items.map(row).join('');
+  }
+  box.innerHTML = html;
+}
+
+function renderDevices(){
+  return `<div style="padding:6px 10px 20px">
+    <div class="ed-empty" style="padding:0 0 22px;align-items:flex-start;text-align:left">
+      <b style="font-size:13px;color:var(--text)">每条提醒都可以单独选推送范围</b>
+      <p style="max-width:520px">默认发给全部在线设备。勾选具体设备后，其它设备不会收到这条提醒，但条目依然同步可见。在线状态每 30 秒刷新一次。</p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px">
+      ${DEVICES.map(d=>{
+        const n = E.filter(e=>e.status==='pending' && (e.devices[0]==='*'||e.devices.includes(d.id))).length;
+        return `<div class="dev-opt" style="cursor:default;align-items:flex-start;padding:12px">
+          <span class="sdot ${d.online?'':'off'}" style="margin-top:6px"></span>
+          <div class="nm">
+            <b>${esc(d.name)}${d.self?' <span style="color:var(--dim);font-weight:400">本机</span>':''}</b>
+            <span>${esc(d.os)} · ${d.online?'在线':'最后在线 '+esc(d.last)}</span>
+            <div style="margin-top:8px;font-size:11.5px;color:var(--dim)">${d.online?`待推 ${n} 条`:'离线期间提醒会排队，恢复后补发并标注延迟'}</div>
+          </div>
+          <button class="btn sm ${d.online?'ghost':''}" data-act="ring" data-id="${d.id}" style="flex:none">${d.online?'试响':'不可用'}</button>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="margin-top:22px;padding:14px 16px;border:1px solid var(--line-soft);border-radius:var(--r-lg);background:var(--surface)">
+      <b style="font-size:12.5px">离线与补发规则</b>
+      <div style="margin-top:10px;display:grid;gap:8px;font-size:12.5px;color:var(--muted);line-height:1.6">
+        <div>设备离线时，服务端保留提醒队列。设备重新上线后立即补发，条目上标注「延迟送达」。</div>
+        <div>电脑从休眠唤醒或开机启动时，本地先扫描一遍已过期未确认的条目，优先于服务端同步处理。</div>
+        <div>任意一台设备点「完成」，全部设备立刻停止响铃并把该条目标记为已处理，不会重复提醒。</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ===================== 编辑面板 ===================== */
+function renderEditor(){
+  const ed = document.getElementById('editor');
+  const e = E.find(x=>x.id===sel);
+
+  if(!e){
+    ed.innerHTML = `<div class="ed-empty">
+      <div class="box">${I.bell}</div>
+      <b>没有选中的条目</b>
+      <p>点左边任意一条来设置时间、推送设备和备注。</p>
+    </div>`;
+    return;
+  }
+
+  const rep = [['','不重复'],['daily','每天'],['weekly','每周'],['monthly','每月']];
+  ed.innerHTML = `
+  <div class="ed-head">
+    <h2>编辑条目</h2><div class="sp"></div>
+    <button class="iconbtn" data-act="more" data-id="${e.id}" title="更多">${I.more}</button>
+  </div>
+  <div class="ed-body">
+    <div class="fld">
+      <label for="f-t">内容</label>
+      <textarea class="input" id="f-t" rows="2">${esc(e.text)}</textarea>
+    </div>
+
+    <div class="fld">
+      <label>提醒时间</label>
+      <div class="seg" id="seg-when">
+        <button data-w="none" class="${e.remind?'':'on'}">不定时</button>
+        <button data-w="today" class="${e.remind?'on hot':''}">今天</button>
+        <button data-w="pick">指定时间</button>
+      </div>
+      ${e.remind?`
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+        <input class="input" type="date" value="2026-09-28" aria-label="日期">
+        <input class="input" type="time" value="${esc(e.remind)}" aria-label="时间">
+      </div>
+      <div class="hint">到点后先出 Windows 通知，30 秒未确认升级全屏。</div>`:
+      `<div class="hint">不定时的条目会留在收集箱，只在列表里，不会响铃。</div>`}
+    </div>
+
+    <div class="fld">
+      <label>重复</label>
+      <div class="seg" id="seg-rep">
+        ${rep.map(r=>`<button data-r="${r[0]}" class="${(e.repeat||'none')===r[0]?'on':''}">${r[1]}</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="fld">
+      <label>推送到</label>
+      <div class="dev-pick">
+        <div class="dev-opt ${e.devices[0]==='*'?'on':''}" data-all="1">
+          <input type="checkbox" ${e.devices[0]==='*'?'checked':''} aria-label="全部设备">
+          <div class="nm"><b>全部在线设备</b><span>3 台在线，会议室电脑离线会排队</span></div>
+        </div>
+        ${DEVICES.filter(d=>!d.self).map(d=>{
+          const on = e.devices.includes(d.id);
+          return `<div class="dev-opt ${on?'on':''}" data-dev="${d.id}">
+            <input type="checkbox" ${on?'checked':''} aria-label="${esc(d.name)}">
+            <div class="nm"><b>${esc(d.name)}</b><span>${esc(d.os)} · ${d.online?'在线':'最后在线 '+esc(d.last)}</span></div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="hint">条目本身在所有设备同步，只有「响铃」按上面的范围发。</div>
+    </div>
+
+    <div class="fld">
+      <label for="f-n">备注</label>
+      <textarea class="input" id="f-n" rows="3" placeholder="提醒时一起显示的内容">${esc(e.note||'')}</textarea>
+    </div>
+  </div>
+  <div class="ed-foot">
+    <button class="btn solid" data-act="done" data-id="${e.id}">标记完成</button>
+    <button class="btn ghost" data-act="snooze" data-id="${e.id}">推迟到明天</button>
+    <button class="btn danger" data-act="del" data-id="${e.id}" style="margin-left:auto">${I.trash}</button>
+  </div>`;
+}
+
+/* ===================== 交互 ===================== */
+function setView(v){
+  view = v;
+  document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('on', b.dataset.view===v));
+  document.querySelectorAll('.dev-line[data-view]').forEach(b=>b.classList.toggle('on', b.dataset.view===v));
+  document.getElementById('view-title').textContent = VIEWS[v].t;
+  document.getElementById('view-sub').textContent = VIEWS[v].s;
+  renderList();
+  renderEditor();
+}
+
+document.addEventListener('click', ev=>{
+  const nav = ev.target.closest('.nav-item[data-view], .dev-line[data-view]');
+  if(nav){ setView(nav.dataset.view); return; }
+
+  const ring = ev.target.closest('[data-act="ring"]');
+  if(ring) return;
+
+  const it = ev.target.closest('.item');
+  const act = ev.target.closest('[data-act]');
+
+  if(act){
+    const id = +act.dataset.id;
+    const e = E.find(x=>x.id===id);
+    if(act.dataset.act==='toggle'){
+      e.status = e.status==='done' ? (e.remind?'pending':'inbox') : 'done';
+      e.doneDev = e.status==='done' ? '我的笔记本' : null;
+      e.overdue = false;
+      counts();
+      sel = e.status==='done' ? null : id;
+      renderList(); renderEditor(); return;
+    }
+    if(act.dataset.act==='snooze'){
+      e.remind = '明天 09:00'; e.day='up'; e.overdue=false; e.snooze=(e.snooze||0)+1;
+      e.status = 'pending';
+      renderList(); renderEditor(); return;
+    }
+    if(act.dataset.act==='del'){ E = E.filter(x=>x.id!==id); sel=null; counts(); renderList(); renderEditor(); return; }
+    if(act.dataset.act==='done'){
+      e.status='done'; e.doneDev='我的笔记本'; counts(); sel=null; renderList(); renderEditor(); return;
+    }
+  }
+
+  if(it){ sel = +it.dataset.id; renderList(); renderEditor(); }
+});
+
+function counts(){
+  const c = {
+    today: E.filter(e=>e.day==='today' && e.status!=='done').length,
+    up:    E.filter(e=>e.day==='up' && e.status==='pending').length,
+    inbox: E.filter(e=>e.status==='inbox').length,
+    all:   E.filter(e=>e.status!=='done').length,
+    done:  E.filter(e=>e.status==='done').length
+  };
+  document.getElementById('c-today').textContent = c.today;
+  document.getElementById('c-up').textContent = c.up;
+  document.getElementById('c-inbox').textContent = c.inbox;
+  document.getElementById('c-all').textContent = c.all;
+  document.getElementById('c-done').textContent = c.done;
+}
+
+/* 编辑面板内的交互 */
+document.getElementById('editor').addEventListener('click', ev=>{
+  const e = E.find(x=>x.id===sel); if(!e) return;
+  const w = ev.target.closest('[data-w]');
+  if(w){
+    document.querySelectorAll('#seg-when button').forEach(b=>b.classList.remove('on'));
+    w.classList.add('on');
+    if(w.dataset.w==='none'){ e.remind=null; e.day='inbox'; e.status='inbox'; }
+    else { e.remind=e.remind||'15:00'; e.day='today'; e.status='pending'; }
+    counts(); renderList(); renderEditor(); return;
+  }
+  const r = ev.target.closest('[data-r]');
+  if(r){
+    document.querySelectorAll('#seg-rep button').forEach(b=>b.classList.remove('on'));
+    r.classList.add('on'); e.repeat = r.dataset.r||'none'; return;
+  }
+  const all = ev.target.closest('[data-all]');
+  if(all){
+    e.devices = ['*']; renderEditor(); return;
+  }
+  const dev = ev.target.closest('[data-dev]');
+  if(dev){
+    const id = dev.dataset.dev;
+    if(e.devices[0]==='*'){ e.devices = DEVICES.filter(d=>!d.self && d.id!==id).map(d=>d.id); }
+    else { e.devices = e.devices.includes(id) ? e.devices.filter(d=>d!==id) : [...e.devices, id]; }
+    if(!e.devices.length) e.devices = ['*'];
+    renderEditor(); renderList(); return;
+  }
+});
+document.getElementById('editor').addEventListener('input', ev=>{
+  const e = E.find(x=>x.id===sel); if(!e) return;
+  if(ev.target.id==='f-t'){ e.text = ev.target.value; renderList(); }
+  if(ev.target.id==='f-n'){ e.note = ev.target.value; }
+});
+
+/* ===================== 快速捕获解析 ===================== */
+const cap = document.getElementById('cap');
+
+function parse(s){
+  const out = {kind:'text', label:'普通文本', time:null, timeLabel:'未识别到时间'};
+  if(!s.trim()) return out;  if(/^(https?:\/\/|www\.)\S+/i.test(s.trim())){ out.kind='link'; out.label='链接'; }
+  else if(/^[a-z]:\\|^\/\/|^\[a-z]:/i.test(s.trim())){ out.kind='path'; out.label='目录路径'; }
+  else if(/^\//.test(s.trim()) && /\.[a-z]{2,4}(\/|$)/i.test(s.trim())){ out.kind='path'; out.label='目录路径'; }
+
+  const t = s.match(/(\d+)\s*(分钟|小时|分|时)后/);
+  const d = s.match(/(今天|明天|后天|周[一二三四五六日天])[^\d]{0,4}(\d{1,2})\s*[:：点]\s*(\d{2})?/);
+  const only = s.match(/^\s*(\d{1,2})[:：](\d{2})\s*$/);
+  if(t){
+    const mins = +t[1] * (t[2].includes('小时')||t[2]==='时' ? 60 : 1);
+    out.time = true;
+    out.timeLabel = mins>=60 ? `${(mins/60).toFixed(mins%60?1:0)} 小时后` : `${mins} 分钟后`;
+  } else if(d){
+    out.time = true;
+    out.timeLabel = `${d[1]} ${d[2]}:${d[3]||'00'}`;
+  } else if(only){
+    out.time = true; out.timeLabel = `今天 ${only[1]}:${only[2]}`;
+  }
+  return out;
+}
+
+cap.addEventListener('input', ()=>{
+  const p = parse(cap.value);
+  const box = document.getElementById('parse');
+  if(!cap.value.trim()){ box.hidden = true; return; }
+  box.hidden = false;
+  document.querySelector('#p-kind span').textContent = p.label;
+  const pt = document.getElementById('p-time');
+  pt.classList.toggle('hot', !!p.time);
+  pt.querySelector('span').textContent = p.time ? p.timeLabel : '没有时间，进收集箱';
+  document.getElementById('p-kind').classList.toggle('hot', p.kind!=='text');
+});
+cap.addEventListener('keydown', ev=>{
+  if(ev.key==='Enter' && cap.value.trim()){
+    const p = parse(cap.value);
+    E.unshift({
+      id: Date.now(), text: cap.value.trim(), kind: p.kind,
+      url: p.kind==='link' ? cap.value.trim() : null,
+      path: p.kind==='path' ? cap.value.trim() : null,
+      remind: p.time ? p.timeLabel : null,
+      day: p.time ? 'today' : 'inbox',
+      status: p.time ? 'pending' : 'inbox',
+      overdue:false, devices:['*'], repeat:'none', note:''
+    });
+    cap.value = ''; document.getElementById('parse').hidden = true;
+    counts(); setView(p.time ? 'today' : 'inbox');
+  }
+});
+document.getElementById('btn-now').onclick = ()=>{ if(!cap.value.trim()) cap.value='现在'; cap.dispatchEvent(new Event('input')); };
+document.getElementById('btn-save').onclick = ()=>cap.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));
+document.getElementById('btn-add').onclick = ()=>{ setView('inbox'); cap.focus(); };
+document.getElementById('btn-test').onclick = ()=>openTK();
+
+/* ===================== 强提醒接管 ===================== */
+const tk = document.getElementById('tk');
+let timer = null, elapsed = 0;
+
+function openTK(){
+  tk.classList.add('on');
+  elapsed = 0;
+  clearInterval(timer);
+  timer = setInterval(()=>{
+    elapsed++;
+    document.getElementById('tk-elapsed').textContent = `已响 ${elapsed} 秒`;
+    document.getElementById('tk-bar').style.width = Math.min(100, elapsed/300*100) + '%';
+    if(elapsed===30) document.getElementById('tk-stage').textContent = '已升级为全屏接管，关闭按钮不可用';
+  }, 1000);
+}
+function closeTK(){ tk.classList.remove('on'); clearInterval(timer); }
+
+tk.addEventListener('click', ev=>{
+  const b = ev.target.closest('[data-tk]'); if(!b) return;
+  const a = b.dataset.tk;
+  if(a==='silence'){ closeTK(); return; }
+  const e = E.find(x=>x.id===2);
+  if(a==='done'){ e.status='done'; e.doneDev='我的笔记本'; counts(); setView(view); }
+  if(a.startsWith('sn')){
+    e.remind = {sn10:'15:10', sn30:'15:30', sn60:'16:00', sntom:'明天 15:00'}[a];
+    e.day = a==='sntom' ? 'up' : 'today';
+    e.overdue = false; e.snooze = (e.snooze||0)+1;
+    counts(); setView(view);
+  }
+  closeTK();
+});
+
+/* ===================== 设置（原型第二屏） ===================== */
+document.getElementById('btn-settings').onclick = ()=>openSettings();
+function openSettings(){
+  const E2 = document.getElementById('editor');
+  E2.innerHTML = `
+  <div class="ed-head"><h2>提醒设置</h2></div>
+  <div class="ed-body">
+    <div class="fld">
+      <label>升级链路</label>
+      <div class="dev-pick">
+        <div class="dev-opt on" style="cursor:default">
+          <span class="sdot alert" style="margin:6px 3px 0 2px"></span>
+          <div class="nm"><b>第 1 步 · 0 秒</b><span>Windows 右下角通知 + 应用内横幅 + 提示音</span></div>
+        </div>
+        <div class="dev-opt" style="cursor:default">
+          <span class="sdot" style="margin:6px 3px 0 2px"></span>
+          <div class="nm"><b>第 2 步 · 30 秒未确认</b><span>升级为全屏接管窗口，置顶并抖动，关闭按钮无效</span></div>
+        </div>
+        <div class="dev-opt" style="cursor:default">
+          <span class="sdot" style="margin:6px 3px 0 2px"></span>
+          <div class="nm"><b>第 3 步 · 5 分钟未确认</b><span>每 2 分钟重复一次，直到你处理</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="fld">
+      <label>重复间隔</label>
+      <select class="input">
+        <option>每 2 分钟</option><option>每 5 分钟</option><option>每 10 分钟</option>
+      </select>
+      <div class="hint">重复次数不限，直到点「完成」或「推迟」。</div>
+    </div>
+    <div class="fld">
+      <label>声音</label>
+      <div class="seg"><button class="on">系统提示音</button><button>自定义音频</button><button>静音</button></div>
+    </div>
+    <div class="fld">
+      <label>静音时段</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <input class="input" type="time" value="23:30"><input class="input" type="time" value="07:00">
+      </div>
+      <div class="hint">该时段内只出通知不响铃。深睡类提醒建议保留响铃。</div>
+    </div>
+    <div class="fld">
+      <label>免打扰例外</label>
+      <div class="dev-pick">
+        <div class="dev-opt on"><input type="checkbox" checked><div class="nm"><b>标记为「不可推迟」的条目</b><span>服药、起身活动这类硬提醒不受静音时段影响</span></div></div>
+      </div>
+    </div>
+    <div class="fld">
+      <label>开机与唤醒</label>
+      <div class="dev-pick">
+        <div class="dev-opt on"><input type="checkbox" checked><div class="nm"><b>随系统启动</b><span>托盘常驻，不进任务栏</span></div></div>
+        <div class="dev-opt on"><input type="checkbox" checked><div class="nm"><b>唤醒后补检查</b><span>休眠醒来先扫一遍过期条目</span></div></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ===================== 原型屏幕切换 ===================== */
+document.querySelectorAll('.prototype button').forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll('.prototype button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    const s = b.dataset.scr;
+    if(s==='tk') openTK(); else { closeTK(); if(s==='set') openSettings(); else setView(view); }
+  };
+});
+
+/* ===================== 启动 ===================== */
+counts();
+setView('today');
+</script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "提醒器",
+  "version": "0.1.0",
+  "identifier": "app.deskalarm.client",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "提醒器",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 940,
+        "minHeight": 600,
+        "center": true,
+        "visible": false,
+        "decorations": true,
+        "theme": "Dark",
+        "backgroundColor": "#0B0C0D"
+      },
+      {
+        "label": "takeover",
+        "url": "takeover.html",
+        "title": "提醒器正在呼叫你",
+        "width": 940,
+        "height": 660,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "center": true,
+        "visible": false,
+        "shadow": true,
+        "theme": "Dark",
+        "backgroundColor": "#07080A"
+      },
+      {
+        "label": "capture",
+        "url": "capture.html",
+        "title": "快速记一条",
+        "width": 560,
+        "height": 132,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "center": true,
+        "visible": false,
+        "shadow": true,
+        "theme": "Dark",
+        "backgroundColor": "#0B0C0D"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8787 ws://127.0.0.1:8787 http://127.0.0.1:8091 ws://127.0.0.1:8091 http://localhost:8787 ws://localhost:8787 http://100.64.0.120:8787 ws://100.64.0.120:8787 http://100.64.0.120:8091 ws://100.64.0.120:8091"
+    },
+    "trayIcon": {
+      "id": "main-tray",
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": false,
+      "tooltip": "提醒器"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["SimpChinese", "English"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 },
+        "windowSize": { "width": 660, "height": 400 }
+      }
+    },
+    "shortDescription": "桌面强提醒工具",
+    "longDescription": "到点强提示的桌面工具，支持多设备推送"
+  }
+}

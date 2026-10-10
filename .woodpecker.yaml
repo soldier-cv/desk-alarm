@@ -1,0 +1,56 @@
+# Woodpecker CI - desk-alarm (Woodpecker v3.19.0)
+# 触发策略（仅 tag + manual，日常 push 不触发）：
+#   1. tag: 推送 v* 标签（正式发版）
+#   2. manual: Woodpecker 页面手动触发（可填 deploy_tag 变量指定版本标签，默认 latest）
+# 链路：解析版本号并同步服务端文件至宿主机 -> TS 类型检查与编译校验 -> 本地构建 api/web 镜像并通过 docker compose 部署
+when:
+  - event: tag
+    ref: refs/tags/v*
+  - event: manual
+
+# 版本号解析：tag 事件用 CI_COMMIT_TAG；manual 用页面填的 deploy_tag 变量
+skip_clone: false
+
+steps:
+  - name: resolve-tag
+    image: alpine:3.20
+    volumes:
+      - /opt/code/desk-alarm:/opt/code/desk-alarm
+    commands:
+      - mkdir -p /opt/code/desk-alarm
+      # 同步服务端构建与运行所需目录（仅服务端与网关，保留宿主机已有 .env 生产配置）
+      - cp -rf docker server shared mockups docker-compose.yml .dockerignore .env.example /opt/code/desk-alarm/
+      - if [ ! -f /opt/code/desk-alarm/.env ]; then cp .env.example /opt/code/desk-alarm/.env; fi
+      # tag 事件用 CI_COMMIT_TAG；manual 用页面参数 deploy_tag（Deploy variables 填 deploy_tag=v1.x.y）
+      - >-
+        if [ -n "$${CI_COMMIT_TAG}" ]; then echo "$${CI_COMMIT_TAG}"; else echo "$${DEPLOY_TAG:-latest}"; fi | tr -d ' ' > /tmp/release_tag
+      - echo "RELEASE_TAG=$$(cat /tmp/release_tag)"
+      - cp /tmp/release_tag /opt/code/desk-alarm/.release_tag
+    environment:
+      # manual 触发时可在页面 Deploy variables 填 deploy_tag=v1.x.y
+      DEPLOY_TAG: ${DEPLOY_TAG}
+
+  - name: verify-server
+    image: docker.1ms.run/library/node:22-alpine
+    depends_on:
+      - resolve-tag
+    commands:
+      - cd server
+      - npm config set registry https://registry.npmmirror.com
+      - npm ci --no-audit --no-fund
+      - npm run typecheck
+      - npm run build
+
+  - name: build-and-deploy
+    image: docker:26
+    depends_on:
+      - verify-server
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/code/desk-alarm:/opt/code/desk-alarm
+    commands:
+      - cd /opt/code/desk-alarm
+      - RELEASE_TAG=$$(cat /opt/code/desk-alarm/.release_tag 2>/dev/null || echo $${CI_COMMIT_TAG:-latest}) && docker build -f docker/api.Dockerfile -t "deskalarm-api:$${RELEASE_TAG}" -t "deskalarm-api:latest" .
+      - RELEASE_TAG=$$(cat /opt/code/desk-alarm/.release_tag 2>/dev/null || echo $${CI_COMMIT_TAG:-latest}) && docker build -f docker/Dockerfile -t "deskalarm-web:$${RELEASE_TAG}" -t "deskalarm-web:latest" .
+      - RELEASE_TAG=$$(cat /opt/code/desk-alarm/.release_tag 2>/dev/null || echo $${CI_COMMIT_TAG:-latest}) IMAGE_TAG="$${RELEASE_TAG}" docker compose up -d --force-recreate
+      - docker compose ps
