@@ -21,8 +21,8 @@ export const env = {
   PGPORT: int('PGPORT', 5432),
   PGDATABASE: str('PGDATABASE', 'general_db'),
   /**
-   * 自己的 schema。共用的库里往 public 塞表会和别的项目撞名，
-   * 所以所有表都建在这一层，通过 search_path 隔离
+   * 自己的 schema。共用的库里往 public 塞表会撞名，所以全部隔离在这一层。
+   * 背景见 docs/requirements.md
    */
   PGSCHEMA: str('PGSCHEMA', 'desk_alarm'),
   PGUSER: str('PGUSER', 'desk_alarm'),
@@ -39,8 +39,7 @@ export const env = {
   TICK_MS: int('TICK_MS', 1000),
 
   /**
-   * 投递轮转间隔。调度器只负责写 outbox，投出去由轮转器做。
-   * 故意比 TICK 慢一点，让同一批投递集中发生
+   * 投递轮转间隔。比 TICK 慢，让同一批投递集中发生
    */
   ROTATE_MS: int('ROTATE_MS', 400),
 
@@ -48,8 +47,7 @@ export const env = {
   MISSED_AFTER_MS: int('MISSED_AFTER_MS', 60_000),
 
   /**
-   * 投递重试。超过这个时间还在 pending 的就放弃，
-   * 留给设备上线时的 missed 补发。防止坏 token 无限重试
+   * 投递重试。超限就放弃，留给设备上线时的 missed 补发，避免坏 token 无限重试
    */
   DELIVERY_RETRY_MS: int('DELIVERY_RETRY_MS', 120_000),
   DELIVERY_MAX_ATTEMPTS: int('DELIVERY_MAX_ATTEMPTS', 5),

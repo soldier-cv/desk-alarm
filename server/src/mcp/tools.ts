@@ -1,16 +1,6 @@
 /**
- * MCP 工具集。
- *
- * 设计的核心不是「给 agent 一套 CRUD」，是**让破坏性操作需要意图明确**。
- * MCP 是给了模型一把锤子，危险的是 create（会把你从专注里炸出来）
- * 和批量改期（一次挪二十条）。解法不是把工具藏起来，是要求分两步。
- *
- *   plan_changes  dry-run，返回「执行后会变成什么样」，不落库
- *   apply_changes 真执行，参数必须是刚才 plan 返回的 plan_id
- *
- * 还有一条硬规则：create_entry 默认 strength=weak。
- * 想建强提示必须显式指定并给出 reason。
- * 一个能随便建全屏强提示的 agent，早晚会半夜三点为一份草稿邮件把你叫醒。
+ * MCP 工具集。写操作必须 plan_changes 干跑再 apply_changes 执行，
+ * create_entry 默认 weak。设计理由见 docs/requirements.md「MCP 的防呆规则」
  */
 import { randomUUID } from 'node:crypto';
 import type {

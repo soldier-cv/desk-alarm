@@ -63,12 +63,16 @@ text('强调 flare', token.flare);
 text('完成 ok', token.ok);
 
 console.log('\nUI 边界');
-ui('输入框边框', token['line-input'] ?? token.line);
-ui('分隔线 line', token.line);
-ui('强调色边框', token['flare-line']);
+ui('输入框边框 line-input', token['line-input']);
+ui('控件边框 line-ctrl', token['line-ctrl']);
 
-console.log('\n输入框可辨识度（边界 vs 页面底）');
-ui('输入框边框 vs 底', token['line-input'] ?? token.line, BG, 3);
+// 分隔线不是文字也不是控件，1.3:1 够用，只要不是完全看不见就行
+ui('分隔线 line（宽松）', token.line, BG, 1.2);
+
+console.log('\n输入框内部（文字压在 raised 上，不是 bg）');
+text('输入框内正文', token.text, 4.5, token.raised);
+text('placeholder', token.muted, 4.5, token.raised);
+ui('输入框边框 vs 框内底', token['line-input'], token.raised, 1.5);
 
 console.log(`\n${'--------------------------------------------'}`);
 console.log(bad === 0 ? '全部达标' : `${bad} 项不达标`);

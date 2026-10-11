@@ -18,9 +18,8 @@ const app = Fastify({
 });
 
 /**
- * 容忍没有 body 的 POST。
- * Fastify 默认会因为「声明了 content-type: application/json 但 body 为空」报 400，
- * 而 curl -X POST 不加 -d、PowerShell 的 -Method Post 都是这种形态
+ * 容忍没有 body 的 POST。Fastify 默认对「声明了 json 但 body 为空」报 400，
+ * 而 curl -X POST 不加 -d、PowerShell -Method Post 都是这种形态
  */
 app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
   const s = typeof body === 'string' ? body.trim() : '';

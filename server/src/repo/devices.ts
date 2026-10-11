@@ -103,8 +103,7 @@ export async function markOnline(id: string) {
   await run('UPDATE devices SET last_seen_at = now(), online = true WHERE id = $1', [id]);
 }
 
-/** WS 断开时调用。不断真的下线，因为重连很快，
- *  真正的超时下线交给 sweepOffline */
+/** WS 断开时调用。重连很快，真正的超时下线交给 sweepOffline */
 export async function markOfflineHint(id: string) {
   await run('UPDATE devices SET last_seen_at = now(), online = false WHERE id = $1', [id]);
 }

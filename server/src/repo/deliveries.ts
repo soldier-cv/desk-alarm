@@ -1,15 +1,6 @@
 /**
- * 投递 outbox。
- *
- * 之前这里有个真 bug：markDelivered 被 import 了但一次都没调用，
- * deliveries.state 永远停在 pending，而推送只发给活着的 WebSocket。
- * 结果是手机锁屏就静默丢提醒，还会误报成 missed。
- *
- * 现在的分工是明确的：
- *   调度器  只管写 outbox（markFired 里的 insert），不碰投递
- *   轮转器  只管把 outbox 投出去并改状态
- *
- * 这样两边不会互相阻塞，加新的投递通道也只改轮转器。
+ * 投递 outbox。调度器只写，轮转器只投，两个循环互不阻塞。
+ * 分工与背景见 docs/requirements.md「事务性发件箱」
  */
 import type { Entry } from '../../../shared/types.js';
 import { env } from '../env.js';
@@ -208,9 +199,7 @@ export async function markAcked(entryId: string, deviceId: string, action: strin
 
 /**
  * 设备上线时补发的漏掉的提醒。
- *
- * 判据是 fire_key 对不上当前这次触发：说明这条已经被重排过或者
- * 重复规则已经排了下一次，本次补发没有意义。
+ * 判据是 fire_key 对不上当前这次触发：说明已重排过，或重复规则已排了下一次
  */
 export async function findMissed(deviceId: string): Promise<Array<{
   entry: Entry; firedAt: number; lateByMs: number;

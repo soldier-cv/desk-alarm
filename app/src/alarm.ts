@@ -1,15 +1,6 @@
 /**
- * 强提示的升级阶梯。整个逻辑只有这一份实现，
- * 主窗口持有它，takeover 窗口只负责画。
- *
- *   0 秒      Windows Toast + 接管窗口亮起
- *   30 秒     还没处理就加抖动，用户试图关窗也关不掉
- *   5 分钟    进入重复提醒，之后每 repeatEverySec 再响一次
- *
- * weak 强度不走这里，只出一条 Toast 和主窗口顶部的细横幅。
- * 这个分流在 shouldRing() 里做，不在这里。
- *
- * 停止条件只有两个：用户处理了，或者别的设备已经处理了。
+ * 强提示升级阶梯：0 秒亮接管窗口，30 秒加抖动，5 分钟后重复。
+ * 停止条件只有「用户处理了」或「别的设备处理了」。完整见 docs/requirements.md
  */
 import { inQuietHours, loadConfig, shouldRing, type AckAction, type Entry, type Settings } from './api';
 

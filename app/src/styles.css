@@ -5,20 +5,27 @@
    字体：Segoe UI Variable + Cascadia Mono
    圆角：一套刻度 6 / 8 / 12
    ============================================================ */
+/* 暗色主题里，深底不能配深字、深框。下面每个值都是算出来的，
+   不是挑出来的，改色请跑 node scripts/contrast.mjs 复核。
+   门槛：正文 ≥4.5:1，UI 边界 ≥3:1（WCAG 2.1 AA）。 */
 :root {
   --bg: #0B0C0D;
   --surface: #121315;
   --raised: #191B1E;
   --hover: #1E2024;
+  /* --line 是分隔线，不需要 3:1（非文字）。输入框边框另用 --line-input。 */
   --line: #24262A;
+  --line-input: #6A6E75;
+  /* 勾选框、开关这类小控件的边界，比分隔线亮一档，要能看见 */
+  --line-ctrl: #6A6E75;
   --line-soft: #1B1D20;
   --text: #ECEDEF;
   --muted: #8C9097;
-  --dim: #5C6067;
+  --dim: #82868D;
   --flare: #FF5C2B;
   --flare-tint: rgba(255, 92, 43, .12);
   --flare-line: rgba(255, 92, 43, .38);
-  --ok: #5E8C7F;
+  --ok: #6FA392;
   --r-sm: 6px; --r: 8px; --r-lg: 12px;
   --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, "Microsoft YaHei", sans-serif;
   --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SFMono-Regular", monospace;
@@ -66,18 +73,22 @@ button { font: inherit; color: inherit; background: none; border: none; outline:
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   height: 24px; padding: 0 9px; border-radius: var(--r-sm);
-  font-size: 11.5px; border: 1px solid var(--line);
+  font-size: 11.5px; border: 1px solid var(--line-input);
   background: #15171A; color: var(--muted);
 }
 .chip.hot { border-color: var(--flare-line); background: var(--flare-tint); color: #FFB292; }
 .chip.path { font-family: var(--mono); font-size: 11px; }
 
+/* 输入框在近黑底上必须有可见边界，否则整个框融进背景。
+   color 显式声明，不靠继承，深色 webview 下继承不一定可靠。 */
 .input {
-  width: 100%; background: var(--raised); border: 1px solid var(--line);
+  width: 100%; background: var(--raised); color: var(--text);
+  border: 1px solid var(--line-input);
   border-radius: var(--r); padding: 8px 10px; font-size: 13px;
   transition: border-color .12s;
 }
-.input:focus { border-color: var(--flare-line); }
+.input::placeholder { color: var(--muted); opacity: 1; }
+.input:focus { border-color: var(--flare); outline: 2px solid var(--flare-line); outline-offset: -1px; }
 select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 
 /* ---------- 登录 ---------- */
@@ -126,13 +137,13 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 }
 .capture-in {
   display: flex; align-items: center; gap: 10px; height: 42px;
-  background: var(--raised); border: 1px solid var(--line);
+  background: var(--raised); border: 1px solid var(--line-input);
   border-radius: var(--r); padding: 0 8px 0 12px; transition: border-color .14s;
 }
-.capture-in:focus-within { border-color: var(--flare-line); }
+.capture-in:focus-within { border-color: var(--flare); }
 .capture-in .prompt { color: var(--dim); font-family: var(--mono); flex: none; }
-.capture-in input { flex: 1; min-width: 0; background: none; border: none; font-size: 14px; }
-.capture-in input::placeholder { color: #5F636A; }
+.capture-in input { flex: 1; min-width: 0; background: none; border: none; font-size: 14px; color: var(--text); }
+.capture-in input::placeholder { color: var(--muted); }
 .parse { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .parse .lb { font-size: 11px; color: var(--dim); }
 
@@ -177,7 +188,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .item.u-over  { background-image: linear-gradient(90deg, rgba(255,92,43,.19), transparent 70%); }
 
 .item.done .it-title { color: var(--dim); text-decoration: line-through; text-decoration-color: #3A3E44; }
-.cbox { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid #3A3E44;
+.cbox { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--line-ctrl);
   display: grid; place-items: center; margin-top: 2px; flex: none; transition: background .12s, border-color .12s; }
 .cbox:hover { border-color: var(--dim); }
 .item.done .cbox { background: var(--ok); border-color: var(--ok); }
@@ -217,7 +228,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .fld > label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
 .fld .hint { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px;
-  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); padding: 3px; }
+  background: var(--raised); border: 1px solid var(--line-input); border-radius: var(--r); padding: 3px; }
 .seg button { height: 27px; border-radius: var(--r-sm); font-size: 12.5px; color: var(--muted);
   display: flex; align-items: center; justify-content: center; transition: background .12s, color .12s; }
 .seg button:hover { color: var(--text); }
@@ -229,7 +240,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
   cursor: pointer; transition: border-color .12s; }
 .dev-opt:hover { border-color: var(--line); }
 .dev-opt.on { border-color: var(--flare-line); }
-.dev-opt input { appearance: none; width: 15px; height: 15px; border: 1.5px solid #3A3E44;
+.dev-opt input { appearance: none; width: 15px; height: 15px; border: 1.5px solid var(--line-ctrl);
   border-radius: 4px; flex: none; position: relative; cursor: pointer; }
 .dev-opt input:checked { background: var(--flare); border-color: var(--flare); }
 .dev-opt input:checked::after { content: ""; position: absolute; left: 4.2px; top: 1.4px;
@@ -285,7 +296,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 }
 .quiet-row input {
   appearance: none; width: 15px; height: 15px; flex: none;
-  border: 1.5px solid #3A3E44; border-radius: 4px; position: relative; cursor: pointer;
+  border: 1.5px solid var(--line-ctrl); border-radius: 4px; position: relative; cursor: pointer;
 }
 .quiet-row input:checked { background: var(--flare); border-color: var(--flare); }
 .quiet-row input:checked::after {
@@ -310,7 +321,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .tk-note { font-size: 13.5px; color: var(--muted); line-height: 1.65; margin-top: 11px; word-break: break-word; }
 .tk-target { margin-top: 15px; display: flex; flex-direction: column; gap: 6px; }
 .tk-target .t { display: flex; align-items: center; gap: 8px; background: var(--raised);
-  border: 1px solid var(--line); border-radius: var(--r); padding: 8px 11px; font-size: 12.5px; }
+  border: 1px solid var(--line-input); border-radius: var(--r); padding: 8px 11px; font-size: 12.5px; }
 .tk-target .t.path { font-family: var(--mono); font-size: 11.5px; color: var(--muted); word-break: break-all; }
 .tk-target .t .act { margin-left: auto; flex: none; }
 .tk-where { margin-top: 12px; font-size: 11.5px; color: var(--dim); }

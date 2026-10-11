@@ -22,10 +22,8 @@ export const pool = new pg.Pool({
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 8_000,
   /**
-   * 两条连接参数，都要作用到每一条连接上：
-   *   timezone     服务端统一按 UTC 解释，免得换台机器就偏掉
-   *   search_path  表都建在自己的 schema 里。共用的库里往 public 塞表
-   *               会和别的项目撞名，隔离干净点
+   * timezone 固定 UTC，免得换台机器就偏掉。
+   * search_path 把表关在自己的 schema 里，共用库不往 public 塞
    */
   options: `-c timezone=UTC -c search_path=${env.PGSCHEMA},public`,
 });
@@ -42,9 +40,8 @@ export async function migrate(): Promise<void> {
 }
 
 /**
- * schema 不存在时的提示。
- * 共用的库（如 general_db）里，用户通常没有 CREATE ON DATABASE，
- * 建不了 schema 就只能由 owner 先建好。这个函数把话说清楚
+ * schema 不存在时给出可操作的提示。
+ * 共用库里用户通常没有 CREATE ON DATABASE，建不了 schema 只能由 owner 先建好
  */
 export async function ensureSchema(): Promise<{ ok: boolean; hint: string }> {
   const has = await one<{ n: number }>(
@@ -79,9 +76,8 @@ export async function ping(): Promise<boolean> {
 }
 
 /**
- * 连不上的时候说清楚是哪一类问题。
- * 「连不上数据库」这四个字排查时毫无用处，得知道是
- * 网络不通、口令不对、还是库压根没建
+ * 连不上时区分是哪一类问题。「连不上数据库」排查时毫无用处，
+ * 得知道是网络不通、口令不对、还是库没建
  */
 export async function diagnose(): Promise<{
   ok: boolean; reason: string; hint: string; target?: Record<string, unknown>;
@@ -146,17 +142,15 @@ export async function run(sql: string, params: unknown[] = []): Promise<number> 
   return r.rowCount ?? 0;
 }
 
-/** 返回第一行第一列 */
+/** 取第一行第一列 */
 export async function scalar<T = unknown>(sql: string, params: unknown[] = []): Promise<T | undefined> {
   const r = await pool.query(sql, params as never[]);
   return r.rows[0] ? Object.values(r.rows[0])[0] as T : undefined;
 }
 
 /**
- * 事务。传一个拿到 client 的回调，回调里用 q 而不是顶层函数。
- *
- * 之所以不共用顶层函数：pg 的事务必须固定在一条连接上，
- * 混用会导致事务外的连接跑到同一个事务里，产生难查的锁问题。
+ * 事务。回调里用 q 而不是顶层函数：pg 事务必须固定在一条连接上，
+ * 混用会导致事务外的连接跑进同一个事务，产生难查的锁问题
  */
 export async function tx<T>(fn: (q: Tx) => Promise<T>): Promise<T> {
   const client = await pool.connect();

@@ -52,8 +52,7 @@ export async function deviceRoutes(app: FastifyInstance) {
   });
 
   /**
-   * 删除设备前先检查有没有排给它的提醒，有的话要求先改推送范围，
-   * 不然会出现「提醒发到一个已经没人用的设备」然后永远补发
+   * 删除前检查有没有排给它的提醒。不拦的话会出现「提醒发到没人用的设备」然后永远补发
    */
   app.delete('/devices/:id', { preHandler: requireAuth }, async (req, reply) => {
     const id = (req.params as { id: string }).id;

@@ -15,13 +15,7 @@ let rotateTimer: NodeJS.Timeout | null = null;
 let ticks = 0;
 let rotating = false;
 
-/**
- * 调度器：整个系统里唯一决定「这条提醒响了没有」的地方。
- *
- * 它只写 outbox，不自己投递。投递交给轮转器。
- * 这样「什么时候判定响」和「怎么送出去」是两件独立的事，
- * 加新的投递通道不会动到判定逻辑。
- */
+/** 调度器：唯一决定「这条提醒响了没有」的地方。只写 outbox，不投递 */
 async function tick() {
   try {
     const due = await findDue();
@@ -49,12 +43,7 @@ async function tick() {
   }
 }
 
-/**
- * 投递轮转器：把 outbox 里的 pending 投出去。
- *
- * 关键规则：delivered 的判定标准是「通道确认接收」，不是「我发出去了」。
- * 这条线划错了，后面的补发逻辑全会跟着错。
- */
+/** 投递轮转器：把 outbox 里的 pending 投出去。delivered = 通道确认收到，不是我发出去了 */
 async function rotate() {
   if (rotating) return; // 上一轮还没跑完，跳过，别叠起来
   rotating = true;

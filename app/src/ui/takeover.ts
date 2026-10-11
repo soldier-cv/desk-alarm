@@ -1,9 +1,6 @@
 /**
- * 接管窗口。这是「强提示」真正落地的地方：
- * 无边框、置顶、关不掉、只有四个动作能结束它。
- *
- * 注意：这个 webview 和主窗口不共享 JS 全局变量，
- * 所有动作都通过 Tauri 事件发给主窗口，那边才持有 WS 和 AlarmController。
+ * 接管窗口。无边框、置顶、关不掉，只有四个动作能结束它。
+ * 与主窗口不共享 JS 全局变量，动作全靠 Tauri 事件发给主窗口（WS 在那边）
  */
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
@@ -110,11 +107,7 @@ function esc(s: string): string {
 
 /* -------------------------------------------------------- 动作派发 */
 
-/**
- * 四个动作。不给「稍后再说」以外的第四个逃逸口，
- * 「静音 10 分钟」是有代价的，它会记 snooze_count。
- * 全部通过事件交给主窗口，主窗口有 WS 连接和 AlarmController。
- */
+/** 四个动作。「静音 10 分钟」是有代价的，它会记 snooze_count */
 async function act(kind: string) {
   const p = current;
   if (!p) return;

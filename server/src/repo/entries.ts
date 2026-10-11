@@ -28,11 +28,8 @@ interface Row {
 }
 
 /**
- * status 读时推导，不入库。
- *
- * 关键点：重复提醒触发后会同时有 fired_at 和更大的 remind_at（下次时间），
- * 这时候条目并没有被漏掉，只是刚响过，不能判成 missed。
- * 只有「响过了、没处理、也没有排下一次」才算漏掉。
+ * status 读时推导，不入库。重复提醒触发后同时有 fired_at 和更大的 remind_at，
+ * 这时不算 missed：只有「响过了、没处理、也没排下一次」才算漏掉
  */
 export function deriveStatus(r: Row): EntryStatus {
   if (r.done_at) return 'done';
@@ -287,12 +284,8 @@ export async function deleteEntry(id: string) {
 }
 
 /**
- * 确认。done / snooze 会改条目，silence 只压掉这一次。
- * 幂等：重复调用返回同一条。
- *
- * 注意返回值必须在事务提交之后再读。事务里用连接池回读拿到的是
- * 提交前的旧值，客户端会看到一个没变过的 remindAt，
- * 表现成「推迟了但时间没动」。踩过一次。
+ * 确认。done / snooze 改条目，silence 只压掉这一次。幂等。
+ * 返回值必须事务提交后回读：事务里走连接池读到的是提交前的旧值
  */
 export async function ackEntry(
   id: string, action: AckAction, deviceName: string, snoozeToMs?: number,
@@ -441,8 +434,8 @@ async function resolveTargets(entryId: string): Promise<string[]> {
 }
 
 /**
- * 写入 fired_at。这是整个系统唯一一次决定「这条提醒响了」的地方。
- * 同一事务里把投递 outbox 一起写掉，两者不可能只成功一半。
+ * 写入 fired_at。全系统唯一决定「这条提醒响了」的地方。
+ * 投递 outbox 同事务写入，两者不可能只成功一半
  */
 export async function markFired(entry: Entry): Promise<{ entry: Entry; repeat: RepeatRule }> {
   const fireAt = new Date();

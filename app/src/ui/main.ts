@@ -1,7 +1,6 @@
 /**
- * 主窗口。这个 webview 是整个应用的脑子：
- * 持有 HTTP/WS 连接、AlarmController、本地状态。
- * takeover 和 capture 两个窗口只负责画和发意图。
+ * 主窗口，整个应用的脑子：持有 HTTP/WS 连接、AlarmController、本地状态。
+ * takeover 和 capture 只负责画和发意图
  */
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
@@ -302,9 +301,8 @@ async function weakSnooze(id: string) {
 }
 
 /**
- * 忽略。和「完成」语义完全不同的一步：
- * 条目不会被关掉，只是留下一条带理由的记录。
- * 累计到服务端配的阈值会自动降级，并给出「该删了」的建议
+ * 忽略。和「完成」语义不同：条目不关掉，只留一条带理由的记录。
+ * 累计到阈值会自动降级并提示「该删了」
  */
 async function weakDismiss(id: string, reason?: string) {
   dropWeakByEntry(id);
@@ -509,12 +507,7 @@ function rowHtml(e: Entry): string {
   </div>`;
 }
 
-/**
- * 时间行的文案。
- *
- * 一小时内不报钟点，报「还有 X 分钟」。
- * 临近期限时，差多少比几点钟有用得多
- */
+/** 时间行文案。一小时内报「还有 X 分钟」，临近时差多少比几点钟有用 */
 function timeLabel(e: Entry): string {
   if (e.status === 'missed') {
     return `${dayLabel(e.remindAt!)} ${hhmm(e.remindAt!)} · ${lateBy(e.firedAt ?? serverNow())}还没处理`;
@@ -529,9 +522,8 @@ function timeLabel(e: Entry): string {
 }
 
 /**
- * 临近度会随时间自己往前走，但事件驱动的刷新不会推进它。
- * 每 20 秒原地更新行：不改 innerHTML 整体，
- * 滚动位置和选中态都不丢。只变了梯度的行才动 DOM
+ * 临近度随时间自己走，事件刷新不推进它，所以每 20 秒原地更新行：
+ * 不改列表整体 innerHTML，滚动位置和选中态不丢
  */
 function tickUrgency() {
   const box = document.querySelector<HTMLElement>('.list-scroll');

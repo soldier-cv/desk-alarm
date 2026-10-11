@@ -1,12 +1,6 @@
 /**
- * 客户端与服务端的通信层。
- *
- * 两条通道分工明确：
- *   HTTP  增删改，幂等、能重试
- *   WS    收触发事件和跨端广播，要求低延迟
- *
- * 触发事件的唯一权威是服务端。客户端不做权威计时，
- * 本地预判只用来让提示提前一点出现，最终以 serverTs 为准。
+ * 客户端与服务端的通信层。HTTP 走增删改，WS 收触发与跨端广播。
+ * 触发权威在服务端，本地预判只让提示早一点出现，最终以 serverTs 为准
  */
 import type {
   AckAction, CreateEntryRequest, Device, Dismissal, Entry, MissedFire,
@@ -308,7 +302,7 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
     out.timeLabel = `今天 ${clock[1]}:${clock[2]}`;
   }
 
-  // 明确说了「一定要」才给强提示。默认弱，因为全都喊等于全都听不见
+  // 只有明确说了「一定要」才给强提示，否则默认弱。理由见 docs/requirements.md
   if (out.remindAt !== null) out.strength = urgent ? 'strong' : 'weak';
   return out;
 }
@@ -349,15 +343,8 @@ export function lateBy(ts: number): string {
 }
 
 /**
- * 离到点有多近。这是列表里唯一的颜色梯度。
- *
- * 安静是常态：超过 24 小时没有任何颜色。
- * 24 小时内开始从行首渗入强调色，一小时内加深，
- * 15 分钟内（和已到点还没响的）最深并开始呼吸。
- * 已逾期且没处理的用同一颜色的最高浓度。
- *
- * 四级而不是连续渐变：连续变化在列表里会变成噪声，
- * 离散步进才一眼可读
+ * 离到点有多近。列表里唯一的颜色梯度，超过 24 小时无色。
+ * 四级而非连续渐变：连续变化会变成噪声。各档阈值见 docs/requirements.md
  */
 export type Urgency = 'none' | 'soon' | 'close' | 'due' | 'over';
 
@@ -384,14 +371,7 @@ export function inQuietHours(s: Settings, at = serverNow()): boolean {
   return a < b ? m >= a && m < b : m >= a || m < b;
 }
 
-/**
- * 这条要不要响。
- *
- * 三种情况不响：
- *   weak 强度      弱提示本来就不进接管窗口
- *   静音时段内     除非标了 bypassQuiet
- *   不定时         在收集箱，本来就不响
- */
+/** 要不要响。weak 不响；静音时段内除非 bypassQuiet；不定时不响 */
 export function shouldRing(e: Pick<Entry, 'strength' | 'bypassQuiet' | 'remindAt'>, s: Settings): boolean {
   if (e.remindAt === null) return false;
   if (e.strength === 'weak') return false;
