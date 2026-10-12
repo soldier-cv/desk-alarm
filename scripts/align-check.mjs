@@ -130,6 +130,21 @@ ok('default-src 保持严格', /default-src 'self'/.test(tauriConf));
 ok('没有放开 script-src 的 unsafe-eval', !/script-src[^;]*unsafe-eval/.test(tauriConf));
 ok('默认地址只在源码出现一处', (src.api.match(/baseUrl: '/g) ?? []).length === 1);
 
+console.log('\nCI 配置');
+const wf = read('.github/workflows/build.yml');
+// GitHub 只保留最新两个 macOS 版本。用了下线的标签，job 会永远卡在
+// 「Waiting for a runner」，不报错也不失败
+const macJob = wf.slice(wf.indexOf('  macos:'));
+const runsOn = macJob.match(/runs-on:\s*(\S+)/)?.[1] ?? '';
+const rustTarget = macJob.match(/targets:\s*(\S+)/)?.[1] ?? '';
+ok('macos runner 不是已下线标签', !/macos-(1[0-3])\b/.test(runsOn), `runs-on=${runsOn}`);
+ok('runner 架构与 rust target 一致',
+  runsOn.includes('intel') ? rustTarget === 'x86_64-apple-darwin' : rustTarget === 'aarch64-apple-darwin',
+  `runs-on=${runsOn} target=${rustTarget}`);
+ok('macos 也构建产物', /bundles app,dmg/.test(macJob));
+ok('windows 也构建产物', /windows/.test(wf) && /nsis/.test(wf));
+ok('minimumSystemVersion 与 arm64 相容', !/10\.15/.test(read('app/src-tauri/tauri.conf.json')));
+
 console.log('\n注释纪律');
 const tooLong = [];
 for (const [name, text] of Object.entries(src)) {

@@ -52,9 +52,24 @@ xattr -cr /Applications/提醒器.app
 
 要装的东西（换一台机器时）：
 
-- `git init` +推到 GitHub（当前这个目录还不是 git 仓库）
-- `rustup target add x86_64-apple-darwin aarch64-apple-darwin`（macOS runner 上需要）
+- 推到 GitHub
 - macOS runner 默认自带 Node 20 和 Xcode，不用额外装
+
+### runner 标签不能写错
+
+**用了已下线的标签，job 会永远卡在「Waiting for a runner to pick up this job」**——不报错、不失败，就是一直等，很容易被当成 CI 挂了。
+
+GitHub 只保留最新两个 macOS 版本。下线了的标签：`macos-12`、`macos-13`。
+
+当前用 `macos-15`（arm64）。**runner 架构和 Rust target 必须一致**，否则链接失败：
+
+| runner | Rust target |
+|---|---|
+| `macos-15` | `aarch64-apple-darwin` |
+| `macos-15-intel` | `x86_64-apple-darwin` |
+| `macos-26` | `aarch64-apple-darwin` |
+
+rustup target 的安装写在 workflow 里，本地不用管。
 
 如果这台机器连 GitHub 慢，可以给 runner 配代理，或者直接用路线一。
 

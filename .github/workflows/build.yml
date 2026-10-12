@@ -53,9 +53,12 @@ jobs:
           if-no-files-found: error
 
   macos:
-    # 只出当前架构，最快。universal 版把下面的 target 改成 universal-apple-darwin
-    # 并改成 runs-on: macos-14（Apple Silicon runner）
-    runs-on: macos-13
+    # GitHub 只保留最新两个 macOS 版本，macos-13 已下线。
+    # 用已下线的标签会永远卡在「Waiting for a runner to pick up this job」：
+    # 不报错也不失败，就一直等下去，很容易被当成 CI 挂了。
+    # 这里用 macos-15（arm64，未标废弃），Rust target 必须跟着用 aarch64。
+    # 要出 Intel 版改用 macos-15-intel + x86_64-apple-darwin。
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -69,7 +72,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin
+          # 架构必须和 runner 一致，否则 tauri build 会链接失败
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -80,6 +84,9 @@ jobs:
           cd app && npm ci
           cd ../server && npm ci
 
+      # 这里不加 --target：arm64 runner 上默认就编 aarch64，产物落在
+      # target/release。一旦加了 --target，路径会变成
+      # target/<triple>/release，下面 upload-artifact 的路径要同步改
       - name: 构建 macOS app 和 dmg
         run: cd app && npx tauri build --bundles app,dmg
 
