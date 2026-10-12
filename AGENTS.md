@@ -62,6 +62,7 @@ cd app && node scripts/contrast.mjs
 ## 验证：改了就说改了，不说「应该没问题」
 
 - 服务端改动 → `cd server && npm run smoke && npm run e2e`
+- 重复提醒日期改动 → `cd server && npm run repeat`（月末钳位，必须先 build）
 - 客户端改动 → `cd app && npx tsc --noEmit && npx vite build`
 - 颜色改动 → `node scripts/contrast.mjs`
 - 服务端地址解析改动 → `cd app && node scripts/url-check.mjs`

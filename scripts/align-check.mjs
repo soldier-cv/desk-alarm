@@ -62,6 +62,15 @@ ok('dismiss 要求 reason', /dismissEntry/.test(src.entries));
 ok('2 次降级规则存在', /dismissCount\s*>=\s*2|>= 2/.test(src.entries));
 ok('done 不复用 dismiss 表', !/dismissals[^;]*status\s*=\s*'done'/.test(src.sql));
 
+console.log('\n提醒强度默认值');
+// 文档曾写「给了时间就是强提示」，实现是「只有说了一定要等词才强」。
+// 需求文档必须和实现一致，否则以后照文档改会改错
+ok('文档不写「给了时间就是强提示」', !/给了时间就是强提示/.test(src.req));
+ok('文档写明关键词触发', /一定要/.test(src.req));
+ok('实现按关键词判强提示', /一定要\|必须\|别忘/.test(src.api));
+ok('无关键词时默认 weak', /urgent \? 'strong' : 'weak'/.test(src.api));
+ok('agent 建的一律 weak', /strength[^;\n]*'weak'/.test(src.tools));
+
 console.log('\n强弱提示正交');
 ok('strength 与 bypassQuiet 是两个字段', /bypass_quiet/.test(src.sql) && /strength/.test(src.sql));
 ok('弱提示不升级（弱队列独立）', /weak/i.test(src.alarm));
