@@ -79,6 +79,14 @@ cd app && node scripts/contrast.mjs
 
 要新增平台能力时，先确认 Tauri 抽象层是否已覆盖，别直接调 Win32。
 
+## CSP：connect-src 不要改回白名单
+
+`app/src-tauri/tauri.conf.json` 的 `app.security.csp` 是编译期写死的，而服务端地址由用户在运行时填。把具体地址列进 `connect-src` 会导致用户填别的地址时被静默拦掉，表现为「连不上」。
+
+`connect-src` 保持 `http: https: ws: wss:`，其余指令保持严格。
+
+改 `DEFAULT_CONFIG.baseUrl` 时不用再动 CSP，但要知道两者的关系：这个地址必须在 CSP 允许范围内才连得上。
+
 ## 数据库
 
 - 全部表在 `PGSCHEMA` 指定的 schema（默认 `desk_alarm`），靠 `search_path` 隔离

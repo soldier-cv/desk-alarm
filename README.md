@@ -187,16 +187,25 @@ macOS 没做代码签名和公证，首次打开被 Gatekeeper 拦的话：
 xattr -cr /Applications/提醒器.app
 ```
 
-**改服务端地址有两处，缺一不可**：
-
-1. `app/src/api.ts` 的 `DEFAULT_CONFIG.baseUrl`（首次安装时的默认值）
-2. `app/src-tauri/tauri.conf.json` 的 `app.security.csp`。CSP 是白名单，不在里面会被拦掉
-
 **用户在客户端里改地址**：登录页最上面就是「服务端地址」输入框，带「测试连接」按钮；登录后点顶栏的连接状态也能打开切换面板。填 `host:port` 不用带协议，会自动补 `http://`。
 
 多台设备填同一个地址就共享同一份提醒。换地址会清掉本地会话重新登录，因为旧 token 对新地址无效。
 
 改地址解析的逻辑后跑 `cd app && node scripts/url-check.mjs`。
+
+### 关于 CSP
+
+`tauri.conf.json` 里的 `app.security.csp` 是编译期写死的白名单，早期版本把服务端地址逐个列进去。问题是地址由用户在运行时填，静态白名单和服务端可配置天然冲突——用户填一个没列过的地址，会被 CSP 拦掉，表现为"连不上"，且完全看不出原因。
+
+现在只放开 `connect-src`（`http: https: ws: wss:`），其余保持严格：
+
+```
+default-src 'self'; img-src 'self' asset: http://asset.localhost data:;
+style-src 'self' 'unsafe-inline';
+connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:
+```
+
+取舍：放开 `connect-src` 意味着页面可以往任意地址发请求。本应用只加载本地打包的代码，不加载远程脚本，所以实际风险有限；而换来的是用户填什么地址都能用。如果这个工具要分发给别人用，需要重新评估这个选择。
 
 安装包构建要从 GitHub 下载 NSIS 工具链，网络不顺会超时。自用直接跑 exe 就够，或者用 `-NoInstaller`。
 

@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS: Settings = {
 };
 
 export const DEFAULT_CONFIG: Config = {
-  baseUrl: 'http://127.0.0.1:8787',
+  baseUrl: 'http://100.64.0.88:8787',
   passcode: '',
   deviceName: '我的笔记本',
   deviceId: `dev_${Math.random().toString(36).slice(2, 14)}`,

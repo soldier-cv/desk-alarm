@@ -59,7 +59,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8787 ws://127.0.0.1:8787 http://127.0.0.1:8091 ws://127.0.0.1:8091 http://localhost:8787 ws://localhost:8787 http://100.64.0.120:8787 ws://100.64.0.120:8787 http://100.64.0.120:8091 ws://100.64.0.120:8091"
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:"
     },
     "trayIcon": {
       "id": "main-tray",

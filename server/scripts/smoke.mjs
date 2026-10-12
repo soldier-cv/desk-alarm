@@ -265,8 +265,20 @@ try {
   const after = await api(`/entries/${soonId}`, { token: ta });
   ok('fired_at 落库', after.json.entry?.firedAt !== null);
   ok('响过没处理判为 missed', after.json.entry?.status === 'missed');
+
+  // 去重的依据是库里的投递行，不是收到几次 WS 事件。
+  // 等固定时长去数网络事件会偶发失败：调度器那一轮还没跑完就数，计数是 0。
+  // 去重约束是 UNIQUE(entry_id, device_id, fire_key)，所以要按这个维度查：
+  // 同一个 fire_key 投给多台设备是正常的（那是分发，不是重复触发）
   await sleep(900);
-  ok('同一条不会重复触发', ca.count('entry.fired', soonId) === 1, `触发 ${ca.count('entry.fired', soonId)} 次`);
+  const dupRows = await c1.query(
+    `SELECT entry_id, device_id, fire_key, count(*)::int AS n
+       FROM deliveries WHERE entry_id = $1
+      GROUP BY entry_id, device_id, fire_key HAVING count(*) > 1`, [soonId]);
+  ok('同一设备同一次触发没有重复投递', dupRows.rows.length === 0, JSON.stringify(dupRows.rows));
+  const keyRows = await c1.query(
+    'SELECT count(DISTINCT fire_key)::int AS n FROM deliveries WHERE entry_id = $1', [soonId]);
+  ok('同一次触发只有一个 fire_key', keyRows.rows[0]?.n === 1, `fire_key 数 ${keyRows.rows[0]?.n}`);
 
   /* --------------------------------------------------- 离线设备补发 */
   console.log('\n离线补发（这次修复的核心）');

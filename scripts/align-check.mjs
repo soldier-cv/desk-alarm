@@ -121,6 +121,15 @@ ok('bundle 含 macOS 目标', /"app"|"dmg"/.test(tauriConf));
 ok('有 minimumSystemVersion', /minimumSystemVersion/.test(tauriConf));
 ok('图标含 icns', /icon\.icns/.test(tauriConf));
 
+console.log('\nCSP 与服务端地址');
+// CSP 是编译期写死的，服务端地址是用户运行时填的。
+// connect-src 退回逐个列地址，用户填别的地址就会被静默拦掉
+ok('connect-src 放开到 ws 协议', /connect-src[^;]*ws:/.test(tauriConf));
+ok('connect-src 没退回逐个列地址', !/connect-src[^;]*100\.64\.0\.120:8787/.test(tauriConf));
+ok('default-src 保持严格', /default-src 'self'/.test(tauriConf));
+ok('没有放开 script-src 的 unsafe-eval', !/script-src[^;]*unsafe-eval/.test(tauriConf));
+ok('默认地址只在源码出现一处', (src.api.match(/baseUrl: '/g) ?? []).length === 1);
+
 console.log('\n注释纪律');
 const tooLong = [];
 for (const [name, text] of Object.entries(src)) {
