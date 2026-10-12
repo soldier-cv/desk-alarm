@@ -112,6 +112,35 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .login-err:empty { display: none; }
 .login-foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--dim); line-height: 1.7; }
 
+/* 地址行：输入框 + 测试按钮 + 结果说明挤在一行 */
+.login-row { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
+.login-hint { flex: 1; min-width: 0; font-size: 11px; color: var(--dim); line-height: 1.4; }
+.login-hint.ok { color: var(--ok); }
+.login-hint.bad { color: #FF8A7C; }
+
+/* 切换服务端的面板 */
+.panel-mask {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(0, 0, 0, .55);
+  display: grid; place-items: center; padding: 24px;
+}
+.panel {
+  width: min(400px, 100%);
+  background: var(--surface); border: 1px solid var(--line-input);
+  border-radius: var(--r-lg); box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+}
+.panel-head { display: flex; align-items: center; gap: 8px; padding: 13px 14px; border-bottom: 1px solid var(--line-soft); }
+.panel-head b { font-size: 13px; font-weight: 600; }
+.panel-head .sp { flex: 1; }
+.panel-body { padding: 16px 14px 14px; }
+.panel-body .fld { margin-bottom: 0; }
+.panel-body .fld > span { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.panel-err:not(:empty) { margin-top: 10px; font-size: 11.5px; color: var(--muted); }
+
+/* 顶栏的连接状态可点开换地址，得像个能点的控件 */
+#btn-server { cursor: pointer; padding: 3px 7px; border-radius: var(--r-sm); transition: background .12s; }
+#btn-server:hover { background: var(--hover); }
+
 /* ---------- 主窗口骨架 ---------- */
 .app { display: flex; flex-direction: column; height: 100dvh; }
 

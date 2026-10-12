@@ -61,6 +61,48 @@ export function saveConfig(c: Partial<Config>) {
   return next;
 }
 
+/**
+ * 规范化用户填的服务端地址。容错：多余空格、漏协议、结尾斜杠。
+ * CSP 是白名单，地址填错要在这里就被拒，而不是等到连不上
+ */
+export function normalizeBaseUrl(input: string): string {
+  const s = input.trim();
+  if (!s) return '';
+  // 带 scheme 就原样交给 URL 解析，不能补 http://：
+  // 否则 ftp://x.com 会被补成 http://ftp，scheme 注入就进来了
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(s) ? s : `http://${s}`;
+  try {
+    const u = new URL(withScheme);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    if (!u.hostname) return '';
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return '';
+  }
+}
+
+/** 换服务端地址。清掉旧会话：旧 token 对新地址无效 */
+export function switchServer(baseUrl: string) {
+  saveConfig({ baseUrl, token: '', device: null, serverSkewMs: 0 });
+}
+
+/** 探测地址是否真的是 DeskAlarm 服务端，顺便同步时钟偏差 */
+export async function probeServer(baseUrl: string): Promise<{ ok: boolean; reason: string; skewMs: number }> {
+  const norm = normalizeBaseUrl(baseUrl);
+  if (!norm) return { ok: false, reason: '地址格式不对，需要 http:// 或 https:// 开头', skewMs: 0 };
+  try {
+    const started = Date.now();
+    const r = await fetch(`${norm}/healthz`, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return { ok: false, reason: `服务端返回 ${r.status}`, skewMs: 0 };
+    const j = await r.json();
+    if (!j?.ok) return { ok: false, reason: '那个地址上没有 DeskAlarm 服务', skewMs: 0 };
+    // 单程时延的一半是估算，只用来让倒计时别差太多
+    return { ok: true, reason: '', skewMs: j.serverTs - (Date.now() + (Date.now() - started) / 2) };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error && e.name === 'TimeoutError' ? '连接超时' : '连不上', skewMs: 0 };
+  }
+}
+
 export function clearToken() {
   saveConfig({ token: '', device: null });
 }

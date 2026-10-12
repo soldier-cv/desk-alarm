@@ -85,6 +85,16 @@ ok('有 reduced-motion 降级', /prefers-reduced-motion/.test(src.styles));
 ok('客户端定时推进梯度', /setInterval\(tickUrgency/.test(src.main));
 ok('原地更新不重建列表', /dataset\.u/.test(src.main));
 
+console.log('\n服务端地址可配置');
+ok('有地址规范化函数', /export function normalizeBaseUrl/.test(src.api));
+ok('有连通性探测', /export async function probeServer/.test(src.api));
+ok('登录页地址是可编辑输入框', /id="base"/.test(src.main));
+ok('登录页有测试连接按钮', /id="test"/.test(src.main));
+ok('登录后有切换入口', /id="btn-server"/.test(src.main) && /openServerPanel/.test(src.main));
+ok('换地址会清会话', /switchServer/.test(src.api) && /token: ''/.test(src.api));
+ok('带 scheme 的不补协议（防注入）', /\[a-z\]\[a-z0-9\+\.\-\]\*:/.test(src.api) || /\^\[a-z\]/.test(src.api));
+ok('登录时先落盘再请求', /switchServer\(norm\);[\s\S]{0,200}api\.login/.test(src.main));
+
 console.log('\n暗色主题可读性');
 ok('输入框用 --line-input（不是 --line）', /\.input \{[\s\S]{0,200}?--line-input/.test(src.styles));
 ok('输入框显式声明 color', /\.input \{[\s\S]{0,200}?color: var\(--text\)/.test(src.styles));

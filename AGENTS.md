@@ -64,6 +64,8 @@ cd app && node scripts/contrast.mjs
 - 服务端改动 → `cd server && npm run smoke && npm run e2e`
 - 客户端改动 → `cd app && npx tsc --noEmit && npx vite build`
 - 颜色改动 → `node scripts/contrast.mjs`
+- 服务端地址解析改动 → `cd app && node scripts/url-check.mjs`
+- 需求规则改动 → `node scripts/align-check.mjs`
 - 端到端 → `node server/scripts/verify.mjs`（需要栈起着）
 
 `smoke` 会建临时库跑完删掉。`e2e` 打真实部署，跑完自动清理。

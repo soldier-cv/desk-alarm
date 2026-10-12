@@ -6,7 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, hhmm, hostOf, lateBy, loadConfig,
-  parseInput, saveConfig, serverNow, urgencyOf,
+  normalizeBaseUrl, parseInput, probeServer, saveConfig, serverNow, switchServer, urgencyOf,
   type AckAction, type Device, type Dismissal, type Entry, type ServerMessage,
 } from '../api';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
@@ -86,6 +86,14 @@ function renderLogin() {
       <p>输入口令连接你的服务端。多台设备登录后共享同一份提醒。</p>
       <form id="form">
         <div>
+          <label for="base">服务端地址</label>
+          <input class="input" id="base" placeholder="http://100.64.0.88:8787" value="${esc(cfg.baseUrl)}" spellcheck="false" autocomplete="off">
+          <div class="login-row">
+            <span class="login-hint" id="probe">端口只填对外服务的那一个</span>
+            <button type="button" class="btn sm" id="test">测试连接</button>
+          </div>
+        </div>
+        <div>
           <label for="code">口令</label>
           <input class="input" id="code" type="password" autocomplete="current-password" value="${esc(cfg.passcode)}">
         </div>
@@ -97,7 +105,6 @@ function renderLogin() {
         <button class="btn solid" id="go" style="height:38px">连接</button>
       </form>
       <div class="login-foot">
-        服务端地址 <span class="mono">${esc(cfg.baseUrl)}</span><br>
         带 <span class="mono">--minimized</span> 启动表示开机自启，只进托盘不弹窗
       </div>
     </div>
@@ -106,13 +113,21 @@ function renderLogin() {
   const err = $<HTMLDivElement>('#err')!;
   const go = $<HTMLButtonElement>('#go')!;
   const code = $<HTMLInputElement>('#code')!;
+  const base = $<HTMLInputElement>('#base')!;
+  const probe = $<HTMLSpanElement>('#probe')!;
+  const test = $<HTMLButtonElement>('#test')!;
   code.focus();
 
   const submit = async () => {
     err.textContent = '';
+    const norm = normalizeBaseUrl(base.value);
+    if (!norm) { err.textContent = '地址格式不对，需要 http:// 或 https:// 开头'; return; }
     go.disabled = true;
     go.textContent = '连接中';
     try {
+      // 地址要先落盘再请求，否则这次登录还打的是旧地址
+      switchServer(norm);
+      base.value = norm;
       const name = $<HTMLInputElement>('#name')!.value.trim() || '我的笔记本';
       const r = await api.login(code.value, name);
       saveConfig({ passcode: code.value, deviceName: name, token: r.token, device: r.device });
@@ -126,12 +141,24 @@ function renderLogin() {
     }
   };
 
+  // 地址填错是新手最常撞的坑，先测一下再让他去猜口令
+  test.addEventListener('click', async () => {
+    const norm = normalizeBaseUrl(base.value);
+    if (!norm) { probe.textContent = '地址格式不对'; probe.className = 'login-hint bad'; return; }
+    test.disabled = true;
+    probe.textContent = '测试中...';
+    probe.className = 'login-hint';
+    const r = await probeServer(norm);
+    test.disabled = false;
+    probe.className = `login-hint ${r.ok ? 'ok' : 'bad'}`;
+    probe.textContent = r.ok ? `连上了${r.skewMs ? `，时钟差 ${Math.round(r.skewMs / 1000)}s` : ''}` : r.reason;
+  });
+
   $<HTMLFormElement>('#form')!.addEventListener('submit', (ev) => {
     ev.preventDefault();
     void submit();
   });
   go.addEventListener('click', () => void submit());
-  code.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') void submit(); });
 }
 
 /* ------------------------------------------------------------ 主界面 */
@@ -143,7 +170,7 @@ function renderShell() {
       <span class="logo"><i></i></span>
       <b>提醒器</b>
       <div class="sp"></div>
-      <div class="conn no-drag"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
+      <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
       <button class="btn sm no-drag" id="btn-hotkey" title="全局热键">Ctrl+Shift+Space 快速记</button>
       <button class="btn sm no-drag" id="btn-test">试响</button>
       <button class="btn sm no-drag" id="btn-hide">缩到托盘</button>
@@ -192,6 +219,8 @@ function renderShell() {
     void invoke('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
   };
   $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void invoke('show_capture');
+  // 点连接状态就能换服务端地址，不用翻设置
+  $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
   $<HTMLButtonElement>('#btn-logout')!.onclick = () => {
     rt?.close();
     clearToken();
@@ -670,6 +699,86 @@ function setLink(s: 'connecting' | 'open' | 'closed') {
   dot.className = `sdot ${s === 'open' ? '' : 'off'}`;
   txt.textContent = s === 'open' ? '已连接' : s === 'connecting' ? '连接中' : '已断开';
   srv.textContent = `服务端 ${loadConfig().baseUrl}`;
+}
+
+/**
+ * 切换服务端。换地址等于换一台机器：旧会话的 token 对新地址无效，
+ * 所以清掉重新登录，别让用户以为地址没生效
+ */
+function openServerPanel() {
+  if (document.querySelector('.panel-mask')) { document.querySelector('.panel-mask')!.remove(); return; }
+
+  const host = document.createElement('div');
+  host.className = 'panel-mask';
+  host.innerHTML = `
+    <div class="panel">
+      <div class="panel-head">
+        <b>服务端地址</b>
+        <div class="sp"></div>
+        <button class="btn sm" id="sp-close">关闭</button>
+      </div>
+      <div class="panel-body">
+        <label class="fld">
+          <span>地址</span>
+          <input class="input" id="sp-url" spellcheck="false" autocomplete="off"
+                 value="${esc(loadConfig().baseUrl)}">
+        </label>
+        <div class="login-row">
+          <span class="login-hint" id="sp-hint">多个设备填同一个地址，就共享同一份提醒</span>
+          <button type="button" class="btn sm" id="sp-test">测试连接</button>
+        </div>
+        <div class="panel-err" id="sp-err"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(host);
+
+  const close = () => host.remove();
+  const q = <T extends HTMLElement>(sel: string) => host.querySelector<T>(sel)!;
+  const hint = q<HTMLSpanElement>('#sp-hint');
+  const err = q<HTMLDivElement>('#sp-err');
+  const url = q<HTMLInputElement>('#sp-url');
+  const form = q<HTMLFormElement>('.panel-body');
+
+  const setHint = (text: string, kind: '' | 'ok' | 'bad' = '') => {
+    hint.textContent = text;
+    hint.className = `login-hint ${kind}`;
+  };
+
+  q<HTMLButtonElement>('#sp-close').onclick = close;
+  host.addEventListener('click', (ev) => { if (ev.target === host) close(); });
+
+  q<HTMLButtonElement>('#sp-test').onclick = async (ev) => {
+    const norm = normalizeBaseUrl(url.value);
+    if (!norm) { setHint('地址格式不对，需要 http:// 或 https:// 开头', 'bad'); return; }
+    const btn = ev.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    setHint('测试中...');
+    const r = await probeServer(norm);
+    btn.disabled = false;
+    setHint(r.ok ? '连上了' : r.reason, r.ok ? 'ok' : 'bad');
+  };
+
+  const submitBtn = document.createElement('button');
+  submitBtn.className = 'btn solid';
+  submitBtn.type = 'submit';
+  submitBtn.textContent = '切换到此服务端';
+  submitBtn.style.cssText = 'width:100%;height:36px;margin-top:14px';
+  form.appendChild(submitBtn);
+
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const norm = normalizeBaseUrl(url.value);
+    if (!norm) { setHint('地址格式不对，需要 http:// 或 https:// 开头', 'bad'); return; }
+    if (norm === loadConfig().baseUrl) { close(); return; }
+    // 换地址等于换机器，旧 token 对新地址无效，清掉重新登录
+    switchServer(norm);
+    err.textContent = '已切换，正在重新登录...';
+    rt?.close();
+    location.reload();
+  });
+
+  url.focus();
+  url.select();
 }
 
 /* ------------------------------------------------------------ 操作 */
