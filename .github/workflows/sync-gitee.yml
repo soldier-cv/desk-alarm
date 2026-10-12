@@ -1,0 +1,50 @@
+name: Sync to Gitee
+
+# 仅在推送 main/master 分支或手动触发时同步源码镜像；
+# 打 Tag 时的发版由 build.yml 统一交付，避免双重推送与并发冲突。
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: sync-gitee-branch
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          # 禁用终端交互式密码提示，防止凭证异常时卡死
+          export GIT_TERMINAL_PROMPT=0
+
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::error::未检测到 GITEE_TOKEN Secret，请在 GitHub 仓库 Settings -> Secrets and variables -> Actions 中配置 GITEE_TOKEN。"
+            exit 1
+          fi
+
+          if [ "${{ github.repository }}" != "soldier-cv/desk-alarm" ]; then
+            echo "非主仓库，跳过 Gitee 镜像推送。"
+            exit 0
+          fi
+
+          echo "配置 Gitee 远端仓库..."
+          git remote add gitee "https://huaxudong:${GITEE_TOKEN}@gitee.com/huaxudong/desk-alarm.git"
+
+          echo "对齐并推送 main 分支到 Gitee..."
+          git fetch origin main
+          git checkout -B main origin/main
+          git push -u gitee main:main --force
+
+          echo "✅ Gitee main 镜像同步完成！"
