@@ -167,6 +167,19 @@ async function db() {
 
 try {
   console.log('\n\x1b[1mDeskAlarm 服务端冒烟测试 (PostgreSQL)\x1b[0m\n');
+
+  // 先单独探一次，连不上就说清楚怎么修。直接抛 ECONNREFUSED 看不出是缺容器还是口令错
+  try {
+    await connectAdmin();
+  } catch (e) {
+    console.error(`\n\x1b[31m连不上本地开发库 127.0.0.1:15432\x1b[0m  (${e.code ?? e.message})`);
+    console.error('启动它：\n  docker start deskalarm-pg-dev');
+    console.error('还没有这个容器的话：\n  docker run -d --name deskalarm-pg-dev \\');
+    console.error('    -e POSTGRES_USER=desk_alarm -e POSTGRES_PASSWORD=TpTohsACO3LBBU \\');
+    console.error('    -e POSTGRES_DB=general_db -p 15432:5432 postgres:18-alpine\n');
+    process.exit(2);
+  }
+
   await freshDb();
   startServer();   // 库就位之后才起服务，否则连的是一个刚被 DROP 掉的库
   ok('服务能起来（连得上 Postgres）', await waitReady());
@@ -586,10 +599,12 @@ try {
   child?.kill('SIGTERM');
   await sleep(400);
   child?.kill('SIGKILL');
+  // 数据库连不上时这里也会抛，finally 里抛异常会顶掉后面的 process.exit，
+  // 变成 unsettled top-level await，退出码含义不明（13），排查很费时间
   try {
     await admin.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
   } catch { /* ignore */ }
-  await admin.end().catch(() => {});
+  admin.end().catch(() => {});
   console.log(`\n${'-'.repeat(50)}`);
   if (fail === 0) {
     console.log(`\x1b[1m\x1b[32m全部通过 ${pass} 项\x1b[0m\n`);
