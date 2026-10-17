@@ -85,7 +85,12 @@ export async function entryRoutes(app: FastifyInstance) {
           error: 'VERSION_CONFLICT', message: err.message, current: err.current,
         });
       }
-      return reply.code(404).send({ error: 'NOT_FOUND', message: '条目不存在' });
+      if (err instanceof Error && err.message === 'NOT_FOUND') {
+        return reply.code(404).send({ error: 'NOT_FOUND', message: '条目不存在' });
+      }
+      // 真出错别伪装成 404，否则客户端只会一直重试一条永远写不进去的条目
+      log.error('entry update failed', err);
+      return reply.code(500).send({ error: 'INTERNAL', message: '保存失败，请重试' });
     }
   });
 

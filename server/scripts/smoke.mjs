@@ -214,7 +214,7 @@ try {
   ok('Windows 路径识别为 path', pth.json.entry?.kind === 'path');
   ok('无时间进收集箱', pth.json.entry?.status === 'inbox');
   ok('收集箱条目默认 weak', pth.json.entry?.strength === 'weak', pth.json.entry?.strength);
-  ok('有时间的默认 strong', link.json.entry?.strength === 'strong', link.json.entry?.strength);
+  ok('给了时间但没声明强度也是 weak', link.json.entry?.strength === 'weak', link.json.entry?.strength);
 
   /* ------------------------------------------------------ WebSocket */
   console.log('\n实时通道');
@@ -240,7 +240,7 @@ try {
   const c1 = await db();
   const soon = await api('/entries', {
     method: 'POST', token: ta,
-    body: { text: '到点该响铃了', remindAt: Date.now() + 800, devices: ['*'] },
+    body: { text: '到点该响铃了', remindAt: Date.now() + 800, devices: ['*'], strength: 'strong' },
   });
   const soonId = soon.json.entry.id;
   ok('推送范围默认是全部', JSON.stringify(soon.json.entry.devices) === JSON.stringify(['*']));
@@ -512,11 +512,11 @@ try {
     method: 'POST', headers: { authorization: `Bearer ${ta}`, 'content-type': 'application/json' },
   });
   const noBodyJson = await noBody.json().catch(() => ({}));
-  // 解析层不该拦（那是 FST_ERR_CTP_EMPTY_JSON_BODY），但缺 text 确实该被
-  // 路由层校验挡下，给人话而不是堆栈
-  ok('空 body 走到业务校验而不是解析层', noBodyJson.error === 'BAD_REQUEST', noBodyJson.error);
+  // 空 body 连 content-type 都没有。解析层要给出 JSON 形态的 400，
+  // 不能落成 500 或者直接掐断连接
+  ok('空 body 是 400 且带错误码', noBody.status === 400 && !!noBodyJson.error,
+    `${noBody.status} ${noBodyJson.error ?? '(无 body)'}`);
   ok('空 body 错误码是 400', noBody.status === 400, `status=${noBody.status}`);
-  ok('空 body 错误信息是人话', /text/.test(noBodyJson.message ?? ''), noBodyJson.message);
 
   const blank = await api('/entries', { method: 'POST', token: ta, body: { text: '   ' } });
   ok('全是空格的 text 也被拒', blank.status === 400, `status=${blank.status}`);
@@ -533,10 +533,73 @@ try {
     body: '{ 坏掉的 json',
   });
   ok('坏 JSON 报 400', junk.status === 400, `status=${junk.status}`);
+
+  // 不带 content-type 的坏 body：以前会被当成空对象吞掉，然后以「缺 text」回 400，
+  // 看起来对，但实际上错误信息骗人。现在应直接报解析失败
+  const junkNoCt = await fetch(`${BASE}/entries`, {
+    method: 'POST', headers: { authorization: `Bearer ${ta}` }, body: '{ 也没有 content-type',
+  });
+  const junkNoCtJson = await junkNoCt.json().catch(() => ({}));
+  ok('无 content-type 的坏 JSON 也是 400', junkNoCt.status === 400, `status=${junkNoCt.status}`);
+  ok('无 content-type 的坏 JSON 有错误码', !!junkNoCtJson.error, JSON.stringify(junkNoCtJson));
+
+  const huge = await fetch(`${BASE}/entries`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ta}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'x'.repeat(300 * 1024) }),
+  });
+  const hugeJson = await huge.json().catch(() => ({}));
+  ok('超大 body 报 413', huge.status === 413, `status=${huge.status}`);
+  ok('超大 body 有错误码', !!hugeJson.error, JSON.stringify(hugeJson));
   await junk.body?.cancel();
   const empty = await api('/entries', { method: 'POST', token: ta, body: { text: '空 body 容错测的' } });
   ok('不带 body 就能完成条目',
     (await api(`/entries/${empty.json.entry.id}/done`, { method: 'POST', token: ta })).status === 200);
+
+  /* --------------------------------------------- 乐观锁与设置边界 */
+  console.log('\n乐观锁与设置');
+  const race = await api('/entries', { method: 'POST', token: ta, body: { text: '并发改它' } });
+  const raceId = race.json.entry.id;
+  const raceVer = race.json.entry.version;
+  const r1 = await api(`/entries/${raceId}`, { method: 'PATCH', token: ta, body: { text: '甲改的', version: raceVer } });
+  const r2 = await api(`/entries/${raceId}`, { method: 'PATCH', token: tb, body: { text: '乙改的', version: raceVer } });
+  ok('先到的改动成功', r1.status === 200, `status=${r1.status}`);
+  ok('版本落后的改动被拒 409', r2.status === 409, `status=${r2.status}`);
+  ok('409 带回当前值', r2.json.current?.text === '甲改的', r2.json.current?.text);
+
+  const badPatch = await api(`/entries/${raceId}`, { method: 'PATCH', token: ta, body: { version: 1, text: 'x' } });
+  ok('旧版本号同样被拒', badPatch.status === 409, `status=${badPatch.status}`);
+
+  const qUrl = await api(`/entries?q=${encodeURIComponent('甲改的')}`, { token: ta });
+  ok('搜索能命中中文', (qUrl.json.entries ?? []).some((e) => e.id === raceId),
+    `status=${qUrl.status} n=${qUrl.json.entries?.length} ${JSON.stringify(qUrl.json).slice(0, 200)}`);
+  ok('搜索结果也带推送范围', Array.isArray(qUrl.json.entries?.[0]?.devices));
+
+  // 视图边界：逾期未处理的不能从「今天 / 即将到来」里掉出去
+  const overdue = await api('/entries', {
+    method: 'POST', token: ta,
+    body: { text: '早就该做的', remindAt: Date.now() - 120_000, strength: 'weak' },
+  });
+  const overdueId = overdue.json.entry.id;
+  await new Promise((r) => setTimeout(r, 600));
+  const todayView = await api('/entries?view=today', { token: ta });
+  ok('逾期条目仍在「今天」里', (todayView.json.entries ?? []).some((e) => e.id === overdueId));
+  const allView = await api('/entries?view=all', { token: ta });
+  ok('逾期条目状态是 missed',
+    allView.json.entries?.find((e) => e.id === overdueId)?.status === 'missed');
+  const upView = await api('/entries?view=upcoming', { token: ta });
+  ok('「即将到来」能正常返回',
+    Array.isArray(upView.json.entries), `status=${upView.status}`);
+
+  const setOrig = (await api('/settings', { token: ta })).json.settings;
+  const setZero = await api('/settings', { method: 'PATCH', token: ta, body: { quietStartMin: 0 } });
+  ok('静音开始设成 0 点能存住', setZero.json.settings?.quietStartMin === 0, String(setZero.json.settings?.quietStartMin));
+  const setJunk = await api('/settings', {
+    method: 'PATCH', token: ta,
+    body: { totallyUnknownKey: 'x', quietStartMin: setOrig.quietStartMin },
+  });
+  ok('未知设置键不被写入', setJunk.json.settings?.totallyUnknownKey === undefined);
+  ok('静音开始恢复原值', setJunk.json.settings?.quietStartMin === setOrig.quietStartMin);
 
   /* ---------------------------------------------------------- 设备 */
   console.log('\n设备');

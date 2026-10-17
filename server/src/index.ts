@@ -17,6 +17,13 @@ const app = Fastify({
   bodyLimit: 256 * 1024,
 });
 
+/** 不是 JSON 的请求一律 400，不能落成 500，也不能悄悄当成空 body 放过去 */
+function badJson(done: (err: Error | null, body?: unknown) => void) {
+  const err = new Error('Body is not valid JSON') as Error & { statusCode: number };
+  err.statusCode = 400;
+  done(err, undefined);
+}
+
 /**
  * 容忍没有 body 的 POST。Fastify 默认对「声明了 json 但 body 为空」报 400，
  * 而 curl -X POST 不加 -d、PowerShell -Method Post 都是这种形态
@@ -27,22 +34,31 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
   try {
     done(null, JSON.parse(s));
   } catch {
-    // 裸的 SyntaxError 会被当成 500，要显式给 400
-    const err = new Error('Body is not valid JSON') as Error & { statusCode: number };
-    err.statusCode = 400;
-    done(err, undefined);
+    badJson(done);
   }
 });
 
-// 有些客户端 POST 时压根不带 content-type，也别拦
+// 有些客户端 POST 时压根不带 content-type。带了 body 就得能解析，
+// 解析不了要报错，不能当成空对象吞掉
 app.addContentTypeParser('*', { parseAs: 'string' }, (_req, body, done) => {
   const s = typeof body === 'string' ? body.trim() : '';
   if (!s) return done(null, {});
   try {
     done(null, JSON.parse(s));
   } catch {
-    done(null, {});
+    badJson(done);
   }
+});
+
+// 请求体超出 bodyLimit 时给结构化错误，别让前端拿到空响应
+app.setErrorHandler((err, _req, reply) => {
+  const e = err as { statusCode?: number; message?: string };
+  const status = e.statusCode ?? 500;
+  if (status >= 500) log.error('request failed', err);
+  return reply.code(status).send({
+    error: status === 400 ? 'BAD_REQUEST' : status === 413 ? 'PAYLOAD_TOO_LARGE' : 'INTERNAL',
+    message: status === 413 ? '请求体太大了' : status >= 500 ? '服务端出错了' : (e.message ?? '请求有问题'),
+  });
 });
 
 await app.register(websocket, { options: { maxPayload: 64 * 1024 } });

@@ -6,7 +6,7 @@ import { hub } from '../hub.js';
 import { log } from '../log.js';
 import { one, run } from '../db.js';
 import {
-  deleteDevice, listDevices, renameDevice, setPushEnabled, touch,
+  deleteDevice, getDevice, listDevices, renameDevice, setPushEnabled, touch,
 } from '../repo/devices.js';
 
 export async function deviceRoutes(app: FastifyInstance) {
@@ -40,8 +40,9 @@ export async function deviceRoutes(app: FastifyInstance) {
     if (body.name !== undefined) await renameDevice(id, body.name);
     if (body.pushEnabled !== undefined) await setPushEnabled(id, body.pushEnabled);
     if (body.pushToken !== undefined) {
-      await setPushToken(id, req.session!.device.transport, body.pushToken);
-      invalidateTransport(id);
+      const dev = await getDevice(id);
+      if (!dev) return reply.code(404).send({ error: 'NOT_FOUND', message: '设备不存在' });
+      await setPushToken(id, null, body.pushToken);
     }
 
     const devices = await listDevices();

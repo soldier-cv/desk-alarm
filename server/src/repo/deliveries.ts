@@ -6,7 +6,7 @@ import type { Entry } from '../../../shared/types.js';
 import { env } from '../env.js';
 import { log } from '../log.js';
 import { one, rows, run } from '../db.js';
-import { getEntry } from './entries.js';
+import { getEntries, getEntry } from './entries.js';
 import { transportFor } from '../transport/index.js';
 
 interface PendingRow {
@@ -95,11 +95,17 @@ export async function deliverBatch(batch: PendingRow[]): Promise<{
   const failByTransport = new Map<string, { ids: number[]; error: string; fatal: boolean }>();
   const byTransport: Record<string, number> = {};
 
+  // 同一批里同一条目会出现多次，先按 id 去重取一次
+  const entryIds = [...new Set(batch.map((r) => r.entry_id))];
+  const entries = new Map((await getEntries(entryIds)).map((e) => [e.id, e]));
+  const transports = new Map(await Promise.all(
+    [...new Set(batch.map((r) => r.device_id))].map(async (id) => [id, await deviceTransport(id)] as const),
+  ));
+
   // 按通道分组，同一条通道的设备并发发
   const byT = new Map<string, PendingRow[]>();
   for (const row of batch) {
-    const dev = await deviceTransport(row.device_id);
-    const name = dev ?? row.transport ?? 'ws';
+    const name = transports.get(row.device_id) ?? row.transport ?? 'ws';
     if (!byT.has(name)) byT.set(name, []);
     byT.get(name)!.push(row);
   }
@@ -109,7 +115,7 @@ export async function deliverBatch(batch: PendingRow[]): Promise<{
     byTransport[name] = rowsOfT.length;
 
     await Promise.all(rowsOfT.map(async (row) => {
-      const entry = await getEntry(row.entry_id);
+      const entry = entries.get(row.entry_id);
       if (!entry) return; // 条目被删了，外键级联会清掉这行
 
       // 条目已经被别的设备确认了，没必要再投
@@ -139,12 +145,15 @@ export async function deliverBatch(batch: PendingRow[]): Promise<{
   return { ok, fail: failed, byTransport };
 }
 
+/** 设备通道缓存。设备数量是几十这个量级，超过上限就整体丢掉重建，不做 LRU */
+const TRANSPORT_CACHE_MAX = 500;
 let transportCache = new Map<string, string | null>();
 
 async function deviceTransport(deviceId: string): Promise<string | null> {
   const cached = transportCache.get(deviceId);
   if (cached !== undefined) return cached;
   const r = await one<{ transport: string }>('SELECT transport FROM devices WHERE id = $1', [deviceId]);
+  if (transportCache.size >= TRANSPORT_CACHE_MAX) transportCache = new Map();
   transportCache.set(deviceId, r?.transport ?? null);
   return r?.transport ?? null;
 }
@@ -154,10 +163,12 @@ export function invalidateTransport(deviceId: string) {
   transportCache.delete(deviceId);
 }
 
-/** 给设备注册 push token */
-export async function setPushToken(deviceId: string, transport: string, token: string | null) {
-  await run('UPDATE devices SET transport = $2, push_token = $3 WHERE id = $1',
-    [deviceId, transport, token]);
+/** 给设备注册 push token。通道取这台设备自己的，不能信调用方会话里的 */
+export async function setPushToken(deviceId: string, transport: string | null, token: string | null) {
+  await run(
+    `UPDATE devices SET transport = COALESCE($2, transport), push_token = $3 WHERE id = $1`,
+    [deviceId, transport, token],
+  );
   invalidateTransport(deviceId);
 }
 

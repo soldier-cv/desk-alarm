@@ -73,26 +73,35 @@ async function targetsOf(entryId: string): Promise<string[]> {
   return r.length === 0 ? ['*'] : r.map((x) => x.device_id);
 }
 
+/** 批量取推送范围，避免列表页 N+1 */
+async function targetsBatch(ids: string[]): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  if (ids.length === 0) return map;
+  const scopes = await rows<{ entry_id: string; device_id: string }>(
+    'SELECT entry_id, device_id FROM entry_devices WHERE entry_id = ANY($1::text[]) ORDER BY device_id',
+    [ids],
+  );
+  for (const s of scopes) {
+    if (!map.has(s.entry_id)) map.set(s.entry_id, []);
+    map.get(s.entry_id)!.push(s.device_id);
+  }
+  return map;
+}
+
+async function toEntries(rs: Row[]): Promise<Entry[]> {
+  const map = await targetsBatch(rs.map((r) => r.id));
+  return rs.map((r) => toEntry(r, map.get(r.id) ?? ['*']));
+}
+
 export async function getEntry(id: string): Promise<Entry | undefined> {
   const r = await one<Row>('SELECT * FROM entries WHERE id = $1', [id]);
   if (!r) return undefined;
   return toEntry(r, await targetsOf(id));
 }
 
-/** 批量取，避免列表页 N+1 */
 export async function getEntries(ids: string[]): Promise<Entry[]> {
   if (ids.length === 0) return [];
-  const rs = await rows<Row>('SELECT * FROM entries WHERE id = ANY($1::text[])', [ids]);
-  const scopes = await rows<{ entry_id: string; device_id: string }>(
-    'SELECT entry_id, device_id FROM entry_devices WHERE entry_id = ANY($1::text[]) ORDER BY device_id',
-    [ids],
-  );
-  const map = new Map<string, string[]>();
-  for (const s of scopes) {
-    if (!map.has(s.entry_id)) map.set(s.entry_id, []);
-    map.get(s.entry_id)!.push(s.device_id);
-  }
-  return rs.map((r) => toEntry(r, map.get(r.id) ?? ['*']));
+  return toEntries(await rows<Row>('SELECT * FROM entries WHERE id = ANY($1::text[])', [ids]));
 }
 
 /* ---------------------------------------------------------------- 读 */
@@ -103,6 +112,7 @@ export async function listEntries(
   view: ListView = 'all', limit?: number,
 ): Promise<Entry[]> {
   const cap = Math.min(limit ?? 200, 1000);
+  // 按本机时区算「明天零点」。进程虽然是 UTC，但用户看的是自己墙上的钟
   const tomorrow = new Date();
   tomorrow.setHours(0, 0, 0, 0);
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -113,11 +123,13 @@ export async function listEntries(
 
   switch (view) {
     case 'today':
-      where = `done_at IS NULL AND ((remind_at IS NOT NULL AND remind_at < $1) OR remind_at IS NULL)`;
+      // 只用 remind_at < 明天 来切，已逾期的条目时间早就过去了，漏掉分支就会凭空消失
+      where = `done_at IS NULL AND (remind_at IS NULL OR remind_at < $1)`;
       params = [tomorrow];
       break;
     case 'upcoming':
-      where = `done_at IS NULL AND fired_at IS NULL AND remind_at >= $1 AND remind_at <= $2`;
+      // 不能排除 fired_at：逾期未处理也是「即将到来」里该看见的东西
+      where = 'done_at IS NULL AND remind_at >= $1 AND remind_at <= $2';
       params = [tomorrow, weekEnd];
       break;
     case 'inbox':
@@ -137,25 +149,13 @@ export async function listEntries(
       LIMIT $${params.length}`,
     params,
   );
-
-  const ids = rs.map((r) => r.id);
-  const scopes = ids.length === 0 ? [] : await rows<{ entry_id: string; device_id: string }>(
-    'SELECT entry_id, device_id FROM entry_devices WHERE entry_id = ANY($1::text[]) ORDER BY device_id',
-    [ids],
-  );
-  const map = new Map<string, string[]>();
-  for (const s of scopes) {
-    if (!map.has(s.entry_id)) map.set(s.entry_id, []);
-    map.get(s.entry_id)!.push(s.device_id);
-  }
-  return rs.map((r) => toEntry(r, map.get(r.id) ?? ['*']));
+  return toEntries(rs);
 }
 
 export async function searchEntries(q: string, limit = 30): Promise<Entry[]> {
   const term = q.trim();
   if (!term) return [];
-  // 用 to_tsvector 建了 GIN 索引，模糊匹配直接用 ILIKE 也够用，
-  // 这里两者结合：ILIKE 保证短查询和中文也能命中
+  // 中文没有分词，GIN 的 tsvector 索引命中不了，直接用 ILIKE 扫
   const rs = await rows<Row>(
     `SELECT * FROM entries
       WHERE done_at IS NULL AND (text ILIKE $1 OR note ILIKE $1 OR path ILIKE $1)
@@ -163,7 +163,7 @@ export async function searchEntries(q: string, limit = 30): Promise<Entry[]> {
       LIMIT $2`,
     [`%${term}%`, Math.min(limit, 200)],
   );
-  return Promise.all(rs.map((r) => getEntry(r.id).then((e) => e!)));
+  return toEntries(rs);
 }
 
 /* ---------------------------------------------------------------- 写 */
@@ -196,9 +196,8 @@ export async function createEntry(req: CreateEntryRequest, opts: {
 
   const remindAt = toEpoch(req.remindAt);
   const kind: EntryKind = req.kind ?? guessKind(req.text);
-  // 强度和静音豁免正交。这里把没定时的默认成 weak：
-  // 收集箱里的东西本来就不该响铃
-  const strength: Strength = req.strength ?? (remindAt === null ? 'weak' : 'strong');
+  // 给了时间不等于强提示。强不强由调用方按关键词判过再传，没传就是 weak
+  const strength: Strength = req.strength === 'strong' ? 'strong' : 'weak';
   const text = req.text.trim();
 
   const id = await tx(async (q) => {
@@ -249,11 +248,12 @@ export async function updateEntry(id: string, req: UpdateEntryRequest): Promise<
   const timeChanged = (toMs(remindAt) ?? null) !== cur.remindAt;
 
   await tx(async (q) => {
-    await q.run(
+    // 版本条件写进 WHERE：上面那次读和这次写之间，别的设备可能已经改过
+    const n = await q.run(
       `UPDATE entries SET
          text = $2, note = $3, remind_at = $4, repeat = $5, strength = $6,
          bypass_quiet = $7, fired_at = $8, version = version + 1, updated_at = now()
-       WHERE id = $1`,
+       WHERE id = $1 AND version = $9`,
       [id,
        req.text?.trim() ?? cur.text,
        'note' in req ? (req.note?.trim() || null) : cur.note,
@@ -261,8 +261,11 @@ export async function updateEntry(id: string, req: UpdateEntryRequest): Promise<
        req.repeat ?? cur.repeat,
        req.strength ?? cur.strength,
        req.bypassQuiet === undefined ? cur.bypassQuiet : req.bypassQuiet,
-       timeChanged ? null : toDt(cur.firedAt)],
+       timeChanged ? null : toDt(cur.firedAt),
+       req.version ?? cur.version],
     );
+    if (n === 0) throw new Error('VERSION_RACE');
+
     if (req.devices) {
       await q.run('DELETE FROM entry_devices WHERE entry_id = $1', [id]);
       if (req.devices.length > 0 && !req.devices.includes('*')) {
@@ -274,6 +277,13 @@ export async function updateEntry(id: string, req: UpdateEntryRequest): Promise<
         }
       }
     }
+  }).catch(async (err) => {
+    if (err instanceof Error && err.message === 'VERSION_RACE') {
+      const now = await getEntry(id);
+      if (!now) throw new Error('NOT_FOUND');
+      throw new VersionConflict(now);
+    }
+    throw err;
   });
 
   return (await getEntry(id))!;
@@ -390,7 +400,7 @@ export async function listNeglected(minCount = 2): Promise<Entry[]> {
       ORDER BY dismiss_count DESC, updated_at DESC LIMIT 50`,
     [minCount],
   );
-  return Promise.all(rs.map((r) => getEntry(r.id).then((e) => e!)));
+  return toEntries(rs);
 }
 
 /* ------------------------------------------------------------ 调度器 */
@@ -407,14 +417,11 @@ export async function findDue(limit = 50): Promise<DueEntry[]> {
       ORDER BY remind_at ASC LIMIT $1`,
     [limit],
   );
-  const out: DueEntry[] = [];
-  for (const r of rs) {
-    const entry = await getEntry(r.id);
-    if (!entry) continue;
-    const ids = await resolveTargets(r.id);
-    out.push({ entry, targetIds: ids });
-  }
-  return out;
+  const entries = await toEntries(rs);
+  return Promise.all(entries.map(async (entry) => ({
+    entry,
+    targetIds: await resolveTargets(entry.id),
+  })));
 }
 
 async function resolveTargets(entryId: string): Promise<string[]> {
