@@ -37,11 +37,27 @@ const DEFAULT_SETTINGS: Settings = {
   neglectedAfter: 3,
 };
 
+/**
+ * 设备指纹只能生成一次并落盘。写成 DEFAULT_CONFIG 里的表达式的话，
+ * 每次 loadConfig 都是一个新 id，服务端会把同一台机器当成新设备，
+ * 登录几次就多出几台幽灵设备，还挤占推送范围
+ */
+const DEVICE_ID_KEY = 'deskalam.deviceId';
+
+function deviceId(): string {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = `dev_${Math.random().toString(36).slice(2, 14)}`;
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
 export const DEFAULT_CONFIG: Config = {
   baseUrl: 'http://100.64.0.88:8787',
   passcode: '',
   deviceName: '我的笔记本',
-  deviceId: `dev_${Math.random().toString(36).slice(2, 14)}`,
+  deviceId: '',
   token: '',
   device: null,
   serverSkewMs: 0,
@@ -51,10 +67,13 @@ export const DEFAULT_CONFIG: Config = {
 export function loadConfig(): Config {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return { ...DEFAULT_CONFIG };
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    const cfg: Config = raw
+      ? { ...DEFAULT_CONFIG, ...(JSON.parse(raw) as Partial<Config>) }
+      : { ...DEFAULT_CONFIG };
+    if (!cfg.deviceId) cfg.deviceId = deviceId();
+    return cfg;
   } catch {
-    return { ...DEFAULT_CONFIG };
+    return { ...DEFAULT_CONFIG, deviceId: deviceId() };
   }
 }
 
