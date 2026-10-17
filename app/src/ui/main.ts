@@ -40,6 +40,8 @@ const state = {
 };
 
 let rt: Realtime | null = null;
+/** 本地直接改过之后，服务端回来的旧版本不覆盖输入框，谁也不希望打字打到一半被清掉 */
+let editingLocal = false;
 
 /* ------------------------------------------------------- 强提醒链路 */
 
@@ -102,7 +104,7 @@ function renderLogin() {
           <input class="input" id="name" value="${esc(cfg.deviceName)}">
         </div>
         <div class="login-err" id="err"></div>
-        <button class="btn solid" id="go" style="height:38px">连接</button>
+        <button class="btn solid login-go" id="go">连接</button>
       </form>
       <div class="login-foot">
         带 <span class="mono">--minimized</span> 启动表示开机自启，只进托盘不弹窗
@@ -171,7 +173,7 @@ function renderShell() {
       <b>提醒器</b>
       <div class="sp"></div>
       <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
-      <button class="btn sm no-drag" id="btn-hotkey" title="全局热键">Ctrl+Shift+Space 快速记</button>
+      <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>
       <button class="btn sm no-drag" id="btn-test">试响</button>
       <button class="btn sm no-drag" id="btn-hide">缩到托盘</button>
     </div>
@@ -207,7 +209,7 @@ function renderShell() {
 
     <div class="statusbar">
       <span id="s-server">服务端 -</span>
-      <span>时钟偏差 <span class="mono" id="s-skew">0 ms</span></span>
+      <span class="skew">时钟偏差 <span class="mono" id="s-skew">0 ms</span></span>
       <div class="sp"></div>
       <span>开机自启 <b id="s-auto">-</b></span>
       <button class="btn sm" id="btn-logout">退出登录</button>
@@ -400,7 +402,7 @@ function renderSidebar() {
   $<HTMLElement>('#sidebar')!.innerHTML = `
     ${nav.map(([v, label, n]) => `
       <button class="nav ${state.view === v ? 'on' : ''}" data-view="${v}">${label}
-        <span class="count ${v === 'today' && bad > 0 ? 'due' : ''}">${n}</span>
+        <span class="count ${v === 'today' && bad > 0 ? 'alert' : ''}">${n}</span>
       </button>`).join('')}
     <div class="nav-sep"></div>
     <div class="nav-head">弱提示</div>
@@ -408,13 +410,18 @@ function renderSidebar() {
     <button class="nav ${state.view === 'neglected' ? 'on' : ''}" data-view="neglected">老是被忽略</button>
     <div class="nav-sep"></div>
     <div class="nav-head">推送设备</div>
-    <button class="nav on"><span class="sdot"></span>${esc(me?.name ?? '本机')}<span class="count">本机</span></button>
-    ${others.map((d) => `
-      <div class="nav" title="${esc(d.transport.toUpperCase())}">
-        <span class="sdot ${d.online ? '' : d.pushReady ? 'alert' : 'off'}"></span>${esc(d.name)}
-        <span class="count">${d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送'}</span>
-      </div>`).join('')}
-    <div style="flex:1"></div>
+    <div class="dev-list">
+      <div class="nav static">
+        <span class="sdot"></span>${esc(me?.name ?? '本机')}<span class="count">本机</span>
+      </div>
+      ${others.map((d) => `
+        <div class="nav static" title="${esc(d.platform)} · ${esc(d.transport.toUpperCase())}">
+          <span class="sdot ${d.online ? '' : d.pushReady ? 'alert' : 'off'}"></span>${esc(d.name)}
+          <span class="count">${d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送'}</span>
+        </div>`).join('')}
+      ${others.length === 0 ? '<div class="nav-note">还没有别的设备登录。多台设备用同一个口令登录后，这里会列出来。</div>' : ''}
+    </div>
+    <div class="sp"></div>
     <button class="nav" id="btn-autostart"><span class="sdot ${loadConfig().settings.sound === 'none' ? 'off' : ''}"></span>开机自启<span class="count" id="auto-state">-</span></button>`;
 
   const auto = $<HTMLButtonElement>('#btn-autostart')!;
@@ -495,34 +502,41 @@ function renderList() {
     .join('');
 }
 
+/** 重复提醒的标签。none 不显示 */
+const REPEAT_LABEL: Record<string, string> = { daily: '每天', weekly: '每周', monthly: '每月' };
+
 function rowHtml(e: Entry): string {
   const missed = e.status === 'missed';
   const done = e.status === 'done';
   const nameOf = (id: string) => state.devices.find((x) => x.id === id)?.name ?? id;
 
+  // 标签要克制：一行里堆五六个标签，用户就一个都看不见了。
+  // 只留会影响行为的那些，其余放进 title
   let meta = '';
-  if (e.url) meta += `<span class="tag host">${esc(hostOf(e.url))}</span>`;
-  if (e.path) meta += `<span class="tag path">${esc(e.path)}</span>`;
+  if (e.url) meta += `<span class="tag host" title="${esc(e.url)}">${esc(hostOf(e.url))}</span>`;
+  if (e.path) meta += `<span class="tag path" title="${esc(e.path)}">${esc(e.path)}</span>`;
   if (e.repeat !== 'none') {
-    meta += `<span class="tag">${{ daily: '每天', weekly: '每周', monthly: '每月' }[e.repeat]}</span>`;
+    meta += `<span class="tag">${REPEAT_LABEL[e.repeat] ?? e.repeat}</span>`;
   }
-  // 强度标签。弱提示设计里最该被一眼看见的信息
-  meta += e.strength === 'weak'
-    ? '<span class="tag">弱提示</span>'
-    : '<span class="tag due">强提示</span>';
+  // 强提示是稀缺的，值得标出来；弱提示是常态，标了只会变成噪声。
+  // 逾期行已经有火色的时间，再叠一个「还没处理」就是重复喊同一件事
+  if (e.strength === 'strong' && !missed) meta += '<span class="tag due">强提示</span>';
   if (e.bypassQuiet) meta += '<span class="tag">绕过静音</span>';
-  meta += `<span class="tag">${e.devices[0] === '*' ? '推给全部在线设备' : `仅推送到：${e.devices.map(nameOf).join(' / ')}`}</span>`;
   if (e.dismissCount > 0) meta += `<span class="tag due">被忽略 ${e.dismissCount} 次</span>`;
   if (done && e.doneDevice) meta += `<span class="tag elsewhere">已在「${esc(e.doneDevice)}」完成</span>`;
-  if (missed) meta += `<span class="tag due">${esc(lateBy(e.firedAt ?? serverNow()))}还没处理</span>`;
+
+  const pushHint = e.devices[0] === '*'
+    ? '推给全部在线设备'
+    : `仅推送到：${e.devices.map(nameOf).join(' / ')}`;
 
   const u = urgencyOf(e);
   const label = timeLabel(e);
 
   return `
-  <div class="item${done ? ' done' : ''}${u === 'none' ? '' : ` u-${u}`} ${state.selected === e.id ? 'on' : ''}"
-       data-id="${esc(e.id)}" data-u="${u}" data-tl="${esc(label)}">
-    <div class="cbox" data-toggle="${esc(e.id)}">
+  <div class="item${done ? ' done' : ''}${u === 'none' ? '' : ` u-${u}`}${state.selected === e.id ? ' on' : ''}"
+       data-id="${esc(e.id)}" data-u="${u}" data-tl="${esc(label)}" title="${esc(pushHint)}">
+    <div class="cbox" data-toggle="${esc(e.id)}" role="checkbox" aria-checked="${done ? 'true' : 'false'}"
+         aria-label="${done ? '标记为未完成' : '完成'}">
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#0B0C0D" stroke-width="3.4"><path d="M4 12.5l5 5L20 6.5"/></svg>
     </div>
     <div>
@@ -539,7 +553,7 @@ function rowHtml(e: Entry): string {
 /** 时间行文案。一小时内报「还有 X 分钟」，临近时差多少比几点钟有用 */
 function timeLabel(e: Entry): string {
   if (e.status === 'missed') {
-    return `${dayLabel(e.remindAt!)} ${hhmm(e.remindAt!)} · ${lateBy(e.firedAt ?? serverNow())}还没处理`;
+    return `${dayLabel(e.remindAt!)} ${hhmm(e.remindAt!)} · ${lateBy(e.firedAt ?? serverNow())} 还没处理`;
   }
   const u = urgencyOf(e);
   if (e.remindAt === null) return '收集箱 · 不定时';
@@ -564,6 +578,18 @@ function tickUrgency() {
     if (!row) continue;
 
     const u = urgencyOf(e);
+    // 已逾期行的文案不再随时间变化，每次 tick 都重写会把用户的选中文字冲掉
+    if (e.status === 'missed') {
+      if (row.dataset.u === 'over') continue;
+      row.dataset.u = 'over';
+      row.dataset.tl = '';
+      row.classList.remove('u-soon', 'u-close', 'u-due');
+      row.classList.add('u-over');
+      const t = row.querySelector('.it-time');
+      if (t) t.innerHTML = `<i class="udot over"></i>${esc(timeLabel(e))}`;
+      continue;
+    }
+
     const label = timeLabel(e);
     if (row.dataset.u === u && row.dataset.tl === label) continue;
 
@@ -580,6 +606,11 @@ function tickUrgency() {
 function renderEditor() {
   const box = $<HTMLElement>('#editor')!;
   const e = state.entries.find((x) => x.id === state.selected);
+
+  // 用户正在这个输入框里打字时不要重画，否则光标和没提交的字都会丢。
+  // 条目已经不在了（删掉/换视图）则一定要重画成空状态
+  const focused = document.activeElement as HTMLElement | null;
+  if (e && editingLocal && focused && box.contains(focused) && focused.id === 'f-t') return;
 
   if (!e) {
     box.innerHTML = `
@@ -604,7 +635,7 @@ function renderEditor() {
     <div class="ed-body">
       <div class="fld">
         <label for="f-t">内容</label>
-        <textarea class="input" id="f-t" rows="2" style="resize:vertical">${esc(e.text)}</textarea>
+        <textarea class="input ed-textarea" id="f-t" rows="2">${esc(e.text)}</textarea>
       </div>
 
       <div class="fld">
@@ -617,7 +648,7 @@ function renderEditor() {
           ? `会弹全屏接管窗口，${s.escalateAfterSec} 秒不处理就关不掉，之后每 ${Math.max(1, Math.round(s.repeatEverySec / 60))} 分钟再响一次`
           : '只出通知和顶部细横幅，可以「忽略」并写理由。不会打断手上的事'}</div>
         ${e.dismissCount >= s.autoDowngradeAfter && e.strength === 'weak'
-          ? `<div class="hint" style="color:var(--flare)">已经被忽略 ${e.dismissCount} 次${e.dismissCount >= s.neglectedAfter ? '，建议直接删掉' : ''}</div>`
+          ? `<div class="hint warn">已经被忽略 ${e.dismissCount} 次${e.dismissCount >= s.neglectedAfter ? '，建议直接删掉' : ''}</div>`
           : ''}
       </div>
 
@@ -625,11 +656,10 @@ function renderEditor() {
         <label>提醒时间</label>
         <div class="seg">
           <button data-w="none" class="${e.remindAt === null ? 'on' : ''}">不定时</button>
-          <button data-w="1h" class="${e.remindAt !== null && e.remindAt <= serverNow() + 3600_000 ? 'on' : ''}">1 小时后</button>
-          <button data-w="set" class="${e.remindAt !== null && e.remindAt > serverNow() + 3600_000 ? 'on hot' : ''}">指定时间</button>
+          <button data-w="1h" class="${e.remindAt !== null ? 'on' : ''}">${e.remindAt === null ? '1 小时后' : '已定时'}</button>
         </div>
         ${e.remindAt !== null ? `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+        <div class="date-row">
           <input class="input" type="date" id="f-d" value="${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}">
           <input class="input" type="time" id="f-tm" value="${pad(d.getHours())}:${pad(d.getMinutes())}">
         </div>
@@ -664,13 +694,13 @@ function renderEditor() {
 
       <div class="fld">
         <label for="f-n">备注</label>
-        <textarea class="input" id="f-n" rows="3" style="resize:vertical" placeholder="提醒时一起显示的内容">${esc(e.note ?? '')}</textarea>
+        <textarea class="input ed-textarea" id="f-n" rows="3" placeholder="提醒时一起显示的内容">${esc(e.note ?? '')}</textarea>
       </div>
     </div>
     <div class="ed-foot">
       <button class="btn solid" data-do="done">完成</button>
-      <button class="btn" data-do="tomorrow">明天同一时间</button>
-      <button class="btn danger" data-do="del" style="margin-left:auto">删除</button>
+      <button class="btn" data-do="tomorrow">推迟</button>
+      <button class="btn danger sp-left" data-do="del">删除</button>
     </div>`;
 }
 
@@ -686,19 +716,38 @@ function renderAll() {
   renderSidebar();
   renderList();
   renderEditor();
-  const cfg = loadConfig();
-  const skew = $<HTMLElement>('#s-skew');
-  if (skew) skew.textContent = `${cfg.serverSkewMs > 0 ? '+' : ''}${cfg.serverSkewMs} ms`;
+  renderSkew();
 }
 
 function setLink(s: 'connecting' | 'open' | 'closed') {
   const dot = $<HTMLElement>('#sdot');
   const txt = $<HTMLElement>('#stxt');
   const srv = $<HTMLElement>('#s-server');
-  if (!dot) return;
-  dot.className = `sdot ${s === 'open' ? '' : 'off'}`;
+  const conn = $<HTMLElement>('#btn-server');
+  if (!dot || !txt) return;
+
+  dot.className = `sdot ${s === 'open' ? '' : s === 'connecting' ? 'warn' : 'alert'}`;
   txt.textContent = s === 'open' ? '已连接' : s === 'connecting' ? '连接中' : '已断开';
-  srv.textContent = `服务端 ${loadConfig().baseUrl}`;
+  // 断了要让用户知道会自动重连，否则只会以为程序坏了
+  conn.title = s === 'closed'
+    ? `已断开，正在自动重连。点击切换服务端（${loadConfig().baseUrl}）`
+    : `点击切换服务端（${loadConfig().baseUrl}）`;
+  if (srv) srv.textContent = `服务端 ${loadConfig().baseUrl}`;
+}
+
+const SKEW_MAX_AUTO = 10_000;
+
+function renderSkew() {
+  const skew = $<HTMLElement>('#s-skew');
+  if (!skew) return;
+  const ms = loadConfig().serverSkewMs;
+  skew.textContent = Math.abs(ms) < 1000 ? `${ms} ms` : `${ms > 0 ? '+' : ''}${Math.round(ms / 1000)} s`;
+  // 差出十秒以上，倒计时和「还有 X 分钟」会明显不准，得让人知道
+  const box = skew.parentElement;
+  if (box) box.classList.toggle('warn', Math.abs(ms) > SKEW_MAX_AUTO);
+  skew.title = Math.abs(ms) > SKEW_MAX_AUTO
+    ? '本机时钟和服务端差得比较多，倒计时可能有偏差。建议开启系统自动校时'
+    : '本机时钟与服务端的偏差，由 welcome 消息算出';
 }
 
 /**
@@ -759,10 +808,9 @@ function openServerPanel() {
   };
 
   const submitBtn = document.createElement('button');
-  submitBtn.className = 'btn solid';
+  submitBtn.className = 'btn solid panel-submit';
   submitBtn.type = 'submit';
   submitBtn.textContent = '切换到此服务端';
-  submitBtn.style.cssText = 'width:100%;height:36px;margin-top:14px';
   form.appendChild(submitBtn);
 
   form.addEventListener('submit', (ev) => {
@@ -846,19 +894,78 @@ async function toggleDone(id: string) {
   } catch { /* 列表会自己同步回来 */ }
 }
 
-/** 「明天同一时间」，以及已忽略条目的「再提醒我」 */
+/**
+ * 行上的「推迟」。按钮叫推迟就该让用户选推迟多久，
+ * 原来点一下直接跳到明天同一时间，和按钮上的字对不上
+ */
+const SNOOZE_CHOICES: Array<[string, number]> = [
+  ['10 分钟', 10],
+  ['30 分钟', 30],
+  ['1 小时', 60],
+  ['明天同一时间', -1],
+];
+
 async function promptSnooze(id: string) {
   const base = state.entries.find((x) => x.id === id);
-  if (base?.status === 'done') {
-    try { await api.rearm(id); } catch { /* ignore */ }
+  const pick = await chooseSnooze(base);
+  if (pick === null) return;
+
+  if (pick === 'rearm') {
+    try { await api.rearm(id); } catch { flash('操作失败，检查服务端连接'); }
     void refresh();
     return;
   }
-  const from = base?.remindAt ?? serverNow();
-  const d = new Date(from);
-  d.setDate(d.getDate() + 1);
-  await api.snooze(id, { to: d.getTime() });
-  void refresh();
+
+  try {
+    await api.snooze(id, { to: pick });
+    void refresh();
+  } catch {
+    flash('推迟失败，检查服务端连接');
+  }
+}
+
+function chooseSnooze(base: Entry | undefined): Promise<'rearm' | number | null> {
+  return new Promise((resolve) => {
+    // 已完成/被忽略过的条目，先给一个「重新提醒」的入口
+    const canRearm = base?.status === 'done' || (base?.dismissCount ?? 0) > 0;
+    const host = document.createElement('div');
+    host.className = 'panel-mask';
+    host.innerHTML = `
+      <div class="panel panel-sm" role="dialog" aria-modal="true">
+        <div class="panel-head"><b>推迟到什么时候</b></div>
+        <div class="panel-body">
+          <div class="snooze-opts">
+            ${SNOOZE_CHOICES.map(([label, min]) => `
+              <button class="nav" data-min="${min}">${label}</button>`).join('')}
+            ${canRearm ? '<button class="nav" data-rearm="1">现在就再提醒一次</button>' : ''}
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(host);
+
+    const done = (v: 'rearm' | number | null) => {
+      host.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(v);
+    };
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); done(null); } };
+    document.addEventListener('keydown', onKey);
+    host.addEventListener('click', (ev) => {
+      if (ev.target === host) { done(null); return; }
+      const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-min],[data-rearm]');
+      if (!b) return;
+      if (b.dataset.rearm) { done('rearm'); return; }
+      const min = Number(b.dataset.min);
+      if (min < 0) {
+        const d = new Date(base?.remindAt ?? serverNow());
+        d.setDate(d.getDate() + 1);
+        done(d.getTime());
+      } else {
+        done(serverNow() + min * 60_000);
+      }
+    });
+    host.querySelector<HTMLElement>('.snooze-opts .nav')!.focus();
+  });
 }
 
 function onEditorClick(ev: Event) {
@@ -867,17 +974,20 @@ function onEditorClick(ev: Event) {
   const e = state.entries.find((x) => x.id === state.selected);
   if (!t || !e) return;
 
-  const save = (patch: Record<string, unknown>) =>
-    api.update(e.id, { ...patch, version: e.version })
+  // 用最新的 version：render 之后别的设备可能已经改过，用旧版本号会被 409 顶回来
+  const save = (patch: Record<string, unknown>) => {
+    const cur = state.entries.find((x) => x.id === e.id) ?? e;
+    return api.update(cur.id, { ...patch, version: cur.version })
       .then(refresh)
-      .catch(() => { /* 版本冲突下次同步覆盖 */ });
+      .catch((err) => flashConflict(err, e.id));
+  };
 
   const s = t.dataset.s;
   if (s) { void save({ strength: s }); return; }
 
   const w = t.dataset.w;
   if (w === 'none') { void save({ remindAt: null }); return; }
-  if (w === '1h' || w === 'set') { void save({ remindAt: serverNow() + 3600_000 }); return; }
+  if (w === '1h') { void save({ remindAt: serverNow() + 3600_000 }); return; }
 
   const r = t.dataset.r;
   if (r !== undefined) { void save({ repeat: r || 'none' }); return; }
@@ -897,8 +1007,79 @@ function onEditorClick(ev: Event) {
 
   const doWhat = t.dataset.do;
   if (doWhat === 'done') { void toggleDone(e.id); return; }
-  if (doWhat === 'del') { void api.remove(e.id).then(() => { state.selected = null; return refresh(); }); return; }
+  if (doWhat === 'del') { void confirmDelete(e); return; }
   if (doWhat === 'tomorrow') { void promptSnooze(e.id); return; }
+}
+
+/** 编辑器底部的推迟，和行上的「推迟」走同一套选择 */
+async function snoozeEntry(e: Entry) {
+  await promptSnooze(e.id);
+}
+
+/** 删除不可撤销，二次确认。焦点落在「取消」上，回车不会误删 */
+async function confirmDelete(e: Entry) {
+  const ok = await ask(`删除「${e.text.slice(0, 30)}${e.text.length > 30 ? '…' : ''}」？`, '删了找不回来', '删除');
+  if (!ok) return;
+  try {
+    await api.remove(e.id);
+    state.selected = null;
+    void refresh();
+  } catch {
+    flash('删除失败，检查服务端连接');
+  }
+}
+
+/** 轻量确认框，走统一的面板样式，不弹系统对话框 */
+function ask(title: string, detail: string, confirmLabel: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const host = document.createElement('div');
+    host.className = 'panel-mask';
+    host.innerHTML = `
+      <div class="panel panel-sm" role="dialog" aria-modal="true">
+        <div class="panel-body">
+          <div class="confirm-title">${esc(title)}</div>
+          <div class="confirm-detail">${esc(detail)}</div>
+          <div class="confirm-acts">
+            <button class="btn" data-confirm="no">取消</button>
+            <button class="btn danger" data-confirm="yes">${esc(confirmLabel)}</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(host);
+
+    const done = (v: boolean) => {
+      host.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(v);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') { ev.stopPropagation(); done(false); }
+    };
+    document.addEventListener('keydown', onKey);
+    host.addEventListener('click', (ev) => {
+      if (ev.target === host) { done(false); return; }
+      const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-confirm]');
+      if (b) done(b.dataset.confirm === 'yes');
+    });
+    // 焦点必须在模态里，回车要有明确落点，不能落到底下那个删除按钮上。
+    // 默认停在「取消」：确认删除需要用户主动点一下
+    host.querySelector<HTMLElement>('[data-confirm="no"]')!.focus();
+  });
+}
+
+/**
+ * 版本冲突不是错误，是别的设备先改了。提示一句并重新取一次最新值，
+ * 让用户看到冲突后的真实内容，而不是自己刚输入的那份
+ */
+function flashConflict(err: unknown, entryId: string) {
+  if (err instanceof ApiError && err.status === 409) {
+    flash('这条刚在别的设备上改过，已刷新为最新内容');
+  } else {
+    flash('保存失败，检查服务端连接');
+  }
+  void refresh().then(() => {
+    if (entryId) state.selected = entryId;
+  });
 }
 
 function onEditorInput(ev: Event) {
@@ -907,27 +1088,47 @@ function onEditorInput(ev: Event) {
   if (!e) return;
   const w = window as unknown as Record<string, number>;
 
-  if (t.id === 'f-t' || t.id === 'f-n') {
+  // 输入框的 value 在触发时取一次就够了，version 要等真正发出前再取
+  const id = e.id;
+  const save = (build: () => Record<string, unknown> | null) => {
+    const cur = state.entries.find((x) => x.id === id);
+    if (!cur) return;
+    const patch = build();
+    if (!patch) return;
+    editingLocal = true;
+    api.update(id, { ...patch, version: cur.version })
+      .then(refresh)
+      .catch((err) => flashConflict(err, id))
+      .finally(() => { editingLocal = false; });
+  };
+
+  if (t.id === 'f-t') {
+    const value = t.value;
     clearTimeout(w.__deb);
-    w.__deb = window.setTimeout(() => {
-      const field = t.id === 'f-t' ? { text: t.value } : { note: t.value || null };
-      api.update(e.id, { ...field, version: e.version }).catch(() => { /* ignore */ });
-    }, 400);
+    w.__deb = window.setTimeout(() => save(() => ({ text: value })), 400);
+  }
+
+  if (t.id === 'f-n') {
+    const value = t.value;
+    clearTimeout(w.__deb);
+    w.__deb = window.setTimeout(() => save(() => ({ note: value || null })), 400);
   }
 
   if (t.id === 'f-tm' || t.id === 'f-d' || t.id === 'f-bq') {
+    const bq = $<HTMLInputElement>('#f-bq')?.checked ?? false;
+    const ds = $<HTMLInputElement>('#f-d')?.value;
+    const ts = $<HTMLInputElement>('#f-tm')?.value;
     clearTimeout(w.__deb2);
-    w.__deb2 = window.setTimeout(() => {
-      const ds = $<HTMLInputElement>('#f-d')?.value;
-      const ts = $<HTMLInputElement>('#f-tm')?.value;
-      const bq = $<HTMLInputElement>('#f-bq')?.checked ?? false;
+    w.__deb2 = window.setTimeout(() => save(() => {
       const patch: Record<string, unknown> = { bypassQuiet: bq };
       if (ds && ts) {
         const at = new Date(`${ds}T${ts}`).getTime();
-        if (!Number.isNaN(at)) patch.remindAt = at;
+        // 日期框里打了一半（比如 2026-1）不该被当成一个有效时刻存进去
+        if (Number.isNaN(at)) return null;
+        patch.remindAt = at;
       }
-      api.update(e.id, { ...patch, version: e.version }).then(refresh).catch(() => { /* ignore */ });
-    }, 500);
+      return patch;
+    }), 500);
   }
 }
 

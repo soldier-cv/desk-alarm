@@ -70,6 +70,10 @@ ok('文档写明关键词触发', /一定要/.test(src.req));
 ok('实现按关键词判强提示', /一定要\|必须\|别忘/.test(src.api));
 ok('无关键词时默认 weak', /urgent \? 'strong' : 'weak'/.test(src.api));
 ok('agent 建的一律 weak', /strength[^;\n]*'weak'/.test(src.tools));
+// 服务端不能再「有 remindAt 就当强提示」，那是文档明确否掉的做法
+ok('服务端不按有没有时间判强提示',
+  !/remindAt === null \? 'weak' : 'strong'/.test(src.entries));
+ok('服务端没传强度就 weak', /req\.strength === 'strong' \? 'strong' : 'weak'/.test(src.entries));
 
 console.log('\n强弱提示正交');
 ok('strength 与 bypassQuiet 是两个字段', /bypass_quiet/.test(src.sql) && /strength/.test(src.sql));
@@ -109,6 +113,11 @@ ok('输入框用 --line-input（不是 --line）', /\.input \{[\s\S]{0,200}?--li
 ok('输入框显式声明 color', /\.input \{[\s\S]{0,200}?color: var\(--text\)/.test(src.styles));
 ok('placeholder 有专门样式', /::placeholder/.test(src.styles));
 ok('弱化文字色已提亮', /--dim: #(7|8|9|a|b|c|d|e|f)/i.test(src.styles) || /--dim: #8/.test(src.styles));
+
+console.log('\n列表视图边界');
+// 逾期条目时间早已过去，视图条件里不能因为 fired_at 有值就把它排掉
+ok('「今天」不按 fired_at 排除', !/today[\s\S]{0,200}fired_at/.test(src.entries));
+ok('「即将到来」不排除已触发的', !/upcoming[\s\S]{0,200}fired_at IS NULL/.test(src.entries));
 
 console.log('\n跨平台');
 const rust = ['lib', 'commands', 'windows', 'tray', 'main']

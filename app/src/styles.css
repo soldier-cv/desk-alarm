@@ -135,7 +135,25 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .panel-body { padding: 16px 14px 14px; }
 .panel-body .fld { margin-bottom: 0; }
 .panel-body .fld > span { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.panel-body .fld > label { font-size: 11.5px; color: var(--muted); }
+.panel-submit { width: 100%; height: 36px; margin-top: 14px; }
 .panel-err:not(:empty) { margin-top: 10px; font-size: 11.5px; color: var(--muted); }
+.login-go { height: 38px; }
+
+/* 删除确认。默认焦点在「取消」上，回车不会误删 */
+.panel-sm { width: min(360px, 100%); }
+.confirm-title { font-size: 13.5px; font-weight: 600; line-height: 1.5; word-break: break-word; }
+.confirm-detail { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.confirm-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* 推迟选项：一列按钮，比下拉框快 */
+.snooze-opts { display: flex; flex-direction: column; gap: 4px; }
+.snooze-opts .nav {
+  height: 34px; justify-content: flex-start; text-align: left;
+  border: 1px solid transparent; color: var(--text);
+}
+.snooze-opts .nav:hover { border-color: var(--line); background: var(--raised); }
+.snooze-opts .nav:focus-visible { border-color: var(--flare); }
 
 /* 顶栏的连接状态可点开换地址，得像个能点的控件 */
 #btn-server { cursor: pointer; padding: 3px 7px; border-radius: var(--r-sm); transition: background .12s; }
@@ -157,7 +175,16 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .conn { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); }
 .sdot { width: 6px; height: 6px; border-radius: 2px; flex: none; background: var(--ok); }
 .sdot.off { background: var(--dim); }
+.sdot.warn { background: var(--muted); animation: breathe 1.6s ease-in-out infinite; }
 .sdot.alert { background: var(--flare); }
+
+/* 热键提示：三个键帽，比一整行字更容易扫到 */
+.topbar kbd {
+  font-family: var(--mono); font-size: 10px; line-height: 1;
+  padding: 2px 4px; border-radius: 3px; margin-right: 3px;
+  color: var(--muted); background: var(--raised); border: 1px solid var(--line);
+}
+#btn-hotkey:hover kbd { color: var(--text); border-color: var(--line-ctrl); }
 
 /* 快速捕获 */
 .capture-bar {
@@ -179,14 +206,26 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 /* 主体 */
 .body { flex: 1; display: grid; grid-template-columns: 178px minmax(0, 1fr) 312px; min-height: 0; }
 
-.sidebar { background: var(--surface); border-right: 1px solid var(--line-soft); padding: 10px 8px; overflow-y: auto; }
+.sidebar {
+  background: var(--surface); border-right: 1px solid var(--line-soft);
+  padding: 10px 8px; overflow-y: auto;
+  /* 列布局才能让底部的开机自启贴住底边 */
+  display: flex; flex-direction: column;
+}
+.sidebar .sp { flex: 1; min-height: 12px; }
+/* 设备多的时候自己滚，不要把导航挤没 */
+.dev-list { max-height: 34vh; overflow-y: auto; margin: 0 -2px; padding: 0 2px; }
 .nav { display: flex; align-items: center; gap: 9px; width: 100%; height: 31px; padding: 0 9px;
   border-radius: var(--r-sm); color: var(--muted); font-size: 13px; text-align: left; }
 .nav:hover { background: var(--hover); color: var(--text); }
 .nav.on { background: var(--raised); color: var(--text); font-weight: 600; }
 .nav .count { margin-left: auto; font-size: 11px; font-family: var(--mono); color: var(--dim); }
 .nav.on .count { color: var(--muted); }
-.nav .due { color: var(--flare); }
+.nav .count.alert { color: var(--flare); }
+/* 设备行只是状态展示，不是可点的导航 */
+.nav.static { cursor: default; }
+.nav.static:hover { background: none; color: var(--muted); }
+.nav-note { font-size: 11px; color: var(--dim); line-height: 1.6; padding: 4px 9px 2px; }
 .nav-sep { height: 1px; background: var(--line-soft); margin: 8px 4px; }
 .nav-head { font-size: 11px; color: var(--dim); padding: 4px 9px 5px; }
 .dev-line { display: flex; align-items: center; gap: 8px; width: 100%; height: 29px; padding: 0 9px;
@@ -245,6 +284,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .tag { font-size: 11px; color: var(--dim); display: inline-flex; align-items: center; gap: 4px;
   max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag.host { color: var(--muted); }
+/* 路径标签要带框，得写在 .tag 之后，否则被上面的 white-space/padding 覆盖回去 */
 .tag.path { font-family: var(--mono); font-size: 10.5px; background: #16181B; border: 1px solid var(--line-soft);
   border-radius: var(--r-sm); padding: 1px 6px; }
 .tag.due { color: var(--flare); }
@@ -256,6 +296,9 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .fld { margin-bottom: 17px; }
 .fld > label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
 .fld .hint { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
+.fld .hint.warn { color: var(--flare); }
+.ed-textarea { resize: vertical; line-height: 1.55; min-height: 52px; }
+.date-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px;
   background: var(--raised); border: 1px solid var(--line-input); border-radius: var(--r); padding: 3px; }
 .seg button { height: 27px; border-radius: var(--r-sm); font-size: 12.5px; color: var(--muted);
@@ -278,6 +321,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .dev-opt .nm b { display: block; font-size: 12.5px; font-weight: 550; }
 .dev-opt .nm span { font-size: 11px; color: var(--dim); }
 .ed-foot { padding: 11px 15px; border-top: 1px solid var(--line-soft); display: flex; gap: 7px; }
+.ed-foot .sp-left { margin-left: auto; }
 .ed-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 11px; padding: 28px; text-align: center; color: var(--dim); }
 .ed-empty b { font-size: 13px; color: var(--muted); font-weight: 550; }
@@ -287,6 +331,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
   display: flex; align-items: center; gap: 14px; padding: 0 13px; font-size: 11.5px; color: var(--dim); }
 .statusbar .sp { flex: 1; }
 .statusbar b { color: var(--muted); font-weight: 500; }
+.statusbar .skew.warn, .statusbar .skew.warn #s-skew { color: var(--flare); }
 .mono { font-family: var(--mono); }
 
 .empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 52px 24px; text-align: center; }
@@ -360,6 +405,8 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .bar i { display: block; height: 100%; width: 0; background: var(--flare); }
 .tk-acts { flex: none; display: flex; gap: 8px; padding: 0 30px 14px; flex-wrap: wrap; }
 .tk-acts .btn { height: 36px; padding: 0 16px; font-size: 13px; }
+/* 「静音」会记一次 snooze，代价要有代价的样子：靠右、不与主行动并排 */
+.tk-acts .tk-silence { margin-left: auto; color: #FF8A7C; }
 .tk-snooze { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 30px 20px; flex-wrap: wrap; }
 .tk-snooze .lb { font-size: 11.5px; color: var(--dim); margin-right: 3px; }
 

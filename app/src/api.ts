@@ -11,6 +11,9 @@ export type { AckAction, Device, Dismissal, Entry, MissedFire, RepeatRule, Serve
 
 const LS_KEY = 'deskalarm.config';
 
+/** serverNow 的时钟偏差缓存，不进 localStorage */
+let skewCache: number | null = null;
+
 export interface Config {
   baseUrl: string;
   passcode: string;
@@ -58,6 +61,7 @@ export function loadConfig(): Config {
 export function saveConfig(c: Partial<Config>) {
   const next = { ...loadConfig(), ...c };
   localStorage.setItem(LS_KEY, JSON.stringify(next));
+  if (c.serverSkewMs !== undefined) skewCache = c.serverSkewMs;
   return next;
 }
 
@@ -109,7 +113,9 @@ export function clearToken() {
 
 /** 服务端权威时间。所有「到点了吗」的判断都用它，不用本机 Date.now() */
 export function serverNow(): number {
-  return Date.now() + loadConfig().serverSkewMs;
+  // 列表里每行都调它，不能每次都读一次 localStorage 再 parse
+  if (skewCache === null) skewCache = loadConfig().serverSkewMs;
+  return Date.now() + skewCache;
 }
 
 /* ---------------------------------------------------------------- HTTP */
@@ -132,7 +138,11 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${cfg.baseUrl}/api/v1${path}`, { ...init, headers });
   const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
+  // 网关的 HTML 错误页不是 JSON，直接 parse 会抛 SyntaxError，调用方拿不到状态码
+  let json: { error?: string; message?: string } = {};
+  if (text) {
+    try { json = JSON.parse(text); } catch { /* 非 JSON 响应，走下面的状态码兜底 */ }
+  }
   if (!res.ok) throw new ApiError(res.status, json.error ?? 'UNKNOWN', json.message ?? res.statusText);
   return json as T;
 }
