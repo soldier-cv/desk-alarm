@@ -37,11 +37,8 @@ const DEFAULT_SETTINGS: Settings = {
   neglectedAfter: 3,
 };
 
-/**
- * 设备指纹只能生成一次并落盘。写成 DEFAULT_CONFIG 里的表达式的话，
- * 每次 loadConfig 都是一个新 id，服务端会把同一台机器当成新设备，
- * 登录几次就多出几台幽灵设备，还挤占推送范围
- */
+// 设备指纹只能生成一次并落盘。写成 DEFAULT_CONFIG 里的表达式的话，
+// 每次 loadConfig 都是新 id，同一台机器登录几次就多出几台设备
 const DEVICE_ID_KEY = 'deskalam.deviceId';
 
 function deviceId(): string {
