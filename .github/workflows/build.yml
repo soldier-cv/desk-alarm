@@ -182,7 +182,14 @@ jobs:
           # Release 不存在就建，已存在（补包重跑）就直接往上加文件，用 --clobber 覆盖同名附件
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
-          gh release upload "$TAG" app/src-tauri/target/release/bundle/nsis/*.exe --clobber
+
+          # GitHub 的 Release 附件名只接受 ASCII，中文前缀会被直接丢掉，
+          # 变成 "_0.2.1_x64-setup.exe"。这里主动改成可读的英文名再上传；
+          # Actions artifact 里仍然保留原始的「提醒器_...」名字
+          V="${TAG#v}"
+          mkdir -p release-assets
+          cp app/src-tauri/target/release/bundle/nsis/*.exe "release-assets/desk-alarm_${V}_x64-setup.exe"
+          gh release upload "$TAG" "release-assets/desk-alarm_${V}_x64-setup.exe" --clobber
 
   macos:
     if: ${{ github.event_name != 'pull_request' }}
@@ -253,6 +260,10 @@ jobs:
           fi
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          # 附件名只接受 ASCII，中文会被丢掉（理由同 windows job）
+          V="${TAG#v}"
+          mkdir -p release-assets
+          cp app/src-tauri/target/release/bundle/dmg/*.dmg "release-assets/desk-alarm_${V}_aarch64.dmg"
           # .app 是目录，打进 zip 才能作为 Release 附件；dmg 本来就能直接下载
-          ( cd app/src-tauri/target/release/bundle/macos && zip -qry "$GITHUB_WORKSPACE/deskalarm-macos-app.zip" ./*.app )
-          gh release upload "$TAG" app/src-tauri/target/release/bundle/dmg/*.dmg deskalarm-macos-app.zip --clobber
+          ( cd app/src-tauri/target/release/bundle/macos && zip -qry "$GITHUB_WORKSPACE/release-assets/desk-alarm_${V}_aarch64.app.zip" ./*.app )
+          gh release upload "$TAG" "release-assets/desk-alarm_${V}_aarch64.dmg" "release-assets/desk-alarm_${V}_aarch64.app.zip" --clobber

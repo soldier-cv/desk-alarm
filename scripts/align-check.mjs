@@ -189,8 +189,10 @@ ok('PR 不跑真机构建', /\$\{\{\s*github\.event_name == 'pull_request'\s*\}\
 ok('打包 job 跳过 PR', (wf.match(/\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/g) ?? []).length >= 2);
 // 版本号来源只有一处：tag -> set-version 脚本。写死会让安装包版本和 tag 对不上
 ok('产物版本来自 tag', /scripts\/set-version\.mjs/.test(wf));
-// runner 上中文 productName 会被读成空，产物名丢掉前缀（实测 v0.2.0 出来是 "_0.2.0_x64-setup.exe"）
-ok('构建时显式传 productName', /tauri-name\.mjs/.test(wf) && /--config/.test(wf));
+// GitHub 的 Release 附件名只收 ASCII，中文前缀会被静默丢掉，
+// v0.2.x 就是这样变成了 "_0.2.1_x64-setup.exe"
+ok('Release 附件用 ASCII 名', /desk-alarm_\$\{V\}_x64-setup\.exe/.test(wf));
+ok('Release 附件名有可读前缀', /desk-alarm_/.test(wf));
 const versionScript = read('scripts/set-version.mjs');
 ok('版本脚本同时改 tauri.conf/Cargo.toml/package.json',
   ['tauriConf', 'cargoToml', 'packageJson'].every((k) => versionScript.includes(k)));

@@ -1,10 +1,10 @@
 /**
  * 输出一份只含 productName 的最小配置，给 `tauri build --config` 用。
  *
- * 为什么要多这一份：CI runner 上 tauri 读 tauri.conf.json 时，
- * 无 BOM 的 UTF-8 中文 productName 会被读成空字符串，
- * 产物名就变成 "_0.2.0_x64-setup.exe"（前缀丢了）。
- * 由 Node 显式读一遍再以 JSON 传给 CLI，打包器拿到的就是正确的名字。
+ * 打包器自己会读 tauri.conf.json，这里显式再喂一次，让产物名不依赖
+ * 它内部的读取路径（Windows runner 上见过中文被读成空的说法）。
+ * 但要注意：真正让 Release 附件丢前缀的是 GitHub 附件名的 ASCII 限制，
+ * 处理在上传那一步，不是这里。
  *
  * 用法：node scripts/tauri-name.mjs
  */
@@ -19,5 +19,5 @@ if (!name) {
   process.exit(1);
 }
 
-// JSON.stringify 输出的就是 UTF-8，且没有 BOM
+// JSON.stringify 输出 UTF-8 且不带 BOM
 process.stdout.write(JSON.stringify({ productName: name }));
