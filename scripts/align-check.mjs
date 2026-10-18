@@ -154,6 +154,26 @@ ok('macos 也构建产物', /bundles app,dmg/.test(macJob));
 ok('windows 也构建产物', /windows/.test(wf) && /nsis/.test(wf));
 ok('minimumSystemVersion 与 arm64 相容', !/10\.15/.test(read('app/src-tauri/tauri.conf.json')));
 
+console.log('\n发布链路');
+// 服务端在 Woodpecker，客户端在 GitHub Actions。两边都认 v* tag，
+// 推一次 tag 才是「一个版本」；一边认一边不认会出现「部署了但没打包」
+const woodpecker = read('.woodpecker.yaml');
+ok('woodpecker 认 v* tag', /event:\s*tag/.test(woodpecker) && /refs\/tags\/v\*/.test(woodpecker));
+ok('GitHub Actions 也认 v* tag', /push:\s*\n\s*tags:\s*\['v\*'\]/.test(wf));
+ok('GitHub Actions 不再因 push main 触发', !/branches:\s*\[main\]/.test(wf));
+ok('tag 构建会发 Release', /gh release create/.test(wf) && /gh release upload/.test(wf));
+ok('发 Release 需要写权限', /permissions:\s*\n\s*contents:\s*write/.test(wf));
+// 没有 --verify-tag 时，tag 不存在会让 gh 从默认分支悄悄造一个，Release 就指向错的提交
+ok('建 Release 校验 tag 真实存在', /gh release create[^\n]*--verify-tag/.test(wf));
+ok('PR 不跑真机构建', /\$\{\{\s*github\.event_name == 'pull_request'\s*\}\}/.test(wf));
+ok('打包 job 跳过 PR', (wf.match(/\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/g) ?? []).length >= 2);
+// 版本号来源只有一处：tag -> set-version 脚本。写死会让安装包版本和 tag 对不上
+ok('产物版本来自 tag', /scripts\/set-version\.mjs/.test(wf));
+const versionScript = read('scripts/set-version.mjs');
+ok('版本脚本同时改 tauri.conf/Cargo.toml/package.json',
+  ['tauriConf', 'cargoToml', 'packageJson'].every((k) => versionScript.includes(k)));
+ok('本地 Windows 构建也能带版本号', /-Version/.test(read('scripts/build-windows.ps1')));
+
 console.log('\n注释纪律');
 const tooLong = [];
 for (const [name, text] of Object.entries(src)) {

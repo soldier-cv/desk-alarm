@@ -8,14 +8,24 @@
 # 用法：
 #   .\scripts\build-windows.ps1
 #   .\scripts\build-windows.ps1 -NoInstaller
+#   .\scripts\build-windows.ps1 -Version v0.2.0   # 按 tag 版本号打包，和 CI 一致
 
 [CmdletBinding()]
-param([switch]$NoInstaller)
+param(
+    [switch]$NoInstaller,
+    [string]$Version
+)
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 
 function Say($m) { Write-Host "`n==> $m" -ForegroundColor Yellow }
+
+if ($Version) {
+    Say "设置版本号 $Version"
+    node scripts/set-version.mjs $Version
+    if ($LASTEXITCODE -ne 0) { throw '版本号设置失败' }
+}
 
 Say '检查前置依赖'
 foreach ($c in 'node', 'cargo') {

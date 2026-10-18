@@ -11,6 +11,7 @@
 #   ./scripts/build-macos.sh universal    # Intel + Apple Silicon 通吃
 #   ./scripts/build-macos.sh aarch64      # 只 Apple Silicon
 #   ./scripts/build-macos.sh x86_64       # 只 Intel
+#   TAURI_VERSION=v0.2.0 ./scripts/build-macos.sh   # 按 tag 版本号打包，和 CI 一致
 #
 # 产物在 app/src-tauri/target/<target>/release/bundle/
 
@@ -82,6 +83,13 @@ case "$TARGET" in
     die "看不懂的目标：$TARGET。可选 native / universal / aarch64 / x86_64"
     ;;
 esac
+
+# ---------------------------------------------------------------- 版本号
+# 和 CI 用同一套逻辑，避免本地打的包版本和 tag 对不上
+if [ -n "${TAURI_VERSION:-}" ]; then
+  say "设置版本号 $TAURI_VERSION"
+  node "$ROOT/scripts/set-version.mjs" "$TAURI_VERSION"
+fi
 
 # ---------------------------------------------------------------- 构建
 cd "$ROOT/app"

@@ -179,6 +179,47 @@ npm run tauri:dev
 
 **macOS 必须在真 Mac 上构建**，跨平台编译不了：`.app` 和 `.dmg` 要 Xcode 的 macOS SDK 和 codesign，这些只有 macOS 有。没有 Mac 就得用 CI 的 `macos` runner，见 `docs/macos-build.md`。
 
+### 发版：推一个 tag，两边一起走
+
+服务端和客户端分在两个 CI 上，但**共享同一个 `v*` tag**，推一次就都走完：
+
+| 内容 | 在哪跑 | 干什么 |
+|---|---|---|
+| 服务端 | Woodpecker（`.woodpecker.yaml`） | 构建 api/web 镜像推内网 registry，`docker compose` 拉起并等健康检查 |
+| 客户端 | GitHub Actions（`.github/workflows/build.yml`） | 打包 Windows NSIS + macOS dmg，建 GitHub Release 并把安装包挂上去 |
+
+```bash
+# 版本号来源只有 tag 一处，三处声明文件由脚本同步
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+推完 tag 之后 Windows 安装包和 macOS dmg 会出现在仓库的 Releases 页面。
+
+**客户端构建时用 tag 里的版本号覆盖** `tauri.conf.json` / `Cargo.toml` / `package.json`，仓库里的文件保持 0.1.0 不被改动；产物文件名和「应用和功能」里显示的版本跟 tag 一致。
+
+本地要打出和 CI 一样的版本号：
+
+```powershell
+.\scripts\build-windows.ps1 -Version v0.2.0
+```
+
+```bash
+TAURI_VERSION=v0.2.0 ./scripts/build-macos.sh
+```
+
+GitHub Actions 的触发范围：
+
+| 事件 | 行为 |
+|---|---|
+| 推 `v*` tag | Windows + macOS 打包，发 Release |
+| 手动触发并填 tag | 同上，用于补包或重跑 |
+| 手动触发不填 tag | 只打包，产物在 workflow artifact，不动 Release |
+| PR | 只跑类型检查、构建、对比度、URL、需求对齐自检，不打包 |
+| push main | 不触发 |
+
+**手动填的 tag 必须已经推到远端**，否则会明确报错而不是让 `gh` 从默认分支悄悄造一个 tag。
+
 Rust 侧没有平台专属代码，窗口、托盘、热键、通知全是 Tauri 跨平台 API，所以 macOS 不需要改逻辑，只是换个机器构建而已。图标 `icon.icns` 已经在了。
 
 macOS 没做代码签名和公证，首次打开被 Gatekeeper 拦的话：
