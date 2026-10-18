@@ -4,34 +4,36 @@
   <meta charset="UTF-8">
   <title>快速记一条</title>
   <style>
-    /* 这个窗口只有 560x132，样式内联在 html 里省一次往返 */
+    /* 这个窗口只有 560x132。颜色跟主窗口共用同一套变量，
+       否则切到莫兰迪主题后这里还是一片近黑，两个窗口像两个程序 */
+    @import url("/src/styles.css");
     html, body { height: 100%; }
     body {
-      background: #0B0C0D; color: #ECEDEF; overflow: hidden;
-      font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, "Microsoft YaHei", sans-serif;
+      background: var(--bg); color: var(--text); overflow: hidden;
+      font-family: var(--sans);
       font-size: 13.5px; -webkit-app-region: drag;
     }
     .wrap { padding: 16px 16px 12px; display: flex; flex-direction: column; height: 100%; }
     .row { display: flex; align-items: center; gap: 10px; }
-    .prompt { color: #5C6067; font-family: "Cascadia Mono", Consolas, monospace; font-size: 15px; }
+    .prompt { color: var(--dim); font-family: var(--mono); font-size: 15px; }
     input {
       flex: 1; min-width: 0; background: none; border: none; outline: none;
-      font: inherit; font-size: 14.5px; color: #ECEDEF; -webkit-app-region: no-drag;
+      font: inherit; font-size: 14.5px; color: var(--text); -webkit-app-region: no-drag;
     }
-    input::placeholder { color: #5F636A; }
+    input::placeholder { color: var(--muted); }
     #parse { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
     .foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 9px; }
-    .hint { font-size: 11px; color: #5C6067; }
-    .hint.ok { color: #5E8C7F; }
-    .hint.err { color: #FF8A7C; }
-    #bar { height: 2px; border-radius: 99px; background: #1B1D20; margin-top: 9px; overflow: hidden; }
-    #bar.ready { background: linear-gradient(90deg, #FF5C2B 40%, #1B1D20 40%); }
+    .hint { font-size: 11px; color: var(--dim); }
+    .hint.ok { color: var(--ok); }
+    .hint.err { color: var(--danger-text); }
+    #bar { height: 2px; border-radius: 99px; background: var(--line-soft); margin-top: 9px; overflow: hidden; }
+    #bar.ready { background: linear-gradient(90deg, var(--flare) 40%, var(--line-soft) 40%); }
     .chip {
       display: inline-flex; align-items: center; height: 21px; padding: 0 8px;
-      border-radius: 6px; font-size: 11px; border: 1px solid #24262A;
-      background: #15171A; color: #8C9097;
+      border-radius: var(--r-sm); font-size: 11px; border: 1px solid var(--line-input);
+      background: var(--field); color: var(--muted);
     }
-    .chip.hot { border-color: rgba(255,92,43,.38); background: rgba(255,92,43,.12); color: #FFB292; }
+    .chip.hot { border-color: var(--flare-line); background: var(--flare-tint); color: var(--chip-hot-text); }
   </style>
 </head>
 <body>

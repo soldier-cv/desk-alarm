@@ -1,34 +1,103 @@
 /* ============================================================
    DeskAlarm 客户端样式
-   主题：整页锁定暗色
-   色板：近黑基底 + 唯一强调色 #FF5C2B（只用于到点/逾期/主行动）
+   主题：暗色（默认）/ 莫兰迪浅色，两套都只换变量，不改规则
    字体：Segoe UI Variable + Cascadia Mono
    圆角：一套刻度 6 / 8 / 12
    ============================================================ */
-/* 暗色主题里，深底不能配深字、深框。下面每个值都是算出来的，
-   不是挑出来的，改色请跑 node scripts/contrast.mjs 复核。
+/* 颜色一律走变量，规则里不写死色值：写死的颜色不会跟着主题变，
+   切到莫兰迪就会出现「浅底上还浮着深色块」。
+   两套色板都算过对比度，改色请跑 node scripts/contrast.mjs 复核。
    门槛：正文 ≥4.5:1，UI 边界 ≥3:1（WCAG 2.1 AA）。 */
 :root {
+  /* ---- 语义角色，规则只引用这些 ---- */
   --bg: #0B0C0D;
   --surface: #121315;
   --raised: #191B1E;
   --hover: #1E2024;
+  --raised-strong: #2A2D32;   /* 分段控件的选中块 */
+  --field: #15171A;           /* chip、路径标签这类浅面板 */
+  --scrim: rgba(0, 0, 0, .55);/* 弹层遮罩 */
+  --shadow: 0 18px 50px rgba(0, 0, 0, .55);
+
   /* --line 是分隔线，不需要 3:1（非文字）。输入框边框另用 --line-input。 */
   --line: #24262A;
   --line-input: #6A6E75;
   /* 勾选框、开关这类小控件的边界，比分隔线亮一档，要能看见 */
   --line-ctrl: #6A6E75;
   --line-soft: #1B1D20;
+
   --text: #ECEDEF;
   --muted: #8C9097;
   --dim: #82868D;
+
+  /* 强调色只用于到点 / 逾期 / 主行动 */
   --flare: #FF5C2B;
+  --flare-text: #FF5C2B;      /* 强调色当文字用时的值，浅色主题下和背景色不同 */
+  --on-flare: #140A06;        /* 压在强调色实心块上的字 */
+  --flare-hover: #FF7448;
   --flare-tint: rgba(255, 92, 43, .12);
   --flare-line: rgba(255, 92, 43, .38);
+
   --ok: #6FA392;
+  --offline-dot: #9AA0A6;      /* 离线设备，别和「到点」抢同一个红色 */
+  --danger-text: #FF8A7C;
+  --danger-soft: rgba(255, 107, 90, .10);
+  --danger-line: rgba(255, 107, 90, .25);
+  --warn-text: #C9A186;       /* close 档时间文字 */
+  --dot-soon: #6B5A4E;
+  --dot-close: #B07A52;
+  --bar-track: #232629;
+  --strike: #3A3E44;
+  --scroll-thumb: #2A2D31;
+  --scroll-thumb-hover: #3A3E44;
+  --chip-hot-text: #FFB292;
+
   --r-sm: 6px; --r: 8px; --r-lg: 12px;
   --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, "Microsoft YaHei", sans-serif;
   --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SFMono-Regular", monospace;
+}
+
+/* ---- 莫兰迪：暖灰纸感浅色主题 ---- */
+:root[data-theme="morandi"] {
+  --bg: #EDEAE3;
+  --surface: #F4F1EB;
+  --raised: #FAF8F4;
+  --hover: #E4DFD6;
+  --raised-strong: #D9D2C6;
+  --field: #F7F4EE;
+  --scrim: rgba(60, 56, 51, .34);
+  --shadow: 0 18px 44px rgba(60, 56, 51, .18);
+
+  --line: #D5CFC4;
+  --line-input: #8C8477;
+  --line-ctrl: #8C8477;
+  --line-soft: #DDD7CC;
+
+  --text: #3C3833;
+  --muted: #635C53;
+  --dim: #6A635A;
+
+  /* 陶土红。比 #FF5C2B 灰，是莫兰迪里最接近「提醒」的暖色 */
+  --flare: #8C4A3F;
+  --flare-text: #8C4A3F;
+  --on-flare: #FBF8F3;
+  --flare-hover: #7C4137;
+  --flare-tint: rgba(140, 74, 63, .10);
+  --flare-line: rgba(140, 74, 63, .34);
+
+  --ok: #4E6F62;
+  --offline-dot: #8C8477;
+  --danger-text: #8E3B30;
+  --danger-soft: rgba(142, 59, 48, .09);
+  --danger-line: rgba(142, 59, 48, .28);
+  --warn-text: #8A5A34;
+  --dot-soon: #9A8D7E;
+  --dot-close: #A5764F;
+  --bar-track: #D9D2C6;
+  --strike: #B3AA9C;
+  --scroll-thumb: #C9C1B3;
+  --scroll-thumb-hover: #B3AA9C;
+  --chip-hot-text: #7C4137;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -45,11 +114,11 @@ body {
 input, textarea { user-select: text; }
 
 button { font: inherit; color: inherit; background: none; border: none; outline: none; cursor: pointer; }
-::selection { background: var(--flare); color: var(--bg); }
+::selection { background: var(--flare); color: var(--on-flare); }
 :focus-visible { outline: 2px solid var(--flare); outline-offset: 2px; border-radius: var(--r-sm); }
 ::-webkit-scrollbar { width: 10px; }
-::-webkit-scrollbar-thumb { background: #2A2D31; border: 3px solid transparent; background-clip: content-box; border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #3A3E44; background-clip: content-box; }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border: 3px solid transparent; background-clip: content-box; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- 通用控件 ---------- */
@@ -61,12 +130,12 @@ button { font: inherit; color: inherit; background: none; border: none; outline:
 }
 .btn:hover { background: var(--hover); color: var(--text); }
 .btn:active { transform: translateY(1px); }
-.btn.solid { background: var(--flare); color: #140A06; font-weight: 600; }
-.btn.solid:hover { background: #ff7448; }
+.btn.solid { background: var(--flare); color: var(--on-flare); font-weight: 600; }
+.btn.solid:hover { background: var(--flare-hover); }
 .btn.ghost { border-color: var(--line); color: var(--text); }
 .btn.ghost:hover { background: var(--hover); }
-.btn.danger { color: #FF6B5A; }
-.btn.danger:hover { background: rgba(255, 107, 90, .1); }
+.btn.danger { color: var(--danger-text); }
+.btn.danger:hover { background: var(--danger-soft); }
 .btn.sm { height: 26px; padding: 0 9px; font-size: 12px; }
 .btn[disabled] { opacity: .4; pointer-events: none; }
 
@@ -74,9 +143,9 @@ button { font: inherit; color: inherit; background: none; border: none; outline:
   display: inline-flex; align-items: center; gap: 5px;
   height: 24px; padding: 0 9px; border-radius: var(--r-sm);
   font-size: 11.5px; border: 1px solid var(--line-input);
-  background: #15171A; color: var(--muted);
+  background: var(--field); color: var(--muted);
 }
-.chip.hot { border-color: var(--flare-line); background: var(--flare-tint); color: #FFB292; }
+.chip.hot { border-color: var(--flare-line); background: var(--flare-tint); color: var(--chip-hot-text); }
 .chip.path { font-family: var(--mono); font-size: 11px; }
 
 /* 输入框在近黑底上必须有可见边界，否则整个框融进背景。
@@ -105,9 +174,9 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .login-card label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
 .login-card .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .login-err {
-  font-size: 12.5px; color: #FF8A7C; min-height: 18px;
-  padding: 8px 10px; background: rgba(255, 107, 90, .1);
-  border: 1px solid rgba(255, 107, 90, .25); border-radius: var(--r);
+  font-size: 12.5px; color: var(--danger-text); min-height: 18px;
+  padding: 8px 10px; background: var(--danger-soft);
+  border: 1px solid var(--danger-line); border-radius: var(--r);
 }
 .login-err:empty { display: none; }
 .login-foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--dim); line-height: 1.7; }
@@ -116,18 +185,18 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .login-row { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
 .login-hint { flex: 1; min-width: 0; font-size: 11px; color: var(--dim); line-height: 1.4; }
 .login-hint.ok { color: var(--ok); }
-.login-hint.bad { color: #FF8A7C; }
+.login-hint.bad { color: var(--danger-text); }
 
 /* 切换服务端的面板 */
 .panel-mask {
   position: fixed; inset: 0; z-index: 40;
-  background: rgba(0, 0, 0, .55);
+  background: var(--scrim);
   display: grid; place-items: center; padding: 24px;
 }
 .panel {
   width: min(400px, 100%);
   background: var(--surface); border: 1px solid var(--line-input);
-  border-radius: var(--r-lg); box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+  border-radius: var(--r-lg); box-shadow: var(--shadow);
 }
 .panel-head { display: flex; align-items: center; gap: 8px; padding: 13px 14px; border-bottom: 1px solid var(--line-soft); }
 .panel-head b { font-size: 13px; font-weight: 600; }
@@ -174,8 +243,9 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .topbar .no-drag { -webkit-app-region: no-drag; }
 .conn { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); }
 .sdot { width: 6px; height: 6px; border-radius: 2px; flex: none; background: var(--ok); }
-.sdot.off { background: var(--dim); }
+.sdot.off { background: var(--offline-dot); }
 .sdot.warn { background: var(--muted); animation: breathe 1.6s ease-in-out infinite; }
+/* 红色留给「到点/逾期」，离线设备只是灰一点，别抢同一个信号 */
 .sdot.alert { background: var(--flare); }
 
 /* 热键提示：三个键帽，比一整行字更容易扫到 */
@@ -185,6 +255,16 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
   color: var(--muted); background: var(--raised); border: 1px solid var(--line);
 }
 #btn-hotkey:hover kbd { color: var(--text); border-color: var(--line-ctrl); }
+
+/* 主题切换：圆点直接示意切换后的强调色 */
+#btn-theme {
+  display: inline-flex; align-items: center; gap: 6px;
+  border-color: var(--line-ctrl);
+}
+#btn-theme::before {
+  content: ""; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--flare);
+}
 
 /* 快速捕获 */
 .capture-bar {
@@ -228,10 +308,6 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .nav-note { font-size: 11px; color: var(--dim); line-height: 1.6; padding: 4px 9px 2px; }
 .nav-sep { height: 1px; background: var(--line-soft); margin: 8px 4px; }
 .nav-head { font-size: 11px; color: var(--dim); padding: 4px 9px 5px; }
-.dev-line { display: flex; align-items: center; gap: 8px; width: 100%; height: 29px; padding: 0 9px;
-  border-radius: var(--r-sm); color: var(--muted); font-size: 12.5px; text-align: left; }
-.dev-line:hover { background: var(--hover); color: var(--text); }
-.dev-line .cnt { margin-left: auto; font-size: 10.5px; font-family: var(--mono); color: var(--dim); }
 
 .list { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .list-head { flex: none; padding: 16px 20px 10px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
@@ -249,29 +325,30 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .item.on { background-color: var(--raised); border-color: var(--line); }
 
 /* 临近梯度：强调色从行首渗入，越近越浓。
-   背景色（hover/选中）和背景图（梯度）是两层，互不覆盖 */
-.item.u-soon  { background-image: linear-gradient(90deg, rgba(255,92,43,.05), transparent 55%); }
-.item.u-close { background-image: linear-gradient(90deg, rgba(255,92,43,.09), transparent 62%); }
-.item.u-due   { background-image: linear-gradient(90deg, rgba(255,92,43,.14), transparent 70%); }
-.item.u-over  { background-image: linear-gradient(90deg, rgba(255,92,43,.19), transparent 70%); }
+   背景色（hover/选中）和背景图（梯度）是两层，互不覆盖。
+   浓度用 color-mix 从 --flare 派生，换主题时自动跟着变 */
+.item.u-soon  { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 5%, transparent), transparent 55%); }
+.item.u-close { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 9%, transparent), transparent 62%); }
+.item.u-due   { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 14%, transparent), transparent 70%); }
+.item.u-over  { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 19%, transparent), transparent 70%); }
 
-.item.done .it-title { color: var(--dim); text-decoration: line-through; text-decoration-color: #3A3E44; }
+.item.done .it-title { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--strike); }
 .cbox { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--line-ctrl);
   display: grid; place-items: center; margin-top: 2px; flex: none; transition: background .12s, border-color .12s; }
 .cbox:hover { border-color: var(--dim); }
-.item.done .cbox { background: var(--ok); border-color: var(--ok); }
+.item.done .cbox { background: var(--ok); border-color: var(--ok); color: var(--on-flare); }
 .item.u-close .cbox, .item.u-due .cbox, .item.u-over .cbox { border-color: var(--flare-line); }
 .cbox svg { opacity: 0; }
 .item.done .cbox svg { opacity: 1; }
 .it-time { font-family: var(--mono); font-size: 11.5px; color: var(--dim); margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
-.item.u-close .it-time { color: #C9A186; }
-.item.u-due .it-time, .item.u-over .it-time { color: var(--flare); }
+.item.u-close .it-time { color: var(--warn-text); }
+.item.u-due .it-time, .item.u-over .it-time { color: var(--flare-text); }
 
 /* 时间前面的级别点。颜色随梯度变暖，
    due 档呼吸一次 2.6 秒，只动透明度，不动大小和位置 */
 .udot { width: 5px; height: 5px; border-radius: 2px; flex: none; }
-.udot.soon { background: #6B5A4E; }
-.udot.close { background: #B07A52; }
+.udot.soon { background: var(--dot-soon); }
+.udot.close { background: var(--dot-close); }
 .udot.due, .udot.over { background: var(--flare); }
 .udot.due { animation: breathe 2.6s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
@@ -285,9 +362,9 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
   max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag.host { color: var(--muted); }
 /* 路径标签要带框，得写在 .tag 之后，否则被上面的 white-space/padding 覆盖回去 */
-.tag.path { font-family: var(--mono); font-size: 10.5px; background: #16181B; border: 1px solid var(--line-soft);
+.tag.path { font-family: var(--mono); font-size: 10.5px; background: var(--field); border: 1px solid var(--line-soft);
   border-radius: var(--r-sm); padding: 1px 6px; }
-.tag.due { color: var(--flare); }
+.tag.due { color: var(--flare-text); }
 .tag.elsewhere { color: var(--ok); }
 
 .editor { border-left: 1px solid var(--line-soft); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
@@ -304,8 +381,8 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .seg button { height: 27px; border-radius: var(--r-sm); font-size: 12.5px; color: var(--muted);
   display: flex; align-items: center; justify-content: center; transition: background .12s, color .12s; }
 .seg button:hover { color: var(--text); }
-.seg button.on { background: #2A2D32; color: var(--text); font-weight: 600; }
-.seg button.on.hot { background: var(--flare); color: #140A06; }
+.seg button.on { background: var(--raised-strong); color: var(--text); font-weight: 600; }
+.seg button.on.hot { background: var(--flare); color: var(--on-flare); }
 .dev-pick { display: flex; flex-direction: column; gap: 4px; }
 .dev-opt { display: flex; align-items: center; gap: 9px; padding: 7px 9px;
   border-radius: var(--r-sm); border: 1px solid var(--line-soft); background: var(--raised);
@@ -316,7 +393,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
   border-radius: 4px; flex: none; position: relative; cursor: pointer; }
 .dev-opt input:checked { background: var(--flare); border-color: var(--flare); }
 .dev-opt input:checked::after { content: ""; position: absolute; left: 4.2px; top: 1.4px;
-  width: 4px; height: 7.5px; border: solid #140A06; border-width: 0 2px 2px 0; transform: rotate(42deg); }
+  width: 4px; height: 7.5px; border: solid var(--on-flare); border-width: 0 2px 2px 0; transform: rotate(42deg); }
 .dev-opt .nm { flex: 1; min-width: 0; }
 .dev-opt .nm b { display: block; font-size: 12.5px; font-weight: 550; }
 .dev-opt .nm span { font-size: 11px; color: var(--dim); }
@@ -351,13 +428,13 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .weak-reason { display: flex; gap: 6px; margin-top: 8px; }
 .weak-reason .input { flex: 1; padding: 6px 9px; font-size: 12.5px; }
 
-/* 一次性提示条。固定在窗口底部中央，不挡内容 */
+/* 一次性提示条。贴在窗口底部居中，但不能压在编辑器栏上面 */
 .flash {
-  position: fixed; left: 50%; bottom: 46px; transform: translate(-50%, 12px);
-  max-width: 560px; padding: 10px 16px; border-radius: var(--r);
+  position: fixed; left: 50%; bottom: 40px; transform: translate(-50%, 12px);
+  max-width: min(560px, calc(100vw - 560px)); padding: 10px 16px; border-radius: var(--r);
   background: var(--raised); border: 1px solid var(--flare-line);
   color: var(--text); font-size: 12.5px; line-height: 1.55;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, .55);
+  box-shadow: var(--shadow);
   opacity: 0; pointer-events: none;
   transition: opacity .18s, transform .18s;
 }
@@ -375,7 +452,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .quiet-row input:checked { background: var(--flare); border-color: var(--flare); }
 .quiet-row input:checked::after {
   content: ""; position: absolute; left: 4.2px; top: 1.4px;
-  width: 4px; height: 7.5px; border: solid #140A06; border-width: 0 2px 2px 0;
+  width: 4px; height: 7.5px; border: solid var(--on-flare); border-width: 0 2px 2px 0;
   transform: rotate(42deg);
 }
 
@@ -384,7 +461,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 /* ---------- 接管窗口（强提示） ---------- */
 .tk { height: 100dvh; display: flex; flex-direction: column; background: var(--bg); }
 .tk-top { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 20px;
-  background: var(--flare); color: #140A06; }
+  background: var(--flare); color: var(--on-flare); }
 .tk-top b { font-size: 12.5px; font-weight: 700; }
 .tk-top .sp { flex: 1; }
 .tk-top .esc { font-size: 11.5px; font-weight: 600; opacity: .78; }
@@ -401,12 +478,12 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .tk-where { margin-top: 12px; font-size: 11.5px; color: var(--dim); }
 .tk-prog { margin-top: 16px; }
 .tk-prog .meta { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--dim); margin-bottom: 6px; }
-.bar { height: 3px; border-radius: 99px; background: #232629; overflow: hidden; }
+.bar { height: 3px; border-radius: 99px; background: var(--bar-track); overflow: hidden; }
 .bar i { display: block; height: 100%; width: 0; background: var(--flare); }
 .tk-acts { flex: none; display: flex; gap: 8px; padding: 0 30px 14px; flex-wrap: wrap; }
 .tk-acts .btn { height: 36px; padding: 0 16px; font-size: 13px; }
 /* 「静音」会记一次 snooze，代价要有代价的样子：靠右、不与主行动并排 */
-.tk-acts .tk-silence { margin-left: auto; color: #FF8A7C; }
+.tk-acts .tk-silence { margin-left: auto; color: var(--danger-text); }
 .tk-snooze { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 30px 20px; flex-wrap: wrap; }
 .tk-snooze .lb { font-size: 11.5px; color: var(--dim); margin-right: 3px; }
 

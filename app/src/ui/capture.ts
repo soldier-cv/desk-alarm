@@ -8,7 +8,10 @@ import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { parseInput, type Parsed } from '../api';
-// 样式在 capture.html 里内联，这个窗口只有 560x132，不值得再拉一份 CSS
+import { applyTheme, loadTheme } from '../theme';
+
+applyTheme(loadTheme());
+listen<{ theme: 'dark' | 'morandi' }>('theme:changed', (ev) => applyTheme(ev.payload.theme));
 
 const input = document.querySelector<HTMLInputElement>('#q')!;
 const parse = document.querySelector<HTMLDivElement>('#parse')!;

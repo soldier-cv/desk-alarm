@@ -10,12 +10,49 @@ import {
   type AckAction, type Device, type Dismissal, type Entry, type ServerMessage,
 } from '../api';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
+import { THEMES, applyTheme, loadTheme, saveTheme } from '../theme';
 import '../styles.css';
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
 const esc = (s: string) =>
   String(s).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+
+/**
+ * 原生能力调用。用户点了按钮就必须有反馈，原来静默失败看着像按钮坏了。
+ * invoke 缺 __TAURI_INTERNALS__ 时会同步抛，只 catch Promise 罩不住，所以先探一下
+ */
+function hasTauri(): boolean {
+  return typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+}
+
+function native<T = void>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
+  if (!hasTauri()) {
+    flash('这个功能只在桌面客户端里可用');
+    return Promise.resolve(null);
+  }
+  return invoke<T>(cmd, args).catch((err: unknown) => {
+    flash('操作失败：' + (err instanceof Error ? err.message : String(err)));
+    return null;
+  });
+}
+
+/** 内部触发的原生调用（响铃、接管窗口）。没有桌面能力时安静跳过，不打扰用户 */
+function quiet<T = void>(cmd: string, args?: Record<string, unknown>): void {
+  if (!hasTauri()) return;
+  void invoke<T>(cmd, args).catch(() => { /* 没通知权限就算了，横幅还在 */ });
+}
+
+/** 跨窗口事件。浏览器里没有 Tauri 事件系统，emit 一样会同步抛，不能直接调 */
+function send(name: string, payload: unknown = {}) {
+  if (!hasTauri()) return;
+  void emit(name, payload).catch(() => { /* 窗口已关 */ });
+}
+
+function on<T>(name: string, fn: (payload: T) => void) {
+  if (!hasTauri()) return;
+  void listen<T>(name, (ev) => fn(ev.payload)).catch(() => { /* 窗口已关 */ });
+}
 
 /* ------------------------------------------------------------ 状态 */
 
@@ -47,30 +84,30 @@ let editingLocal = false;
 
 const alarm = new AlarmController({
   onNotify: (entry, attempt) => {
-    void invoke('ping', {
+    quiet('ping', {
       title: attempt === 1 ? (entry.strength === 'weak' ? '提醒' : '提醒器') : `提醒器（第 ${attempt} 次）`,
       body: entry.text,
-    }).catch(() => { /* 没通知权限就算了，横幅还在 */ });
+    });
   },
 
   onShow: (entry) => {
-    void invoke('show_takeover', { entry, stage: 'banner', muted: false });
+    quiet('show_takeover', { entry, stage: 'banner', muted: false });
   },
 
   onEscalate: (entry) => {
     // 第 2 步：置顶 + 抖动 + 关不掉
-    void invoke('show_takeover', { entry, stage: 'escalated', muted: false });
+    quiet('show_takeover', { entry, stage: 'escalated', muted: false });
   },
 
   onRepeat: (entry, attempt) => {
-    void invoke('show_takeover', { entry, stage: 'escalated', muted: false });
-    void invoke('ping', { title: `提醒器（第 ${attempt} 次）`, body: entry.text });
+    quiet('show_takeover', { entry, stage: 'escalated', muted: false });
+    quiet('ping', { title: `提醒器（第 ${attempt} 次）`, body: entry.text });
   },
 
   onDismiss: (entry, reason) => {
-    void emit('takeover:dismiss', {});
+    send('takeover:dismiss');
     if (reason === 'elsewhere') {
-      void invoke('ping', { title: '提醒器', body: '这条已在别的设备上处理掉了' });
+      quiet('ping', { title: '提醒器', body: '这条已在别的设备上处理掉了' });
     }
     void refresh();
   },
@@ -163,6 +200,19 @@ function renderLogin() {
   go.addEventListener('click', () => void submit());
 }
 
+/* ------------------------------------------------------------ 主题 */
+
+/** 按钮上显示「切过去之后是什么」，比显示当前状态更好懂 */
+function renderThemeButton() {
+  const btn = $<HTMLButtonElement>('#btn-theme');
+  if (!btn) return;
+  const cur = loadTheme();
+  const next = THEMES.find((t) => t.id !== cur)!;
+  const now = THEMES.find((t) => t.id === cur)!;
+  btn.textContent = next.label;
+  btn.title = `当前：${now.label}（${now.hint}）。点击切到${next.label}`;
+}
+
 /* ------------------------------------------------------------ 主界面 */
 
 function renderShell() {
@@ -173,6 +223,7 @@ function renderShell() {
       <b>提醒器</b>
       <div class="sp"></div>
       <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
+      <button class="btn sm no-drag" id="btn-theme" title="切换配色"></button>
       <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>
       <button class="btn sm no-drag" id="btn-test">试响</button>
       <button class="btn sm no-drag" id="btn-hide">缩到托盘</button>
@@ -216,13 +267,20 @@ function renderShell() {
     </div>
   </div>`;
 
-  $<HTMLButtonElement>('#btn-hide')!.onclick = () => void invoke('hide_main');
+  $<HTMLButtonElement>('#btn-hide')!.onclick = () => void native('hide_main');
   $<HTMLButtonElement>('#btn-test')!.onclick = () => {
-    void invoke('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
+    void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
   };
-  $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void invoke('show_capture');
+  $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
   // 点连接状态就能换服务端地址，不用翻设置
   $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
+  renderThemeButton();
+  $<HTMLButtonElement>('#btn-theme')!.onclick = () => {
+    saveTheme(loadTheme() === 'dark' ? 'morandi' : 'dark');
+    renderThemeButton();
+    // capture / takeover 是独立窗口，配置变化靠事件通知它们重读
+    send('theme:changed', { theme: loadTheme() });
+  };
   $<HTMLButtonElement>('#btn-logout')!.onclick = () => {
     rt?.close();
     clearToken();
@@ -270,9 +328,10 @@ function renderShell() {
   $<HTMLElement>('#editor')!.addEventListener('input', onEditorInput);
 
   onWeakChange(renderWeakBanner);
-  void invoke<boolean>('is_autostart_enabled')
-    .then((on) => { const el = $<HTMLElement>('#s-auto'); if (el) el.textContent = on ? '开' : '关'; })
-    .catch(() => { /* 没权限就算了 */ });
+  void native<boolean>('is_autostart_enabled').then((on) => {
+    const el = $<HTMLElement>('#s-auto');
+    if (el) el.textContent = on === null ? '未知' : on ? '开' : '关';
+  });
 }
 
 /* -------------------------------------------------------- 弱提示横幅 */
@@ -416,7 +475,7 @@ function renderSidebar() {
       </div>
       ${others.map((d) => `
         <div class="nav static" title="${esc(d.platform)} · ${esc(d.transport.toUpperCase())}">
-          <span class="sdot ${d.online ? '' : d.pushReady ? 'alert' : 'off'}"></span>${esc(d.name)}
+          <span class="sdot ${d.online ? '' : d.pushReady ? 'off' : 'alert'}"></span>${esc(d.name)}
           <span class="count">${d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送'}</span>
         </div>`).join('')}
       ${others.length === 0 ? '<div class="nav-note">还没有别的设备登录。多台设备用同一个口令登录后，这里会列出来。</div>' : ''}
@@ -428,18 +487,19 @@ function renderSidebar() {
   auto.onclick = async () => {
     const el = $<HTMLSpanElement>('#auto-state')!;
     const cur = el.dataset.on === '1';
-    try {
-      const now = await invoke<boolean>('set_autostart', { enable: !cur });
-      el.dataset.on = now ? '1' : '0';
-      el.textContent = now ? '开' : '关';
-    } catch { el.textContent = '设置失败'; }
+    const now = await native<boolean>('set_autostart', { enable: !cur });
+    if (now === null) { el.textContent = '失败'; return; }
+    el.dataset.on = now ? '1' : '0';
+    el.textContent = now ? '开' : '关';
   };
-  void invoke<boolean>('is_autostart_enabled').then((on) => {
+  void native<boolean>('is_autostart_enabled').then((on) => {
     const el = $<HTMLSpanElement>('#auto-state');
     if (!el) return;
+    // 读不到就别显示「关」，那是在说一个不确定的事
+    if (on === null) { el.textContent = '未知'; return; }
     el.dataset.on = on ? '1' : '0';
     el.textContent = on ? '开' : '关';
-  }).catch(() => { /* ignore */ });
+  });
 }
 
 function renderList() {
@@ -537,7 +597,7 @@ function rowHtml(e: Entry): string {
        data-id="${esc(e.id)}" data-u="${u}" data-tl="${esc(label)}" title="${esc(pushHint)}">
     <div class="cbox" data-toggle="${esc(e.id)}" role="checkbox" aria-checked="${done ? 'true' : 'false'}"
          aria-label="${done ? '标记为未完成' : '完成'}">
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#0B0C0D" stroke-width="3.4"><path d="M4 12.5l5 5L20 6.5"/></svg>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M4 12.5l5 5L20 6.5"/></svg>
     </div>
     <div>
       <div class="it-time">${u === 'none' ? '' : `<i class="udot ${u}"></i>`}${esc(label)}</div>
@@ -876,7 +936,7 @@ async function submitCapture(raw: string) {
     if (p.remindAt !== null) setView('today');
     void refresh();
   } catch {
-    void emit('capture:result', { ok: false, message: '保存失败，检查服务端连接' });
+    send('capture:result', { ok: false, message: '保存失败，检查服务端连接' });
   }
 }
 
@@ -1154,7 +1214,7 @@ function wireEvents() {
     alarm.acknowledge('done');
     const sent = rt?.ack(entryId, 'done') ?? false;
     if (!sent) { try { await api.done(entryId); } catch { /* ignore */ } }
-    await invoke('open_external', { url });
+    quiet('open_external', { url });
   });
 
   listen<{ text: string; remindAt: number | null; kind: string; strength: string }>(
@@ -1166,16 +1226,16 @@ function wireEvents() {
           url: kind === 'link' ? text : null,
           path: kind === 'path' ? text : null,
         });
-        void emit('capture:result', { ok: true });
+        send('capture:result', { ok: true });
         void refresh();
       } catch (err) {
-        void emit('capture:result', { ok: false, message: err instanceof Error ? err.message : '保存失败' });
+        send('capture:result', { ok: false, message: err instanceof Error ? err.message : '保存失败' });
       }
     },
   );
 
-  listen('tray:capture', () => void invoke('show_capture'));
-  listen('hotkey:capture', () => void invoke('show_capture'));
+  listen('tray:capture', () => quiet('show_capture'));
+  listen('hotkey:capture', () => quiet('show_capture'));
   listen('tray:quit', () => rt?.close());
 }
 
@@ -1199,7 +1259,7 @@ function onRealtime(msg: ServerMessage) {
     case 'welcome': {
       // 上线补发。漏掉的强提示进响铃队列，弱提示进横幅
       for (const m of msg.missed) {
-        void invoke('ping', {
+        quiet('ping', {
           title: '补发提醒',
           body: `${Math.max(1, Math.round(m.lateByMs / 60_000))} 分钟前就该响：${m.entry.text}`,
         });
@@ -1247,5 +1307,9 @@ function onRealtime(msg: ServerMessage) {
   }
 }
 
+// 先挂主题再渲染，否则会先闪一帧暗色再跳到浅色
+applyTheme(loadTheme());
+
 if (loadConfig().token) boot();
 else renderLogin();
+

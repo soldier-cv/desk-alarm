@@ -114,6 +114,26 @@ ok('输入框显式声明 color', /\.input \{[\s\S]{0,200}?color: var\(--text\)/
 ok('placeholder 有专门样式', /::placeholder/.test(src.styles));
 ok('弱化文字色已提亮', /--dim: #(7|8|9|a|b|c|d|e|f)/i.test(src.styles) || /--dim: #8/.test(src.styles));
 
+console.log('\n主题');
+// 两套主题只换变量。规则里写死颜色的话，切主题时那块就不跟着变
+const styleBody = src.styles.slice(src.styles.indexOf('\n* {'));
+const hardCoded = [...styleBody.matchAll(/#[0-9A-Fa-f]{3,8}\b|rgba?\(/g)];
+ok('规则区没有写死颜色', hardCoded.length === 0, `还有 ${hardCoded.length} 处`);
+ok('有莫兰迪主题', /:root\[data-theme="morandi"\]/.test(src.styles));
+const themeSrc = read('app/src/theme.ts');
+ok('主题写在 html 的 data-theme 上', /dataset\.theme/.test(themeSrc));
+ok('主题选择会持久化', /localStorage\.setItem/.test(themeSrc));
+ok('主窗口有切换入口', /id="btn-theme"/.test(src.main));
+ok('切换到浅色前就挂主题（不闪帧）', /applyTheme\(loadTheme\(\)\);\s*\n\s*\nif \(loadConfig\(\)\.token\)/.test(src.main));
+// capture 是独立窗口，必须自己也读一次主题，否则切完还是旧配色
+const captureSrc = read('app/src/ui/capture.ts');
+ok('capture 窗口跟随主题', /applyTheme\(loadTheme\(\)\)/.test(captureSrc));
+ok('takeover 窗口跟随主题', /applyTheme\(loadTheme\(\)\)/.test(src.takeover));
+ok('capture 的样式来自变量不是写死', !/#[0-9A-Fa-f]{6}/.test(read('app/capture.html').split('</style>')[0].replace(/\/\*[\s\S]*?\*\//g, '')));
+// 两套色板都要过对比度，脚本里缺一套就只验了一半
+const contrast = read('app/scripts/contrast.mjs');
+ok('对比度脚本检查两套主题', /data-theme="morandi"/.test(contrast) && /暗色/.test(contrast));
+
 console.log('\n列表视图边界');
 // 逾期条目时间早已过去，视图条件里不能因为 fired_at 有值就把它排掉
 ok('「今天」不按 fired_at 排除', !/today[\s\S]{0,200}fired_at/.test(src.entries));

@@ -6,7 +6,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { hhmm, hostOf, serverNow } from '../api';
 import type { AckAction, Entry } from '../api';
+import { applyTheme, loadTheme } from '../theme';
 import '../styles.css';
+
+applyTheme(loadTheme());
+listen<{ theme: 'dark' | 'morandi' }>('theme:changed', (ev) => applyTheme(ev.payload.theme));
 
 interface Payload {
   entry: Entry;
