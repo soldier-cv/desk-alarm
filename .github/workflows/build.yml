@@ -147,8 +147,14 @@ jobs:
         if: ${{ needs.plan.outputs.release_tag != '' }}
         run: node scripts/set-version.mjs ${{ needs.plan.outputs.release_tag }}
 
+      # runner 上 tauri 读 tauri.conf.json 时中文 productName 会读成空，
+      # 产物变成 "_0.2.0_x64-setup.exe"。这里显式再传一次名字，不依赖读取结果
       - name: 构建 Windows 安装包
-        run: cd app && npx tauri build --bundles nsis
+        shell: bash
+        run: |
+          cd app
+          node ../scripts/tauri-name.mjs > ../.tauri-name.json
+          npx tauri build --bundles nsis --config ../.tauri-name.json
 
       - name: 传产物
         uses: actions/upload-artifact@v4
@@ -217,8 +223,12 @@ jobs:
 
       # 这里不加 --target：arm64 runner 上默认就编 aarch64，产物落在
       # target/release。一旦加了 --target，路径会变成 target/<triple>/release
+      # --config 给 productName，理由同 windows job
       - name: 构建 macOS app 和 dmg
-        run: cd app && npx tauri build --bundles app,dmg
+        run: |
+          cd app
+          node ../scripts/tauri-name.mjs > ../.tauri-name.json
+          npx tauri build --bundles app,dmg --config ../.tauri-name.json
 
       - name: 传产物
         uses: actions/upload-artifact@v4
