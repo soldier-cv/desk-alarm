@@ -107,7 +107,7 @@ export function createFcm(): Transport {
       if (!dev?.push_token) return { ok: false, error: '设备没有 push token' };
       if (!dev.push_enabled) return { ok: false, error: '设备关闭了推送' };
 
-      const title = entry.strength === 'weak' ? '提醒（可稍后处理）' : '提醒器';
+      const title = entry.strength === 'weak' ? '提醒（可稍后处理）' : 'DeskAlarm';
       const body = entry.text.length > 120 ? `${entry.text.slice(0, 118)}…` : entry.text;
 
       try {

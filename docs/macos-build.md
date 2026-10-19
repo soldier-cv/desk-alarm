@@ -37,13 +37,13 @@ git clone <repo> && cd desk-alarm
 装到本机：
 
 ```bash
-cp -R app/src-tauri/target/release/bundle/macos/提醒器.app /Applications/
+cp -R app/src-tauri/target/release/bundle/macos/DeskAlarm.app /Applications/
 ```
 
 没做签名和公证，首次打开被拦就：
 
 ```bash
-xattr -cr /Applications/提醒器.app
+xattr -cr /Applications/DeskAlarm.app
 ```
 
 ## 路线二：没有 Mac，用 CI
@@ -96,7 +96,7 @@ rustup target 的安装写在 workflow 里，本地不用管。
 `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`
 
 **通知不响**
-macOS 通知权限没给。系统设置 → 通知 → 找到「提醒器」打开。
+macOS 通知权限没给。系统设置 → 通知 → 找到「DeskAlarm」打开。
 
 **热键 Ctrl+Shift+Space 被占用**
 系统设置 → 键盘 → 快捷键 里换一个。热键是写死在 `src-tauri/src/lib.rs` 的 `CAPTURE_HOTKEY`。

@@ -85,7 +85,7 @@ let editingLocal = false;
 const alarm = new AlarmController({
   onNotify: (entry, attempt) => {
     quiet('ping', {
-      title: attempt === 1 ? (entry.strength === 'weak' ? '提醒' : '提醒器') : `提醒器（第 ${attempt} 次）`,
+      title: attempt === 1 ? (entry.strength === 'weak' ? '提醒' : 'DeskAlarm') : `DeskAlarm（第 ${attempt} 次）`,
       body: entry.text,
     });
   },
@@ -101,13 +101,13 @@ const alarm = new AlarmController({
 
   onRepeat: (entry, attempt) => {
     quiet('show_takeover', { entry, stage: 'escalated', muted: false });
-    quiet('ping', { title: `提醒器（第 ${attempt} 次）`, body: entry.text });
+    quiet('ping', { title: `DeskAlarm（第 ${attempt} 次）`, body: entry.text });
   },
 
   onDismiss: (entry, reason) => {
     send('takeover:dismiss');
     if (reason === 'elsewhere') {
-      quiet('ping', { title: '提醒器', body: '这条已在别的设备上处理掉了' });
+      quiet('ping', { title: 'DeskAlarm', body: '这条已在别的设备上处理掉了' });
     }
     void refresh();
   },
@@ -121,7 +121,7 @@ function renderLogin() {
   <div class="login">
     <div class="login-card">
       <div class="mark"><i></i></div>
-      <h1>提醒器</h1>
+      <h1>DeskAlarm</h1>
       <p>输入口令连接你的服务端。多台设备登录后共享同一份提醒。</p>
       <form id="form">
         <div>
@@ -220,7 +220,7 @@ function renderShell() {
   <div class="app">
     <div class="topbar">
       <span class="logo"><i></i></span>
-      <b>提醒器</b>
+      <b>DeskAlarm</b>
       <div class="sp"></div>
       <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
       <button class="btn sm no-drag" id="btn-theme" title="切换配色"></button>

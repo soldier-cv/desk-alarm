@@ -10,20 +10,20 @@
 | 强弱提示与忽略记录 | 完成 |
 | MCP（stdio + HTTP 双入口） | 完成 |
 | Windows 客户端（Tauri 2） | 完成，`app/src-tauri/target/release/deskalarm.exe`（3.6 MB） |
-| macOS 客户端 | 代码就绪、跨平台无阻碍，**必须在 Mac 或 CI 上构建**，见 `docs/macos-build.md` |
-| Android 客户端 | **卡在工具链**，代码侧已就绪，见 `docs/android.md` |
+| macOS 客户端 | 代码就绪，无平台专属逻辑，须在 Mac 或 CI 上构建，见 `docs/macos-build.md` |
+| Android 客户端 | 代码就绪，构建工具链未接通，暂不出包，见 `docs/android.md` |
 
 ## 数据库授权
 
-**已经就绪，不用再做什么。** 88 的 `general_db` 里 `desk_alarm` schema 已存在、owner 是 `desk_alarm`，CREATE / USAGE 权限都有，实测能建表删表。服务端启动时自动建那 8 张表。
+`general_db` 里 `desk_alarm` schema 已就绪，owner 是 `desk_alarm`，CREATE / USAGE 权限齐全。服务端启动时自动建那 8 张表。
 
-`general_db` 是共用库（还有 `image_gallery` / `image_gallery_dev` / `porter`），所以全部表隔离在 `desk_alarm` 这一层，靠 `search_path` 生效，`public` 保持零表。换机器或重建库时才需要下面这条，用 `general_db` 的 owner 执行：
+`general_db` 是共用库，同库里还有其它项目的 schema，所以全部表隔离在 `desk_alarm` 这一层，靠 `search_path` 生效，`public` 保持零表。换机器或重建库时需要下面这条，用 `general_db` 的 owner 执行：
 
 ```sql
 CREATE SCHEMA desk_alarm AUTHORIZATION desk_alarm;
 ```
 
-只建 schema，不动 `public`，别的项目一点影响没有。
+只建 schema，不动 `public`，不影响同库其它项目。
 
 ## 架构
 
@@ -36,7 +36,7 @@ CREATE SCHEMA desk_alarm AUTHORIZATION desk_alarm;
 │  托盘 + 热键  │                                │  MCP 工具集  │
 └──────────────┘                                └──────────────┘
                     ┌────────────────────┐
-                    │  PostgreSQL 18.6   │  100.64.0.88:5432
+                    │  PostgreSQL 18.6   │  <PGHOST>:5432
                     │  general_db        │
                     │   └─ schema        │
                     │     desk_alarm     │  8 张表，public 不被碰
@@ -49,7 +49,7 @@ CREATE SCHEMA desk_alarm AUTHORIZATION desk_alarm;
 
 ## 提醒强度
 
-这是整个设计里最重要的一条：**提醒疲劳是提醒类工具死掉的头号原因。全都在喊，结果是全都听不见。**
+设计上的第一条原则：**提醒疲劳是提醒类工具失效的首要原因。全都喊，等于全听不见。**
 
 | | 强提示 | 弱提示 |
 |---|---|---|
@@ -68,8 +68,6 @@ CREATE SCHEMA desk_alarm AUTHORIZATION desk_alarm;
 分开的全部意义在于下面这个判断：
 
 > 一条被忽略 2 次的条目自动降级为弱提示；被忽略 3 次提示「建议删除」。
-
-这是 App 在告诉你一件关于你自己行为、而你本来看不见的事。
 
 ## 临近梯度
 
@@ -122,11 +120,13 @@ docker compose ps
 
 | 入口 | 地址 |
 |---|---|
-| 静态原型 | http://100.64.0.120:8091/ |
-| API（经网关） | http://100.64.0.120:8091/api/v1 |
+| 静态原型 | http://<服务器地址>:8091/ |
+| API（经网关） | http://<服务器地址>:8091/api/v1 |
 | API（直连） | http://127.0.0.1:8787/api/v1 |
 | MCP | http://127.0.0.1:8091/api/mcp |
-| 健康检查 | http://100.64.0.120:8091/healthz |
+| 健康检查 | http://<服务器地址>:8091/healthz |
+
+`<服务器地址>` 是本机在局域网或虚拟网络里的地址，同一网段的设备用这个地址访问。
 
 **改完 `.env` 必须 `up -d --force-recreate`**，restart 不会重新加载环境变量。
 
@@ -174,7 +174,7 @@ npm run tauri:dev
 |---|---|
 | Windows exe | `app/src-tauri/target/release/deskalarm.exe` |
 | Windows 安装包 | `app/src-tauri/target/release/bundle/nsis/*.exe` |
-| macOS app | `app/src-tauri/target/release/bundle/macos/提醒器.app` |
+| macOS app | `app/src-tauri/target/release/bundle/macos/DeskAlarm.app` |
 | macOS dmg | `app/src-tauri/target/release/bundle/dmg/*.dmg` |
 
 **macOS 必须在真 Mac 上构建**，跨平台编译不了：`.app` 和 `.dmg` 要 Xcode 的 macOS SDK 和 codesign，这些只有 macOS 有。没有 Mac 就得用 CI 的 `macos` runner，见 `docs/macos-build.md`。
@@ -218,14 +218,14 @@ GitHub Actions 的触发范围：
 | PR | 只跑类型检查、构建、对比度、URL、需求对齐自检，不打包 |
 | push main | 不触发 |
 
-**手动填的 tag 必须已经推到远端**，否则会明确报错而不是让 `gh` 从默认分支悄悄造一个 tag。
+**手动填的 tag 必须已经推到远端**，否则会直接报错，而不是让 `gh` 从默认分支造一个 tag。
 
 Rust 侧没有平台专属代码，窗口、托盘、热键、通知全是 Tauri 跨平台 API，所以 macOS 不需要改逻辑，只是换个机器构建而已。图标 `icon.icns` 已经在了。
 
 macOS 没做代码签名和公证，首次打开被 Gatekeeper 拦的话：
 
 ```bash
-xattr -cr /Applications/提醒器.app
+xattr -cr /Applications/DeskAlarm.app
 ```
 
 **用户在客户端里改地址**：登录页最上面就是「服务端地址」输入框，带「测试连接」按钮；登录后点顶栏的连接状态也能打开切换面板。填 `host:port` 不用带协议，会自动补 `http://`。
@@ -279,11 +279,11 @@ node scripts/e2e-check.mjs   # 26 项。联调自检，真跑一遍调度/确认
 
 ```bash
 docker run -d --name deskalarm-pg-dev \
-  -e POSTGRES_USER=desk_alarm -e POSTGRES_PASSWORD=TpTohsACO3LBBU \
+  -e POSTGRES_USER=desk_alarm -e POSTGRES_PASSWORD=<本地口令，自己定> \
   -e POSTGRES_DB=general_db -p 15432:5432 postgres:18-alpine
 ```
 
-注意两件事：容器里访问宿主机要用 `host.docker.internal`（`127.0.0.1` 指容器自己），以及 `PGSCHEMA` 要和 `.env` 里的值一致。
+注意三件事：容器里访问宿主机要用 `host.docker.internal`（`127.0.0.1` 指容器自己）、`PGPASSWORD` 填上面自定的那个口令、`PGSCHEMA` 要和 `.env` 里的值一致。
 
 ## 强提示的升级阶梯
 
@@ -313,7 +313,7 @@ docker run -d --name deskalarm-pg-dev \
 
 网关用 **8091**（`.env` 的 `WEB_PORT`），API 直连用 **8787**。
 
-端口号是撞出来的，本机已经占了一串：8080、8088 早被别的服务占了，8090 上还跑着一个 Python/FastAPI，**它会抢走 `127.0.0.1:8090` 的回环流量** —— 我们的容器照常监听 8090、健康检查也过，但同一个地址上的 HTTP 请求全被它接走，返回 `{"detail":"Not Found"}`。这种故障特征是"服务看起来活着但响应格式不对"，比连不上更难查。所以走 8091。
+8080、8088、8090 容易和其它服务撞号，所以从 8091 起用。撞号的一种表现是服务看起来活着、健康检查也过，但请求被同端口上的另一个进程接走（例如返回 `{"detail":"Not Found"}`）；排查这类问题先换端口验证，比对着日志找更快。
 
 要换端口只动 `.env` 的 `WEB_PORT`，然后 `up -d --force-recreate`。
 
@@ -323,12 +323,16 @@ ZeroTier 网卡被 Windows 归为「公用网络」，默认拦入站：
 # 需要管理员权限。仓库里有现成脚本：
 #   powershell -ExecutionPolicy Bypass -File .\scripts\fix-firewall-8091.ps1
 New-NetFirewallRule -DisplayName "DeskAlarm 8091" -Direction Inbound `
-  -Action Allow -Protocol TCP -LocalPort 8091 -Profile Any -RemoteAddress 100.64.0.0/24
+  -Action Allow -Protocol TCP -LocalPort 8091 -Profile Any -RemoteAddress <你的虚拟网段，如 100.64.0.0/24>
 ```
 
 ## 还没做的
 
-- Android 客户端。代码侧就绪，缺 NDK / build-tools / adb，出不了包。步骤见 `docs/android.md`
+- Android 客户端。代码侧就绪，构建工具链未接通，暂不出包。步骤见 `docs/android.md`
 - FCM 凭据。没配的话安卓到点不会响，只会留在队列里等上线补发。服务端启动日志会打一行 `FCM 不可用`
 - 代码签名。现在跑 exe 有 SmartScreen 提示
 - Windows 专注助手开启时会吞掉 Toast，所以应用内横幅是必须的，不能只依赖系统通知
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。

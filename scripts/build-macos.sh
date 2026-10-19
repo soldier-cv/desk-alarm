@@ -117,11 +117,11 @@ cat <<EOF
 
 装到本机（拖 .app 进 Applications，或者命令行）：
 
-  cp -R "$BUNDLE_DIR/macos/提醒器.app" /Applications/
+  cp -R "$BUNDLE_DIR/macos/DeskAlarm.app" /Applications/
 
 首次打开如果被 Gatekeeper 拦（提示「无法验证开发者」），因为没做代码签名和公证，
 本地自用可以这样放行：
 
-  xattr -cr /Applications/提醒器.app
+  xattr -cr /Applications/DeskAlarm.app
 
 EOF

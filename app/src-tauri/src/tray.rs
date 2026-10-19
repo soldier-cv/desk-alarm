@@ -14,7 +14,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开主界面", true, None::<&str>)?;
     let capture = MenuItem::with_id(app, "capture", "快速记一条", true, Some("Ctrl+Shift+Space"))?;
     let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "退出提醒器", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 DeskAlarm", true, None::<&str>)?;
 
     let menu = Menu::with_items(app, &[&open, &capture, &sep, &quit])?;
 
@@ -26,7 +26,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id("main-tray")
         .icon(icon)
         .icon_as_template(false)
-        .tooltip("提醒器")
+        .tooltip("DeskAlarm")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(on_menu)
