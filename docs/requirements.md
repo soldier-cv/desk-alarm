@@ -160,7 +160,7 @@ weak 强度不走这条路径，只出一条通知和主窗口顶部的细横幅
 
 ## 数据库隔离
 
-`general_db` 是共用库（还有 `image_gallery` / `image_gallery_dev` / `porter`），所以全部表隔离在 `desk_alarm` schema，通过 `search_path` 生效，`public` 保持零表。
+`general_db` 是共用库（同库里还有其它项目的 schema），所以全部表隔离在 `desk_alarm` schema，通过 `search_path` 生效，`public` 保持零表。
 
 不用 `pgcrypto`：`gen_random_uuid()` 从 PostgreSQL 13 起是内核函数，共用库里装扩展经常没权限。
 

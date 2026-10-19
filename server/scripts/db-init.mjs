@@ -16,12 +16,17 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const { Client } = pg;
 
-const HOST = process.env.PGHOST || '100.64.0.88';
+const HOST = process.env.PGHOST || '';
 const PORT = Number(process.env.PGPORT || 5432);
 const DB = process.env.PGDATABASE || 'general_db';
 const SCHEMA = process.env.PGSCHEMA || 'desk_alarm';
 const USER = process.env.PGUSER || 'desk_alarm';
 const PASS = process.env.PGPASSWORD || '';
+
+if (!HOST) {
+  console.error('缺少 PGHOST：先 PGHOST=<数据库地址> npm run db:init');
+  process.exit(1);
+}
 
 const g = (s) => `\x1b[32m${s}\x1b[0m`;
 const r = (s) => `\x1b[31m${s}\x1b[0m`;

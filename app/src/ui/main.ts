@@ -126,7 +126,7 @@ function renderLogin() {
       <form id="form">
         <div>
           <label for="base">服务端地址</label>
-          <input class="input" id="base" placeholder="http://100.64.0.88:8787" value="${esc(cfg.baseUrl)}" spellcheck="false" autocomplete="off">
+          <input class="input" id="base" placeholder="http://192.168.1.10:8787" value="${esc(cfg.baseUrl)}" spellcheck="false" autocomplete="off">
           <div class="login-row">
             <span class="login-hint" id="probe">端口只填对外服务的那一个</span>
             <button type="button" class="btn sm" id="test">测试连接</button>

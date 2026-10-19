@@ -32,10 +32,10 @@ const { normalizeBaseUrl } = await import(pathToFileURL(file).href);
 const cases = [
   // 正常输入
   ['127.0.0.1:8787', 'http://127.0.0.1:8787'],
-  ['http://100.64.0.88:8787', 'http://100.64.0.88:8787'],
+  ['192.168.1.10:8787', 'http://192.168.1.10:8787'],
   ['https://desk.example.com', 'https://desk.example.com'],
   // 容错：空格、缺协议、结尾斜杠、大小写
-  ['  100.64.0.88:8787/  ', 'http://100.64.0.88:8787'],
+  ['  192.168.1.10:8787/  ', 'http://192.168.1.10:8787'],
   ['HTTPS://Desk.Example.COM/', 'https://desk.example.com'],
   ['desk.example.com/path', 'http://desk.example.com'],
   // 必须拒绝

@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发到哪个 tag 的 Release（如 v0.2.0）。留空只出 artifact，不建 Release'
+        description: 'Release tag to publish to (e.g. v0.2.0). Leave empty to upload artifacts only'
         required: false
         type: string
 
@@ -42,7 +42,7 @@ jobs:
       release_tag: ${{ steps.pick.outputs.tag }}
       publish: ${{ steps.pick.outputs.publish }}
     steps:
-      - name: 确定版本与是否发版
+      - name: Resolve version and publish flag
         id: pick
         env:
           EVENT: ${{ github.event_name }}
@@ -83,30 +83,30 @@ jobs:
             app/package-lock.json
             server/package-lock.json
 
-      - name: 装依赖
+      - name: Install dependencies
         run: |
           cd app && npm ci
           cd ../server && npm ci
 
-      - name: 客户端类型检查
+      - name: Client typecheck
         run: cd app && npx tsc --noEmit
 
-      - name: 客户端构建
+      - name: Client build
         run: cd app && npx vite build
 
-      - name: 暗色主题对比度
+      - name: Theme contrast check
         run: cd app && node scripts/contrast.mjs
 
-      - name: 服务端地址规范化
+      - name: Server address normalization check
         run: cd app && node scripts/url-check.mjs
 
-      - name: 服务端类型检查与编译
+      - name: Server typecheck and build
         run: |
           cd server
           npm run typecheck
           npm run build
 
-      - name: 需求对齐自检
+      - name: Requirements alignment check
         run: node scripts/align-check.mjs
 
   windows:
@@ -134,26 +134,26 @@ jobs:
         with:
           workspaces: app/src-tauri
 
-      - name: 装依赖
+      - name: Install dependencies
         run: |
           cd app && npm ci
           cd ../server && npm ci
 
-      - name: 类型检查
+      - name: Typecheck
         run: cd app && npx tsc --noEmit
 
       # 和本地 build-windows.ps1 -Version 走同一个脚本，产物版本号来源只有一处
-      - name: 按 tag 设置版本号
+      - name: Set version from tag
         if: ${{ needs.plan.outputs.release_tag != '' }}
         run: node scripts/set-version.mjs ${{ needs.plan.outputs.release_tag }}
 
-      - name: 构建 Windows 安装包
+      - name: Build Windows installer
         shell: bash
         run: |
           cd app
           npx tauri build --bundles nsis
 
-      - name: 传产物
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: deskalarm-windows
@@ -162,7 +162,7 @@ jobs:
             app/src-tauri/target/release/deskalarm.exe
           if-no-files-found: error
 
-      - name: 发到 Release
+      - name: Publish to release
         if: ${{ needs.plan.outputs.publish == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -215,23 +215,23 @@ jobs:
         with:
           workspaces: app/src-tauri
 
-      - name: 装依赖
+      - name: Install dependencies
         run: |
           cd app && npm ci
           cd ../server && npm ci
 
-      - name: 按 tag 设置版本号
+      - name: Set version from tag
         if: ${{ needs.plan.outputs.release_tag != '' }}
         run: node scripts/set-version.mjs ${{ needs.plan.outputs.release_tag }}
 
       # 这里不加 --target：arm64 runner 上默认就编 aarch64，产物落在
       # target/release。一旦加了 --target，路径会变成 target/<triple>/release
-      - name: 构建 macOS app 和 dmg
+      - name: Build macOS app and dmg
         run: |
           cd app
           npx tauri build --bundles app,dmg
 
-      - name: 传产物
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: deskalarm-macos
@@ -240,7 +240,7 @@ jobs:
             app/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
-      - name: 发到 Release
+      - name: Publish to release
         if: ${{ needs.plan.outputs.publish == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -51,7 +51,7 @@ function deviceId(): string {
 }
 
 export const DEFAULT_CONFIG: Config = {
-  baseUrl: 'http://100.64.0.88:8787',
+  baseUrl: '',
   passcode: '',
   deviceName: '我的笔记本',
   deviceId: '',

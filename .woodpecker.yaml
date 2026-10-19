@@ -48,21 +48,24 @@ steps:
     commands:
       - cd /opt/code/desk-alarm
       - RELEASE_TAG=$$(cat .release_tag)
-      - echo "$$REGISTRY_PASS" | docker login 100.64.0.88:5000 -u $$REGISTRY_USER --password-stdin
-      # 镜像铁律：推内网 registry，固定版本 + latest 同 digest
-      - docker build -f docker/api.Dockerfile -t "100.64.0.88:5000/deskalarm-api:$${RELEASE_TAG}" -t "100.64.0.88:5000/deskalarm-api:latest" .
-      - docker build -f docker/Dockerfile -t "100.64.0.88:5000/deskalarm-web:$${RELEASE_TAG}" -t "100.64.0.88:5000/deskalarm-web:latest" .
-      - docker push "100.64.0.88:5000/deskalarm-api:$${RELEASE_TAG}"
-      - docker push "100.64.0.88:5000/deskalarm-api:latest"
-      - docker push "100.64.0.88:5000/deskalarm-web:$${RELEASE_TAG}"
-      - docker push "100.64.0.88:5000/deskalarm-web:latest"
-      - docker logout 100.64.0.88:5000
+      - test -n "$$REGISTRY_HOST" || { echo "缺少 registry_host 变量，不知道往哪个 registry 推" >&2; exit 1; }
+      - echo "$$REGISTRY_PASS" | docker login "$$REGISTRY_HOST" -u $$REGISTRY_USER --password-stdin
+      # 镜像铁律：推 registry，固定版本 + latest 同 digest
+      - docker build -f docker/api.Dockerfile -t "$$REGISTRY_HOST/deskalarm-api:$${RELEASE_TAG}" -t "$$REGISTRY_HOST/deskalarm-api:latest" .
+      - docker build -f docker/Dockerfile -t "$$REGISTRY_HOST/deskalarm-web:$${RELEASE_TAG}" -t "$$REGISTRY_HOST/deskalarm-web:latest" .
+      - docker push "$$REGISTRY_HOST/deskalarm-api:$${RELEASE_TAG}"
+      - docker push "$$REGISTRY_HOST/deskalarm-api:latest"
+      - docker push "$$REGISTRY_HOST/deskalarm-web:$${RELEASE_TAG}"
+      - docker push "$$REGISTRY_HOST/deskalarm-web:latest"
+      - docker logout "$$REGISTRY_HOST"
       # compose 拉起（.env 保留宿主机生产配置）+ 健康验证
-      - IMAGE_TAG=$${RELEASE_TAG} docker compose up -d --force-recreate
+      - REGISTRY_HOST=$$REGISTRY_HOST IMAGE_TAG=$${RELEASE_TAG} docker compose up -d --force-recreate
       - docker compose ps
       - >-
         for i in $$(seq 1 30); do st=$$(docker inspect -f '{{.State.Health.Status}}' deskalarm-api 2>/dev/null || echo missing); if [ "$$st" = "healthy" ]; then echo "deploy OK: desk-alarm $${RELEASE_TAG} healthy"; exit 0; fi; echo "waiting health ($$i): $$st"; sleep 5; done; echo "health check failed" >&2; exit 1
     environment:
+      REGISTRY_HOST:
+        from_secret: registry_host
       REGISTRY_USER:
         from_secret: registry_user
       REGISTRY_PASS:

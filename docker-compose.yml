@@ -6,11 +6,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: 100.64.0.88:5000/deskalarm-web:${IMAGE_TAG:-latest}
+    image: ${REGISTRY_HOST:-127.0.0.1:5000}/deskalarm-web:${IMAGE_TAG:-latest}
     container_name: deskalarm-web
     ports:
-      # 8080/8088/8090 都被本机其它服务占着（8090 上还跑着一个 Python/FastAPI，
-      # 会抢走回环流量），所以走 8091。要改端口只动 .env 的 WEB_PORT
+      # 8080/8088/8090 容易和其它服务撞号，所以走 8091。要改端口只动 .env 的 WEB_PORT
       - "${WEB_PORT:-8091}:80"
     volumes:
       - ./mockups:/usr/share/nginx/html:ro
@@ -30,10 +29,10 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-    image: 100.64.0.88:5000/deskalarm-api:${IMAGE_TAG:-latest}
+    image: ${REGISTRY_HOST:-127.0.0.1:5000}/deskalarm-api:${IMAGE_TAG:-latest}
     container_name: deskalarm-api
     ports:
-      # 直连端口，客户端默认连这个。走网关也行，见 web 的 /api/
+      # 直连端口。走网关也行，见 web 的 /api/
       - "8787:8787"
     environment:
       PGHOST: "${PGHOST}"

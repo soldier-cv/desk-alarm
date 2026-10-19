@@ -14,6 +14,8 @@ const DB = 'desk_alarm_smoke';
 // 测试直连用的 schema，必须和下面 startServer 传给服务端的同一个值，
 // 否则测的是另一个 schema，测了个寂寞
 const SCHEMA = 'desk_alarm';
+// 本地临时库的口令。容器换了口令就 export SMOKE_PG_PASSWORD 覆盖
+const PG_PASS = process.env.SMOKE_PG_PASSWORD || 'desk_alarm';
 const BASE = `http://127.0.0.1:${PORT}/api/v1`;
 const MCP = `http://127.0.0.1:${PORT}/api/mcp`;
 
@@ -91,7 +93,7 @@ function connect(token) {
 
 const admin = new pg.Client({
   host: '127.0.0.1', port: 15432, database: 'postgres',
-  user: 'desk_alarm', password: 'TpTohsACO3LBBU',
+  user: 'desk_alarm', password: PG_PASS,
   options: '-c search_path=public',
 });
 
@@ -129,7 +131,7 @@ function startServer() {
       PORT: String(PORT),
       PGHOST: '127.0.0.1', PGPORT: '15432', PGDATABASE: DB,
       PGSCHEMA: SCHEMA,
-      PGUSER: 'desk_alarm', PGPASSWORD: 'TpTohsACO3LBBU',
+      PGUSER: 'desk_alarm', PGPASSWORD: PG_PASS,
       DESKALARM_PASSCODE: 'test-pass-123',
       MCP_TOKEN: 'mcp-token-xyz',
       TICK_MS: '200', ROTATE_MS: '200',
@@ -158,7 +160,7 @@ async function waitReady() {
 async function db() {
   const c = new pg.Client({
     host: '127.0.0.1', port: 15432, database: DB,
-    user: 'desk_alarm', password: 'TpTohsACO3LBBU',
+    user: 'desk_alarm', password: PG_PASS,
     options: `-c search_path=${SCHEMA},public`,
   });
   await c.connect();
@@ -175,7 +177,7 @@ try {
     console.error(`\n\x1b[31m连不上本地开发库 127.0.0.1:15432\x1b[0m  (${e.code ?? e.message})`);
     console.error('启动它：\n  docker start deskalarm-pg-dev');
     console.error('还没有这个容器的话：\n  docker run -d --name deskalarm-pg-dev \\');
-    console.error('    -e POSTGRES_USER=desk_alarm -e POSTGRES_PASSWORD=TpTohsACO3LBBU \\');
+    console.error(`    -e POSTGRES_USER=desk_alarm -e POSTGRES_PASSWORD=${PG_PASS} \\`);
     console.error('    -e POSTGRES_DB=general_db -p 15432:5432 postgres:18-alpine\n');
     process.exit(2);
   }

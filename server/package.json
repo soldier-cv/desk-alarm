@@ -2,6 +2,8 @@
   "name": "@deskalarm/server",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "description": "DeskAlarm server: scheduler, delivery, MCP",
   "type": "module",
   "engines": {
     "node": ">=22.5"

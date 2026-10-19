@@ -1,9 +1,18 @@
-/** 查 desk_alarm 在 general_db 里到底有哪些权限。node scripts/probe-grants.mjs */
+/** 查 desk_alarm 在目标库里到底有哪些权限。
+ *  用法：PGHOST=... PGPASSWORD=... node scripts/probe-grants.mjs */
 import pg from 'pg';
 
+if (!process.env.PGHOST) {
+  console.error('缺少 PGHOST：PGHOST=<数据库地址> PGPASSWORD=<口令> node scripts/probe-grants.mjs');
+  process.exit(1);
+}
+
 const c = new pg.Client({
-  host: '100.64.0.88', port: 5432, database: 'general_db',
-  user: 'desk_alarm', password: 'TpTohsACO3LBBU',
+  host: process.env.PGHOST,
+  port: Number(process.env.PGPORT || 5432),
+  database: process.env.PGDATABASE || 'general_db',
+  user: process.env.PGUSER || 'desk_alarm',
+  password: process.env.PGPASSWORD || '',
 });
 await c.connect();
 

@@ -1,8 +1,12 @@
 /** 端到端验证：静态页 + API + MCP 全走网关。node scripts/verify.mjs */
-const BASE = process.env.BASE ?? 'http://127.0.0.1:8090';
+const BASE = process.env.BASE ?? 'http://127.0.0.1:8091';
 const API = `${BASE}/api/v1`;
 const MCP = `${BASE}/api/mcp`;
-const PASS = process.env.PASSCODE ?? 'sk-desk-2026';
+const PASS = process.env.DESKALARM_PASSCODE;
+if (!PASS) {
+  console.error('缺少 DESKALARM_PASSCODE：verify 打的是真实部署，没口令验不了鉴权链路');
+  process.exit(1);
+}
 
 let pass = 0, fail = 0;
 const ok = (n, c, x = '') => {

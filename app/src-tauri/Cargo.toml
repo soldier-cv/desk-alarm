@@ -1,8 +1,10 @@
 [package]
 name = "deskalarm"
 version = "0.1.0"
-description = "桌面强提醒工具"
-authors = ["DeskAlarm"]
+description = "Desktop alarm clock with server-side scheduling and multi-device delivery"
+authors = ["soldier-cv"]
+license = "MIT"
+repository = "https://github.com/soldier-cv/desk-alarm"
 edition = "2021"
 rust-version = "1.77.2"
 

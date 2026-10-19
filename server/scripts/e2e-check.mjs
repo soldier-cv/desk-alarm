@@ -3,7 +3,11 @@
  * 用法：node scripts/e2e-check.mjs
  */
 const BASE = process.env.BASE ?? 'http://127.0.0.1:8787';
-const PASSCODE = process.env.DESKALARM_PASSCODE ?? 'sk-desk-2026';
+const PASSCODE = process.env.DESKALARM_PASSCODE;
+if (!PASSCODE) {
+  console.error('缺少 DESKALARM_PASSCODE：e2e 连的是真实服务端，没口令跑不了');
+  process.exit(1);
+}
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
