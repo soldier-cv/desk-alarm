@@ -261,3 +261,77 @@ jobs:
           # .app 是目录，打进 zip 才能作为 Release 附件；dmg 本来就能直接下载
           ( cd app/src-tauri/target/release/bundle/macos && zip -qry "$GITHUB_WORKSPACE/release-assets/desk-alarm_${V}_aarch64.app.zip" ./*.app )
           gh release upload "$TAG" "release-assets/desk-alarm_${V}_aarch64.dmg" "release-assets/desk-alarm_${V}_aarch64.app.zip" --clobber
+
+  # GitHub Release 挂好包之后，把同一个 tag 和同样的安装包同步到 Gitee。
+  # 单独串成一个 job：windows / macos 两个 job 并发，谁都不该去建 Gitee Release
+  gitee-release:
+    if: ${{ needs.plan.outputs.publish == 'true' }}
+    needs: [plan, windows, macos]
+    runs-on: ubuntu-latest
+    env:
+      GITEE_REPO: huaxudong/desk-alarm
+      TAG: ${{ needs.plan.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 推 tag 到 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          if [ -z "${GITEE_TOKEN:-}" ]; then
+            echo "::error::缺少 GITEE_TOKEN"
+            exit 1
+          fi
+          git remote add gitee "https://huaxudong:${GITEE_TOKEN}@gitee.com/${GITEE_REPO}.git"
+          git fetch --tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          git push gitee "refs/tags/${TAG}:refs/tags/${TAG}"
+
+      - name: 从 GitHub Release 取安装包
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "$TAG" --dir assets
+          ls -l assets
+
+      - name: 同步到 Gitee Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -euo pipefail
+          API="https://gitee.com/api/v5/repos/${GITEE_REPO}"
+
+          # 已经建过（补包重跑）就复用，没有才新建。tag 在上一步已经推过去了
+          ID="$(curl -sS --fail-with-body "${API}/releases/tags/${TAG}?access_token=${GITEE_TOKEN}" | jq -r '.id // empty' || true)"
+          if [ -z "$ID" ]; then
+            BODY="$(gh release view "$TAG" --json body -q .body)"
+            ID="$(jq -n --arg tag "$TAG" --arg name "$TAG" --arg body "$BODY" \
+                    '{tag_name:$tag, name:$name, body:$body, target_commitish:"main", prerelease:false}' \
+                  | curl -sS --fail-with-body -X POST "${API}/releases?access_token=${GITEE_TOKEN}" \
+                      -H 'Content-Type: application/json' -d @- | jq -r '.id')"
+          fi
+          if [ -z "$ID" ]; then
+            echo "::error::Gitee Release 没建出来"
+            exit 1
+          fi
+          echo "Gitee Release $TAG id=$ID"
+
+          for f in assets/*; do
+            n="$(basename "$f")"
+            # 同名附件先删掉，重跑时不会堆出一串重复文件
+            for old in $(curl -sS --fail-with-body "${API}/releases/${ID}/attach_files?access_token=${GITEE_TOKEN}" \
+                           | jq -r --arg n "$n" '.[] | select(.name == $n) | .id'); do
+              curl -sS --fail-with-body -X DELETE "${API}/releases/${ID}/attach_files/${old}?access_token=${GITEE_TOKEN}"
+            done
+            echo "上传 $n"
+            curl -sS --fail-with-body --retry 3 --retry-delay 5 -X POST "${API}/releases/${ID}/attach_files" \
+              -F "access_token=${GITEE_TOKEN}" -F "file=@${f}"
+            echo
+          done
+          echo "Gitee Release ${TAG} 已同步"

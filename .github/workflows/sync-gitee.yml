@@ -1,7 +1,8 @@
 name: Sync to Gitee
 
-# 仅在推送 main/master 分支或手动触发时同步源码镜像；
-# 打 Tag 时的发版由 build.yml 统一交付，避免双重推送与并发冲突。
+# 只负责 main/master 的源码镜像。
+# tag 与 Release 附件（安装包）由 build.yml 的 gitee-release job 负责，
+# 两边各管一段，避免同时往 Gitee 推而产生并发冲突。
 on:
   push:
     branches:
