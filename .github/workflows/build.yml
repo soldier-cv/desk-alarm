@@ -263,13 +263,19 @@ jobs:
           gh release upload "$TAG" "release-assets/desk-alarm_${V}_aarch64.dmg" "release-assets/desk-alarm_${V}_aarch64.app.zip" --clobber
 
   # GitHub Release 挂好包之后，把同一个 tag 和同样的安装包同步到 Gitee。
-  # 单独串成一个 job：windows / macos 两个 job 并发，谁都不该去建 Gitee Release
+  # 单独串成一个 job：windows / macos 两个 job 并发跑在**不同 runner** 上，
+  # 产物不在同一台机器，所以只能等两边都发完再从 GitHub Release 回取。
+  #
+  # continue-on-error 是刻意的：GitHub Release 这时已经建好、用户已经能下载，
+  # 镜像失败不该让整个发版显示为失败。代价是失败不在 job 状态里，
+  # 所以脚本内部对关键失败一律 `echo ::error::` + exit 1，日志里必须看得见。
   gitee-release:
-    if: ${{ needs.plan.outputs.publish == 'true' }}
+    if: ${{ needs.plan.outputs.publish == 'true' && github.repository == 'soldier-cv/desk-alarm' }}
     needs: [plan, windows, macos]
     runs-on: ubuntu-latest
     env:
-      GITEE_REPO: huaxudong/desk-alarm
+      GITEE_OWNER: huaxudong
+      GITEE_REPO: desk-alarm
       TAG: ${{ needs.plan.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
@@ -283,12 +289,12 @@ jobs:
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
           if [ -z "${GITEE_TOKEN:-}" ]; then
-            echo "::error::缺少 GITEE_TOKEN"
+            echo "::error::未配置 GITEE_TOKEN Secret，Gitee 镜像发布被跳过。国内用户将只能走 GitHub。"
             exit 1
           fi
-          git remote add gitee "https://huaxudong:${GITEE_TOKEN}@gitee.com/${GITEE_REPO}.git"
+          git remote add gitee "https://${GITEE_OWNER}:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
           git fetch --tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
-          git push gitee "refs/tags/${TAG}:refs/tags/${TAG}"
+          git push gitee "refs/tags/${TAG}:refs/tags/${TAG}" --force
 
       - name: 从 GitHub Release 取安装包
         env:
@@ -299,39 +305,87 @@ jobs:
           gh release download "$TAG" --dir assets
           ls -l assets
 
-      - name: 同步到 Gitee Release
+      - name: 同步 Release 到 Gitee
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          set -euo pipefail
-          API="https://gitee.com/api/v5/repos/${GITEE_REPO}"
+          set -uo pipefail
+          API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}"
 
-          # 已经建过（补包重跑）就复用，没有才新建。tag 在上一步已经推过去了
-          ID="$(curl -sS --fail-with-body "${API}/releases/tags/${TAG}?access_token=${GITEE_TOKEN}" | jq -r '.id // empty' || true)"
+          # Release 说明直接复用 GitHub 那份，两边内容不会分叉
+          BODY="$(gh release view "$TAG" --json body -q .body || true)"
+          [ -n "$BODY" ] || BODY="桌面提醒工具（Windows 安装版 / macOS dmg 与 app）。国内高速下载。"
+
+          # 1. 建 Release。用 multipart form 而不是 JSON：Gitee 对 application/json
+          #    的 POST 有概率被 WAF 拦成 400，form 一直正常；顺带也免了正文里
+          #    中文换行的编码问题。
+          ID=""
+          CREATE="$(curl -sS -X POST "${API}/releases" \
+            -F "access_token=${GITEE_TOKEN}" \
+            -F "tag_name=${TAG}" \
+            -F "target_commitish=main" \
+            -F "name=DeskAlarm ${TAG}" \
+            -F "body=${BODY}" \
+            -F "prerelease=false" || true)"
+          ID="$(printf '%s' "$CREATE" | jq -r '.id // empty' || true)"
+          [ -n "$ID" ] && echo "Gitee Release 已创建，id=$ID"
+
+          # 2. 没拿到 id 说明已存在（补包重跑），查出来复用并刷新说明
           if [ -z "$ID" ]; then
-            BODY="$(gh release view "$TAG" --json body -q .body)"
-            ID="$(jq -n --arg tag "$TAG" --arg name "$TAG" --arg body "$BODY" \
-                    '{tag_name:$tag, name:$name, body:$body, target_commitish:"main", prerelease:false}' \
-                  | curl -sS --fail-with-body -X POST "${API}/releases?access_token=${GITEE_TOKEN}" \
-                      -H 'Content-Type: application/json' -d @- | jq -r '.id')"
+            echo "创建未返回 id，查已有 Release（$TAG）..."
+            ID="$(curl -sS "${API}/releases/tags/${TAG}?access_token=${GITEE_TOKEN}" | jq -r '.id // empty' || true)"
+            if [ -n "$ID" ]; then
+              curl -sS -X PATCH "${API}/releases/${ID}" \
+                -F "access_token=${GITEE_TOKEN}" \
+                -F "tag_name=${TAG}" \
+                -F "name=DeskAlarm ${TAG}" \
+                -F "body=${BODY}" || echo "::warning::Gitee Release 说明刷新失败，附件仍会上传"
+            fi
           fi
+
+          # 3. 拿不到 id 就停：Release 可能已经被建出来了却没拿到 id，
+          #    那会留下一个「有 Release、无附件」的空壳 —— 比没有更糟，
+          #    用户点进去发现新版本却下不到东西。
           if [ -z "$ID" ]; then
-            echo "::error::Gitee Release 没建出来"
+            echo "::error::没拿到 Gitee Release id，附件未上传。创建响应：$CREATE"
             exit 1
           fi
-          echo "Gitee Release $TAG id=$ID"
 
+          # 4. 逐个上传。Gitee 这边同名附件会 400，先删旧的再传
+          ok=0
           for f in assets/*; do
+            [ -f "$f" ] || continue
             n="$(basename "$f")"
-            # 同名附件先删掉，重跑时不会堆出一串重复文件
-            for old in $(curl -sS --fail-with-body "${API}/releases/${ID}/attach_files?access_token=${GITEE_TOKEN}" \
-                           | jq -r --arg n "$n" '.[] | select(.name == $n) | .id'); do
-              curl -sS --fail-with-body -X DELETE "${API}/releases/${ID}/attach_files/${old}?access_token=${GITEE_TOKEN}"
+            for old in $(curl -sS "${API}/releases/${ID}/attach_files?access_token=${GITEE_TOKEN}" \
+                           | jq -r --arg n "$n" '.[] | select(.name == $n) | .id' || true); do
+              curl -sS -X DELETE "${API}/releases/${ID}/attach_files/${old}?access_token=${GITEE_TOKEN}" || true
             done
-            echo "上传 $n"
-            curl -sS --fail-with-body --retry 3 --retry-delay 5 -X POST "${API}/releases/${ID}/attach_files" \
-              -F "access_token=${GITEE_TOKEN}" -F "file=@${f}"
-            echo
+
+            uploaded=0
+            for attempt in 1 2 3; do
+              echo "上传 $n（第 $attempt 次）"
+              resp="$(curl -sS -X POST "${API}/releases/${ID}/attach_files?access_token=${GITEE_TOKEN}" \
+                       -F "access_token=${GITEE_TOKEN}" \
+                       -F "file=@${f};filename=${n};type=application/octet-stream" || true)"
+              if printf '%s' "$resp" | jq -e '.id or .browser_download_url' >/dev/null 2>&1; then
+                uploaded=1
+                ok=$((ok+1))
+                break
+              fi
+              echo "::warning::$n 上传失败：$resp"
+              sleep 5
+            done
+
+            if [ "$uploaded" != "1" ]; then
+              echo "::error::$n 三次上传均失败，Gitee Release ${TAG} 缺少该文件。请手动到 Gitee 后台补传，或删除该 Release 重跑。"
+              exit 1
+            fi
           done
-          echo "Gitee Release ${TAG} 已同步"
+
+          if [ "$ok" -eq 0 ]; then
+            echo "::error::assets 目录为空，没有任何附件上传"
+            exit 1
+          fi
+          echo "Gitee Release ${TAG} 同步完成（${ok} 个附件）"
