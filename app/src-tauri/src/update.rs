@@ -75,6 +75,34 @@ fn platform_key() -> &'static str {
     }
 }
 
+/// 下载地址的硬闸门。
+///
+/// 地址来自远端 JSON，被劫持的响应完全可以指向任意 exe。
+/// 按 `.` 分段比而不是 `ends_with`：否则 `evilgitee.com` 也能通过。
+fn is_trusted_download_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    let is_domain = |base: &str| host == base || host.ends_with(&format!(".{base}"));
+    is_domain("gitee.com")
+        || is_domain("github.com")
+        || is_domain("githubusercontent.com")
+        // Gitee 附件最终落在 foruda 上，GitHub 的落在 release-assets 上
+        || is_domain("foruda.gitee.com")
+        || is_domain("release-assets.githubusercontent.com")
+        || is_domain("objects.githubusercontent.com")
+}
+
 /// 版本号比较。返回 true 表示 a 比 b 新。
 ///
 /// 只按点分段比数字，不认预发布后缀：清单里的版本来自 tag，
@@ -124,6 +152,10 @@ fn usable(m: &Manifest) -> Result<Option<String>, String> {
     };
     if p.url.is_empty() || p.signature.is_empty() {
         return Err(format!("清单里 {key} 的 url 或 signature 为空"));
+    }
+    // 地址来自远端，不校验的话一个被劫持的清单就能让客户端装任意 exe
+    if !is_trusted_download_url(&p.url) {
+        return Err(format!("清单里 {key} 的下载地址不受信任，已拒绝"));
     }
     let current = env!("CARGO_PKG_VERSION");
     if is_newer(&m.version, current) {
@@ -273,4 +305,45 @@ pub async fn install_update(app: AppHandle) -> Result<String, String> {
         .map_err(|e| format!("安装更新失败: {e}"))?;
 
     Ok(format!("已安装 v{version}，重启后生效"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 白名单是一道安全闸门，改坏了不会有任何提示 ——
+    /// 放行一个坏地址就等于允许被劫持的清单装任意 exe。
+    #[test]
+    fn trusted_download_url_only_allows_known_hosts() {
+        for ok in [
+            "https://gitee.com/a/b.exe",
+            "https://foruda.gitee.com/assets/x.exe",
+            "https://github.com/soldier-cv/desk-alarm/releases/download/v0.2.2/x.exe",
+            "https://release-assets.githubusercontent.com/x",
+        ] {
+            assert!(is_trusted_download_url(ok), "应放行: {ok}");
+        }
+
+        // 后缀绕过是这类白名单最容易犯的错：evilgitee.com 不能被当成 gitee.com
+        for bad in [
+            "https://evilgitee.com/x.exe",
+            "https://gitee.com.evil.com/x.exe",
+            // http 明文会被中间人改包
+            "http://gitee.com/x.exe",
+            "https:/not a url",
+        ] {
+            assert!(!is_trusted_download_url(bad), "应拒绝: {bad}");
+        }
+    }
+
+    #[test]
+    fn version_compare() {
+        assert!(is_newer("0.2.3", "0.2.2"));
+        assert!(is_newer("0.3.0", "0.2.9"));
+        assert!(is_newer("v1.0.0", "0.9.9"));
+        assert!(!is_newer("0.2.2", "0.2.2"));
+        assert!(!is_newer("0.2.2", "0.2.3"));
+        // 位数不等时按 0 补齐，不能把 0.2 当成比 0.2.0 新
+        assert!(!is_newer("0.2", "0.2.0"));
+    }
 }

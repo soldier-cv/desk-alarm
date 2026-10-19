@@ -30,16 +30,23 @@
 
 ## 为什么用官方插件而不是自己下载安装
 
-飞梭（`huaxudong/feisuo`）是自己写的 updater，因为它是
-**绿色版单文件 exe**：`bundle.active = false`、`targets = []`，
-压根不走 Tauri 打包器，没有 `.sig` 产物可用，接不上插件的签名体系，
-只能自己处理 UAC 提权与换名接力。
+对照飞梭（`huaxudong/feisuo`）。它自写 updater，但**原因不是没有安装包** ——
+飞梭同时发 Inno Setup 安装包（`Feisuo-Setup-x64.exe`）与绿色版
+（`Feisuo-win-x64.exe`），updater 靠 `Feisuo.installed` 标记区分两种形态，
+安装版那一路照样要 `runas` 弹 UAC。
 
-本仓库不一样：发的是 **NSIS 安装包 + dmg**（`bundle.active = true`），
-正是插件设计的场景。签名校验、UAC 提权静默安装、macOS 的 `.app` 替换
-都由插件负责，代价只是需要一对签名密钥。
+它源码里给的理由是：官方插件要求 Release 里有 `latest.json` + `.sig`，
+校验依赖打包期注入的 `pubkey`，**强行接就要引入一套签名密钥管理体系**，
+与它"零配置、免安装"的定位相悖。
 
-**形态不同导致选择不同，不是谁更先进。**
+也就是说分界线是**要不要接受那套签名体系**，不是产物形态。
+（`bundle.active = false` 只说明它不走 Tauri 打包器产 `.sig`，
+安装包本身由 Inno Setup 单独产出。）
+
+本仓库选择了接受：签名密钥已生成并配好，换来的是签名校验、UAC 提权
+静默安装、macOS 的 `.app` 替换全部由插件负责，不用自己维护这些。
+
+代价写在下面「签名密钥」一节 —— 私钥丢了发不出新版本，泄露了能被人签假包。
 
 ## 签名密钥
 

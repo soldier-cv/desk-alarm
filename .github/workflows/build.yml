@@ -142,6 +142,12 @@ jobs:
       - name: Typecheck
         run: cd app && npx tsc --noEmit
 
+      # 更新模块的单元测试（下载地址白名单、版本比较）。
+      # 放在这里而不是 PR 的 checks job：那边是 ubuntu，跑 cargo 要装
+      # webkit2gtk 等一堆系统库；这里是现成的 Rust 环境，且是发版前必经一步。
+      - name: Update module tests
+        run: "cd app/src-tauri && cargo test --lib update::"
+
       # 和本地 build-windows.ps1 -Version 走同一个脚本，产物版本号来源只有一处
       - name: Set version from tag
         if: ${{ needs.plan.outputs.release_tag != '' }}
