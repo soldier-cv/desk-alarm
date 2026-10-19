@@ -147,18 +147,35 @@ jobs:
         if: ${{ needs.plan.outputs.release_tag != '' }}
         run: node scripts/set-version.mjs ${{ needs.plan.outputs.release_tag }}
 
+      # 签名私钥注入后，打包器会给安装包产出同名的 .sig。
+      # 没有它客户端会拒绝安装更新（插件验签失败），而不是"跳过校验继续装"
       - name: Build Windows installer
+        if: ${{ needs.plan.outputs.publish == 'true' }}
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           cd app
           npx tauri build --bundles nsis
 
+      - name: Build Windows installer (no signing)
+        if: ${{ needs.plan.outputs.publish != 'true' }}
+        shell: bash
+        run: |
+          cd app
+          npx tauri build --bundles nsis
+          # 不发版时打包器仍会生成 .sig（createUpdaterArtifacts），
+          # 但那是没签过名的空壳，留着会让人误以为产物可用于更新
+          rm -f app/src-tauri/target/release/bundle/nsis/*.sig
+
+      # .sig 必须和安装包一起留着：latest.json 里要填它的内容
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: deskalarm-windows
           path: |
             app/src-tauri/target/release/bundle/nsis/*.exe
+            app/src-tauri/target/release/bundle/nsis/*.sig
             app/src-tauri/target/release/deskalarm.exe
           if-no-files-found: error
 
@@ -185,7 +202,11 @@ jobs:
           V="${TAG#v}"
           mkdir -p release-assets
           cp app/src-tauri/target/release/bundle/nsis/*.exe "release-assets/desk-alarm_${V}_x64-setup.exe"
-          gh release upload "$TAG" "release-assets/desk-alarm_${V}_x64-setup.exe" --clobber
+          # 签名文件跟着一起传：latest.json 里的 signature 就是它的内容
+          cp app/src-tauri/target/release/bundle/nsis/*.sig "release-assets/desk-alarm_${V}_x64-setup.exe.sig"
+          gh release upload "$TAG" \
+            "release-assets/desk-alarm_${V}_x64-setup.exe" \
+            "release-assets/desk-alarm_${V}_x64-setup.exe.sig" --clobber
 
   macos:
     if: ${{ github.event_name != 'pull_request' }}
@@ -226,10 +247,21 @@ jobs:
 
       # 这里不加 --target：arm64 runner 上默认就编 aarch64，产物落在
       # target/release。一旦加了 --target，路径会变成 target/<triple>/release
+      # 私钥注入的意义同 windows job：dmg 旁边会产出 .sig
       - name: Build macOS app and dmg
+        if: ${{ needs.plan.outputs.publish == 'true' }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           cd app
           npx tauri build --bundles app,dmg
+
+      - name: Build macOS app and dmg (no signing)
+        if: ${{ needs.plan.outputs.publish != 'true' }}
+        run: |
+          cd app
+          npx tauri build --bundles app,dmg
+          rm -f app/src-tauri/target/release/bundle/dmg/*.sig
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -238,6 +270,7 @@ jobs:
           path: |
             app/src-tauri/target/release/bundle/macos/*.app
             app/src-tauri/target/release/bundle/dmg/*.dmg
+            app/src-tauri/target/release/bundle/dmg/*.sig
           if-no-files-found: error
 
       - name: Publish to release
@@ -258,9 +291,81 @@ jobs:
           V="${TAG#v}"
           mkdir -p release-assets
           cp app/src-tauri/target/release/bundle/dmg/*.dmg "release-assets/desk-alarm_${V}_aarch64.dmg"
-          # .app 是目录，打进 zip 才能作为 Release 附件；dmg 本来就能直接下载
+          cp app/src-tauri/target/release/bundle/dmg/*.sig "release-assets/desk-alarm_${V}_aarch64.dmg.sig"
+          # .app 是目录，打进 zip 才能作为 Release 附件；dmg 本来就能直接下载。
+          # 更新走 dmg 而不是 app.zip：插件在 macOS 上装的是 tar.gz/dmg 这类
+          # 它认得的形态，zip 里的 .app 它不会用
           ( cd app/src-tauri/target/release/bundle/macos && zip -qry "$GITHUB_WORKSPACE/release-assets/desk-alarm_${V}_aarch64.app.zip" ./*.app )
-          gh release upload "$TAG" "release-assets/desk-alarm_${V}_aarch64.dmg" "release-assets/desk-alarm_${V}_aarch64.app.zip" --clobber
+          gh release upload "$TAG" \
+            "release-assets/desk-alarm_${V}_aarch64.dmg" \
+            "release-assets/desk-alarm_${V}_aarch64.dmg.sig" \
+            "release-assets/desk-alarm_${V}_aarch64.app.zip" --clobber
+
+  # 生成客户端读的 latest.json。
+  #
+  # 插件要的不是"Release 里有包"，而是一个写着版本号 + 各平台下载 URL +
+  # 签名内容的静态 JSON。缺了它客户端连"有没有新版"都问不出来。
+  #
+  # 两个平台的包由不同 runner 产出，所以这一步必须等 windows/macos 都发完，
+  # 再回过头从 Release 上把 URL 抄进 JSON。
+  latest-json:
+    if: ${{ needs.plan.outputs.publish == 'true' }}
+    needs: [plan, windows, macos]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.plan.outputs.release_tag }}
+    steps:
+      - name: Build and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="${TAG#v}"
+          GH_REL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          GITEE_REL="https://gitee.com/huaxudong/desk-alarm/releases/download/${TAG}"
+
+          # 签名内容从 GitHub Release 附件里读：两个平台的 .sig 各由
+          # 自己那台 runner 传上来，这里只能从远端取
+          sig() {
+            curl -fsSL "${GH_REL}/$1" | tr -d '\r\n'
+          }
+
+          WIN_SIG="$(sig "desk-alarm_${V}_x64-setup.exe.sig")"
+          MAC_SIG="$(sig "desk-alarm_${V}_aarch64.dmg.sig")"
+
+          # 签名拿不到就停：没有 signature 客户端会拒绝安装，
+          # 而发一个"看起来有新版但装不上"的 JSON 比不发更糟
+          if [ -z "$WIN_SIG" ] || [ -z "$MAC_SIG" ]; then
+            echo "::error::取不到 .sig（可能打包时没注入 TAURI_SIGNING_PRIVATE_KEY）"
+            exit 1
+          fi
+
+          NOTES="$(gh release view "$TAG" --json body -q .body | head -c 500)"
+
+          # URL 用 Gitee：客户端主通道是它，国内直连快。
+          # 插件会按这里的 URL 下载，签名校验仍由 tauri.conf.json 的 pubkey 兜着，
+          # 所以"URL 指向镜像"不等于"放弃验签"
+          jq -n \
+            --arg v "$V" \
+            --arg notes "$NOTES" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg winUrl "${GITEE_REL}/desk-alarm_${V}_x64-setup.exe" \
+            --arg winSig "$WIN_SIG" \
+            --arg macUrl "${GITEE_REL}/desk-alarm_${V}_aarch64.dmg" \
+            --arg macSig "$MAC_SIG" \
+            '{
+              version: $v,
+              notes: $notes,
+              pub_date: $date,
+              platforms: {
+                "windows-x86_64": { url: $winUrl, signature: $winSig },
+                "darwin-aarch64": { url: $macUrl, signature: $macSig }
+              }
+            }' > latest.json
+
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber
+          echo "latest.json 已上传（v$V）"
 
   # GitHub Release 挂好包之后，把同一个 tag 和同样的安装包同步到 Gitee。
   # 单独串成一个 job：windows / macos 两个 job 并发跑在**不同 runner** 上，
@@ -271,7 +376,9 @@ jobs:
   # 所以脚本内部对关键失败一律 `echo ::error::` + exit 1，日志里必须看得见。
   gitee-release:
     if: ${{ needs.plan.outputs.publish == 'true' && github.repository == 'soldier-cv/desk-alarm' }}
-    needs: [plan, windows, macos]
+    # 排在 latest-json 之后：镜像要连 latest.json 一起搬过去，
+    # 否则 Gitee 上有安装包却没有清单，客户端照样问不出版本
+    needs: [plan, windows, macos, latest-json]
     runs-on: ubuntu-latest
     env:
       GITEE_OWNER: huaxudong
@@ -402,3 +509,25 @@ jobs:
             exit 1
           fi
           echo "Gitee Release ${TAG} 同步完成（${ok} 个附件）"
+
+      # latest.json 里的 URL 指向 Gitee，而"清单传上去了"不代表"包也传上去了"。
+      # 两者不同步时客户端已经判定有新版、点下去却 404 —— 比没有更新更难排查。
+      - name: 校验镜像上的下载地址
+        if: ${{ steps.token.outputs.ok == 'true' }}
+        run: |
+          set -uo pipefail
+          base="https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${TAG}"
+          bad=""
+          for name in $(jq -r '.platforms[].url' assets/latest.json | sed "s|.*/||"); do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 30 "${base}/${name}" || echo 000)"
+            if [ "$code" != "200" ]; then
+              echo "::error::镜像上 ${name} 不可下载（HTTP ${code}）"
+              bad="1"
+            else
+              echo "OK ${name}"
+            fi
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::镜像附件不完整，客户端会下载失败。请重跑本 job 或手动补传。"
+            exit 1
+          fi

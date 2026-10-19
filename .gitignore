@@ -12,3 +12,6 @@ app-icon.png
 .env
 !.env.example
 .release_tag
+
+# 更新签名私钥。丢了它发不出新版本，泄露它能被人签假包
+*.key

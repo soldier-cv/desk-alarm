@@ -9,9 +9,21 @@ import {
   normalizeBaseUrl, parseInput, probeServer, saveConfig, serverNow, switchServer, urgencyOf,
   type AckAction, type Device, type Dismissal, type Entry, type ServerMessage,
 } from '../api';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
 import { THEMES, applyTheme, loadTheme, saveTheme } from '../theme';
 import '../styles.css';
+
+/** 与 src-tauri/src/update.rs 的 UpdateInfo 对应 */
+interface UpdateInfo {
+  available: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  source: string;
+  mirrorStale: boolean;
+  message: string;
+  releasePage: string;
+}
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
 const esc = (s: string) =>
@@ -226,6 +238,7 @@ function renderShell() {
       <button class="btn sm no-drag" id="btn-theme" title="切换配色"></button>
       <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>
       <button class="btn sm no-drag" id="btn-test">试响</button>
+      <button class="btn sm no-drag" id="btn-update" title="检查更新">更新</button>
       <button class="btn sm no-drag" id="btn-hide">缩到托盘</button>
     </div>
 
@@ -272,6 +285,7 @@ function renderShell() {
     void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
   };
   $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
+  $<HTMLButtonElement>('#btn-update')!.onclick = () => void checkUpdate();
   // 点连接状态就能换服务端地址，不用翻设置
   $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
   renderThemeButton();
@@ -404,6 +418,41 @@ async function weakDismiss(id: string, reason?: string) {
     } catch { /* ignore */ }
   }
   void refresh();
+}
+
+// 版本比较与「镜像落后就改用 GitHub」在 Rust 侧做（update.rs），这里只管交互
+async function checkUpdate() {
+  const btn = $<HTMLButtonElement>('#btn-update');
+  if (!btn) return;
+  if (!hasTauri()) {
+    flash('检查更新只在客户端里能用');
+    return;
+  }
+
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '检查中…';
+  try {
+    const info = await invoke<UpdateInfo>('check_update');
+    if (!info) return;
+
+    if (!info.available) {
+      flash(info.message || '当前已是最新版本');
+      return;
+    }
+
+    btn.textContent = '下载中…';
+    flash(info.message);
+    const done = await invoke<string>('install_update');
+    // install 成功意味着新版已就位，重启才生效；失败时 Rust 那边已经给了原因
+    flash(done || '更新已安装');
+    await relaunch();
+  } catch (err) {
+    flash('检查更新失败：' + (err instanceof Error ? err.message : String(err)));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label ?? '更新';
+  }
 }
 
 /** 一次性的提示条 */

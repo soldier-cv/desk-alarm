@@ -1,5 +1,6 @@
 mod commands;
 mod tray;
+mod update;
 mod windows;
 
 use tauri::{Listener, Manager};
@@ -28,6 +29,7 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             Some(vec![AUTOSTART_ARG]),
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -90,6 +92,8 @@ pub fn run() {
             commands::set_autostart,
             commands::is_autostart_enabled,
             commands::ping,
+            update::check_update,
+            update::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("DeskAlarm 构建失败")

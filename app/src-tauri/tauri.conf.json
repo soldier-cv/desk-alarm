@@ -69,9 +69,18 @@
       "tooltip": "DeskAlarm"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMyMERDQTFBQzM3RkNBMEEKUldRS3luL0RHc29OTWdGRTlzM1l0YWtjSlJRbjZHSTBMS1dyMG1taDVuM2lRV1hWcHZlTXZadXIK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "app", "dmg"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
