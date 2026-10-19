@@ -282,21 +282,33 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 检查 GITEE_TOKEN
+        id: token
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "${GITEE_TOKEN:-}" ]; then
+            # ::error:: 而不是 ::warning::：没有 token 意味着国内用户拿不到镜像通道。
+            # 但不 exit 1 —— GitHub Release 这时已经建好了，不该让发版显示为失败。
+            echo "::error::未配置 GITEE_TOKEN Secret，Gitee 镜像发布被跳过。国内用户将只能走 GitHub。请在 GitHub 仓库 Settings → Secrets 添加 GITEE_TOKEN。"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 推 tag 到 Gitee
+        if: ${{ steps.token.outputs.ok == 'true' }}
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
-          if [ -z "${GITEE_TOKEN:-}" ]; then
-            echo "::error::未配置 GITEE_TOKEN Secret，Gitee 镜像发布被跳过。国内用户将只能走 GitHub。"
-            exit 1
-          fi
           git remote add gitee "https://${GITEE_OWNER}:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
           git fetch --tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
           git push gitee "refs/tags/${TAG}:refs/tags/${TAG}" --force
 
       - name: 从 GitHub Release 取安装包
+        if: ${{ steps.token.outputs.ok == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -306,6 +318,7 @@ jobs:
           ls -l assets
 
       - name: 同步 Release 到 Gitee
+        if: ${{ steps.token.outputs.ok == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
