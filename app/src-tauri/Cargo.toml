@@ -1,6 +1,6 @@
 [package]
 name = "deskalarm"
-version = "0.1.0"
+version = "0.2.3"
 description = "Desktop alarm clock with server-side scheduling and multi-device delivery"
 authors = ["soldier-cv"]
 license = "MIT"
