@@ -414,6 +414,11 @@ jobs:
     if: ${{ needs.plan.outputs.publish == 'true' }}
     needs: [plan, windows, macos]
     runs-on: ubuntu-latest
+    # 顶层 permissions 是 contents: read，只读 token 无法上传 Release 附件
+    # （报 HTTP 403 Resource not accessible by integration）。
+    # windows / macos job 各自声明了 write，这里漏了，补上。
+    permissions:
+      contents: write
     env:
       TAG: ${{ needs.plan.outputs.release_tag }}
     steps:
