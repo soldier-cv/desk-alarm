@@ -347,15 +347,25 @@ jobs:
           # 附件名统一成 desk-alarm_<版本>_<架构>（理由同 windows job）
           V="${TAG#v}"
           mkdir -p release-assets
+          # dmg：给人手动安装用，本身不带签名
           cp app/src-tauri/target/release/bundle/dmg/*.dmg "release-assets/desk-alarm_${V}_aarch64.dmg"
-          cp app/src-tauri/target/release/bundle/dmg/*.sig "release-assets/desk-alarm_${V}_aarch64.dmg.sig"
+          # updater 产物与签名：Tauri 在 macOS 上签的是 .app.tar.gz，产物落在
+          # bundle/macos/（不是 bundle/dmg/）。打包器日志原文：
+          #   Finished 1 updater signature at:
+          #     .../bundle/macos/DeskAlarm.app.tar.gz.sig
+          # 旧写法从 bundle/dmg/*.sig 取，必然 No such file or directory。
+          # latest.json 的 macUrl 也必须指向 .app.tar.gz：dmg 与 tar.gz 的
+          # sha256 不同，拿 dmg 的 URL 配 tar.gz 的签名，客户端校验必失败。
+          cp app/src-tauri/target/release/bundle/macos/*.app.tar.gz \
+             "release-assets/desk-alarm_${V}_aarch64.app.tar.gz"
+          cp app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig \
+             "release-assets/desk-alarm_${V}_aarch64.app.tar.gz.sig"
           # .app 是目录，打进 zip 才能作为 Release 附件；dmg 本来就能直接下载。
-          # 更新走 dmg 而不是 app.zip：插件在 macOS 上装的是 tar.gz/dmg 这类
-          # 它认得的形态，zip 里的 .app 它不会用
           ( cd app/src-tauri/target/release/bundle/macos && zip -qry "$GITHUB_WORKSPACE/release-assets/desk-alarm_${V}_aarch64.app.zip" ./*.app )
           gh release upload "$TAG" \
             "release-assets/desk-alarm_${V}_aarch64.dmg" \
-            "release-assets/desk-alarm_${V}_aarch64.dmg.sig" \
+            "release-assets/desk-alarm_${V}_aarch64.app.tar.gz" \
+            "release-assets/desk-alarm_${V}_aarch64.app.tar.gz.sig" \
             "release-assets/desk-alarm_${V}_aarch64.app.zip" --clobber
 
   # 生成客户端读的 latest.json。
@@ -388,7 +398,7 @@ jobs:
           }
 
           WIN_SIG="$(sig "desk-alarm_${V}_x64-setup.exe.sig")"
-          MAC_SIG="$(sig "desk-alarm_${V}_aarch64.dmg.sig")"
+          MAC_SIG="$(sig "desk-alarm_${V}_aarch64.app.tar.gz.sig")"
 
           # 签名拿不到就停：没有 signature 客户端会拒绝安装，
           # 而发一个"看起来有新版但装不上"的 JSON 比不发更糟
@@ -408,7 +418,7 @@ jobs:
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg winUrl "${GITEE_REL}/desk-alarm_${V}_x64-setup.exe" \
             --arg winSig "$WIN_SIG" \
-            --arg macUrl "${GITEE_REL}/desk-alarm_${V}_aarch64.dmg" \
+            --arg macUrl "${GITEE_REL}/desk-alarm_${V}_aarch64.app.tar.gz" \
             --arg macSig "$MAC_SIG" \
             '{
               version: $v,
