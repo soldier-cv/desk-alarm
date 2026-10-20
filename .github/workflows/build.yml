@@ -382,6 +382,10 @@ jobs:
     env:
       TAG: ${{ needs.plan.outputs.release_tag }}
     steps:
+      # gh CLI 需要 git 仓库上下文才能推断 owner/repo，缺这步会报
+      # `failed to run git: fatal: not a git repository`
+      - uses: actions/checkout@v4
+
       - name: Build and upload latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
