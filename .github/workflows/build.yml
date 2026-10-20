@@ -155,6 +155,35 @@ jobs:
 
       # 签名私钥注入后，打包器会给安装包产出同名的 .sig。
       # 没有它客户端会拒绝安装更新（插件验签失败），而不是"跳过校验继续装"
+      #
+      # Secret 格式预检（2026-10-20 加）：Tauri 要求 TAURI_SIGNING_PRIVATE_KEY
+      # 是**单行纯 base64**（整个密钥文件本身就是被 base64 过的文本，约 348 字符）。
+      # 粘贴时带进末尾换行/`untrusted comment:` 行会报
+      # `failed to decode base64 key: Invalid symbol 10, offset 348`——
+      # 这个报错发生在打包成功之后，等于白等一轮 6~8 分钟编译。
+      # 这里提前拦住并说清怎么修，而不是让人对着 base64 报错猜。
+      - name: Verify signing secret format
+        if: ${{ needs.plan.outputs.publish == 'true' }}
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 为空，请在 GitHub 仓库 Secrets 中配置。"
+            exit 1
+          fi
+          # 去掉首尾空白后必须是单行、且能被 base64 解回 ASCII 文本
+          TRIMMED="$(printf '%s' "$KEY" | tr -d '[:space:]')"
+          if [ "$TRIMMED" != "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 含空白/换行（粘贴时带入了行尾）。Tauri 需要单行纯 base64（约 348 字符，无换行、无 untrusted comment 行）。修法：在 Settings→Secrets 里重新粘贴，确保末行不留空行。"
+            exit 1
+          fi
+          if ! printf '%s' "$KEY" | base64 -d >/dev/null 2>&1; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 不是合法 base64，请重新用 tauri signer generate 生成的密钥文件内容（整份文件内容即单行 base64）。"
+            exit 1
+          fi
+          echo "签名私钥格式校验通过（长度 ${#KEY}）"
+
       - name: Build Windows installer
         if: ${{ needs.plan.outputs.publish == 'true' }}
         shell: bash
@@ -254,6 +283,28 @@ jobs:
       # 这里不加 --target：arm64 runner 上默认就编 aarch64，产物落在
       # target/release。一旦加了 --target，路径会变成 target/<triple>/release
       # 私钥注入的意义同 windows job：dmg 旁边会产出 .sig
+      # Secret 格式预检：同 windows job，避免白等 4 分钟编译后才在签名阶段失败
+      - name: Verify signing secret format
+        if: ${{ needs.plan.outputs.publish == 'true' }}
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 为空，请在 GitHub 仓库 Secrets 中配置。"
+            exit 1
+          fi
+          TRIMMED="$(printf '%s' "$KEY" | tr -d '[:space:]')"
+          if [ "$TRIMMED" != "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 含空白/换行（粘贴时带入了行尾）。Tauri 需要单行纯 base64（约 348 字符，无换行、无 untrusted comment 行）。修法：在 Settings→Secrets 里重新粘贴，确保末行不留空行。"
+            exit 1
+          fi
+          if ! printf '%s' "$KEY" | base64 -d >/dev/null 2>&1; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 不是合法 base64，请重新用 tauri signer generate 生成的密钥文件内容（整份文件内容即单行 base64）。"
+            exit 1
+          fi
+          echo "签名私钥格式校验通过（长度 ${#KEY}）"
+
       - name: Build macOS app and dmg
         if: ${{ needs.plan.outputs.publish == 'true' }}
         env:
