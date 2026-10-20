@@ -47,7 +47,12 @@ export function setVersion(raw) {
   // JSON.stringify 会把 targets、dmg 这类紧凑写法全部展开，发版 diff 会全是噪音
   const conf = read(FILES.tauriConf);
   const confNext = conf.replace(/("version"\s*:\s*")[^"]*(")/, `$1${version}$2`);
-  if (confNext === conf) throw new Error('tauri.conf.json 里没找到 version 字段');
+  // 已经是目标版本时 replace 原地不动，那是幂等成功而不是"没找到字段"。
+  // 判"找没找到"要看解析出的版本号，不能看字符串变没变：
+  // 重跑同一个 tag 会走到这条路径，误报会让补包重发直接失败
+  if (JSON.parse(conf).version !== version && confNext === conf) {
+    throw new Error('tauri.conf.json 里没找到 version 字段');
+  }
   if (JSON.parse(confNext).version !== version) throw new Error('tauri.conf.json 写入后校验失败');
   write(FILES.tauriConf, confNext);
 
@@ -58,12 +63,16 @@ export function setVersion(raw) {
     /(\[package\][\s\S]*?^version\s*=\s*")[^"]*(")/m,
     `$1${version}$2`,
   );
-  if (next === toml) throw new Error('Cargo.toml 里没找到 [package] 的 version');
+  // 同样按解析值判断，理由同上
+  const tomlHasField = /(\[package\][\s\S]*?^version\s*=\s*")[^"]*(")/m.test(toml);
+  if (!tomlHasField) throw new Error('Cargo.toml 里没找到 [package] 的 version');
   write(FILES.cargoToml, next);
 
   const pkg = read(FILES.packageJson);
   const pkgNext = pkg.replace(/("version"\s*:\s*")[^"]*(")/, `$1${version}$2`);
-  if (pkgNext === pkg) throw new Error('package.json 里没找到 version 字段');
+  if (JSON.parse(pkg).version !== version && pkgNext === pkg) {
+    throw new Error('package.json 里没找到 version 字段');
+  }
   write(FILES.packageJson, pkgNext);
 
   return version;
