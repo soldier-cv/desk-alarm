@@ -2,7 +2,7 @@
 # 触发策略（仅 tag + manual，日常 push 不触发）：
 #   1. tag: 推送 v* 标签（正式发版）
 #   2. manual: Woodpecker 页面手动触发（可填 deploy_tag 变量指定版本标签，默认 latest）
-# 链路：解析版本号并同步服务端文件至宿主机 -> TS 类型检查与编译校验 -> 本地构建 api/web 镜像并通过 docker compose 部署
+# 链路：解析版本号并同步服务端文件至宿主机 -> TS 类型检查与编译校验 -> 本地构建 api/gateway 镜像并通过 docker compose 部署
 when:
   - event: tag
     ref: refs/tags/v*
@@ -52,12 +52,15 @@ steps:
       - echo "$$REGISTRY_PASS" | docker login "$$REGISTRY_HOST" -u $$REGISTRY_USER --password-stdin
       # 镜像铁律：推 registry，固定版本 + latest 同 digest
       - docker build -f docker/api.Dockerfile -t "$$REGISTRY_HOST/deskalarm-api:$${RELEASE_TAG}" -t "$$REGISTRY_HOST/deskalarm-api:latest" .
-      - docker build -f docker/Dockerfile -t "$$REGISTRY_HOST/deskalarm-web:$${RELEASE_TAG}" -t "$$REGISTRY_HOST/deskalarm-web:latest" .
+      - docker build -f docker/Dockerfile -t "$$REGISTRY_HOST/deskalarm-gateway:$${RELEASE_TAG}" -t "$$REGISTRY_HOST/deskalarm-gateway:latest" .
       - docker push "$$REGISTRY_HOST/deskalarm-api:$${RELEASE_TAG}"
       - docker push "$$REGISTRY_HOST/deskalarm-api:latest"
-      - docker push "$$REGISTRY_HOST/deskalarm-web:$${RELEASE_TAG}"
-      - docker push "$$REGISTRY_HOST/deskalarm-web:latest"
+      - docker push "$$REGISTRY_HOST/deskalarm-gateway:$${RELEASE_TAG}"
+      - docker push "$$REGISTRY_HOST/deskalarm-gateway:latest"
       - docker logout "$$REGISTRY_HOST"
+      # 旧容器改名前的名字。compose up 只管当前文件里定义的服务，
+      # 旧的 deskalarm-web 不会被它带走，会继续占着 8091 让新 gateway 起不来
+      - docker rm -f deskalarm-web 2>/dev/null || echo "无旧 web 容器，跳过"
       # compose 拉起（.env 保留宿主机生产配置）+ 健康验证
       - REGISTRY_HOST=$$REGISTRY_HOST IMAGE_TAG=$${RELEASE_TAG} docker compose up -d --force-recreate
       - docker compose ps
@@ -70,3 +73,4 @@ steps:
         from_secret: registry_user
       REGISTRY_PASS:
         from_secret: registry_pass
+

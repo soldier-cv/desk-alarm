@@ -185,7 +185,7 @@ npm run tauri:dev
 
 | 内容 | 在哪跑 | 干什么 |
 |---|---|---|
-| 服务端 | Woodpecker（`.woodpecker.yaml`） | 构建 api/web 镜像推内网 registry，`docker compose` 拉起并等健康检查 |
+| 服务端 | Woodpecker（`.woodpecker.yaml`） | 构建 api/gateway 镜像推 registry，`docker compose` 拉起并等健康检查 |
 | 客户端 | GitHub Actions（`.github/workflows/build.yml`） | 打包 Windows NSIS + macOS dmg，建 GitHub Release 并把安装包挂上去 |
 | Gitee 镜像 | GitHub Actions（`build.yml` 的 `gitee-release`，排在两个打包 job 之后） | 推 tag 到 Gitee，建同名 Release，把同样的三个安装包传上去 |
 

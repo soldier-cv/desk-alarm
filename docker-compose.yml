@@ -1,13 +1,14 @@
 name: desk-alarm
 
 services:
-  # 静态原型 + API 网关
-  web:
+  # 静态原型 + API 网关。叫 gateway 而不是 web：里面没有 web 前端代码，
+  # 只是个 nginx，把 / 指到 mockups、把 /api/ 反代到 api 容器
+  gateway:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: ${REGISTRY_HOST:-127.0.0.1:5000}/deskalarm-web:${IMAGE_TAG:-latest}
-    container_name: deskalarm-web
+    image: ${REGISTRY_HOST:-127.0.0.1:5000}/deskalarm-gateway:${IMAGE_TAG:-latest}
+    container_name: deskalarm-gateway
     ports:
       # 8080/8088/8090 容易和其它服务撞号，所以走 8091。要改端口只动 .env 的 WEB_PORT
       - "${WEB_PORT:-8091}:80"
@@ -32,7 +33,7 @@ services:
     image: ${REGISTRY_HOST:-127.0.0.1:5000}/deskalarm-api:${IMAGE_TAG:-latest}
     container_name: deskalarm-api
     ports:
-      # 直连端口。走网关也行，见 web 的 /api/
+      # 直连端口。走网关也行，见 gateway 的 /api/
       - "8787:8787"
     environment:
       PGHOST: "${PGHOST}"
