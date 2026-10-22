@@ -3,7 +3,7 @@
 #
 # 数据库是外部的 PostgreSQL，镜像里不需要任何编译工具链。
 # =============================================================
-FROM node:22-alpine AS build
+FROM node:22.23.4-alpine AS build
 WORKDIR /app
 
 # 先只拷依赖清单，让 npm ci 这一层能被缓存住
@@ -18,7 +18,7 @@ COPY shared ./shared
 RUN cd server && npm run build
 
 # ---------------------------------------------------------------- 运行
-FROM node:22-alpine
+FROM node:22.23.4-alpine
 WORKDIR /app
 
 # 只需要运行期依赖。lock 文件必须一起带过来，npm ci 没它会直接报错
