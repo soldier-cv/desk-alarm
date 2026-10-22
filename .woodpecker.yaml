@@ -28,7 +28,7 @@ steps:
       - cp /tmp/release_tag /opt/code/desk-alarm/.release_tag
 
   - name: verify-server
-    image: docker.1ms.run/library/node:22-alpine
+    image: docker.1ms.run/library/node:22.23.4-alpine
     depends_on:
       - resolve-tag
     commands:
