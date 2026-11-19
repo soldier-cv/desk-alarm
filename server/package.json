@@ -18,6 +18,7 @@
     "e2e": "node scripts/e2e-check.mjs",
     "repeat": "node scripts/repeat-check.mjs",
     "db:init": "node scripts/db-init.mjs",
+    "isolation": "node scripts/isolation-check.mjs",
     "mcp:stdio": "node dist/server/src/mcp/stdio.js"
   },
   "dependencies": {

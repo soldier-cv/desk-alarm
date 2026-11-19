@@ -5,11 +5,14 @@ data
 *.db-wal
 *.db-shm
 target
+target-fresh
+.playwright-mcp
 app-icon.png
 .openchamber
 .openchamber/screenshots
 
 .env
+.env.local
 !.env.example
 .release_tag
 

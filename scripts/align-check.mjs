@@ -124,7 +124,14 @@ const themeSrc = read('app/src/theme.ts');
 ok('主题写在 html 的 data-theme 上', /dataset\.theme/.test(themeSrc));
 ok('主题选择会持久化', /localStorage\.setItem/.test(themeSrc));
 ok('主窗口有切换入口', /id="btn-theme"/.test(src.main));
-ok('切换到浅色前就挂主题（不闪帧）', /applyTheme\(loadTheme\(\)\);\s*\n\s*\nif \(loadConfig\(\)\.token\)/.test(src.main));
+// 只看文件末尾的启动段：applyTheme 要在那段里的第一个渲染调用之前
+const bootZone = src.main.slice(src.main.lastIndexOf('// 先挂主题再渲染'));
+const themeAt = bootZone.indexOf('applyTheme(loadTheme());');
+const firstRender = Math.min(
+  ...['renderSetup();', 'renderLogin();', 'boot();']
+    .map((call) => bootZone.indexOf(call)).filter((i) => i >= 0),
+);
+ok('切换到浅色前就挂主题（不闪帧）', themeAt >= 0 && themeAt < firstRender);
 // capture 是独立窗口，必须自己也读一次主题，否则切完还是旧配色
 const captureSrc = read('app/src/ui/capture.ts');
 ok('capture 窗口跟随主题', /applyTheme\(loadTheme\(\)\)/.test(captureSrc));
@@ -140,15 +147,16 @@ ok('「今天」不按 fired_at 排除', !/today[\s\S]{0,200}fired_at/.test(src.
 ok('「即将到来」不排除已触发的', !/upcoming[\s\S]{0,200}fired_at IS NULL/.test(src.entries));
 
 console.log('\n跨平台');
-const rust = ['lib', 'commands', 'windows', 'tray', 'main']
+const rust = ['lib', 'commands', 'windows', 'main']
   .map((f) => read(`app/src-tauri/src/${f}.rs`)).join('\n');
 ok('没有引入 windows crate', !/^windows\s*=/m.test(read('app/src-tauri/Cargo.toml')));
 ok('没有 Win32 API 调用', !/winapi|windows_sys|#\[link\(name\s*=\s*"user32"\)\]/i.test(rust));
-ok('用了 macOS 的 LaunchAgent', /MacosLauncher::LaunchAgent/.test(rust));
+ok('桌面专属插件用 cfg(desktop) 隔开', /#\[cfg\(desktop\)\]/.test(rust));
+ok('有移动端入口', /mobile_entry_point/.test(rust));
+ok('machine_id 有 android 分支', /target_os\s*=\s*"android"/.test(read('app/src-tauri/src/commands.rs')));
 const tauriConf = read('app/src-tauri/tauri.conf.json');
-ok('bundle 含 macOS 目标', /"app"|"dmg"/.test(tauriConf));
-ok('有 minimumSystemVersion', /minimumSystemVersion/.test(tauriConf));
-ok('图标含 icns', /icon\.icns/.test(tauriConf));
+ok('bundle 只有 Windows 目标', /"targets":\s*\[\s*"nsis"\s*\]/.test(tauriConf));
+ok('没有 macOS 打包配置', !/dmg|icon\.icns|minimumSystemVersion/.test(tauriConf));
 
 console.log('\nCSP 与服务端地址');
 // CSP 是编译期写死的，服务端地址是用户运行时填的。
@@ -161,18 +169,9 @@ ok('默认地址只在源码出现一处', (src.api.match(/baseUrl: '/g) ?? []).
 
 console.log('\nCI 配置');
 const wf = read('.github/workflows/build.yml');
-// GitHub 只保留最新两个 macOS 版本。用了下线的标签，job 会永远卡在
-// 「Waiting for a runner」，不报错也不失败
-const macJob = wf.slice(wf.indexOf('  macos:'));
-const runsOn = macJob.match(/runs-on:\s*(\S+)/)?.[1] ?? '';
-const rustTarget = macJob.match(/targets:\s*(\S+)/)?.[1] ?? '';
-ok('macos runner 不是已下线标签', !/macos-(1[0-3])\b/.test(runsOn), `runs-on=${runsOn}`);
-ok('runner 架构与 rust target 一致',
-  runsOn.includes('intel') ? rustTarget === 'x86_64-apple-darwin' : rustTarget === 'aarch64-apple-darwin',
-  `runs-on=${runsOn} target=${rustTarget}`);
-ok('macos 也构建产物', /bundles app,dmg/.test(macJob));
+ok('CI 不含 macOS job', !/^\s*macos:/m.test(wf));
 ok('windows 也构建产物', /windows/.test(wf) && /nsis/.test(wf));
-ok('minimumSystemVersion 与 arm64 相容', !/10\.15/.test(read('app/src-tauri/tauri.conf.json')));
+ok('latest.json 不含 mac 签名', !/MAC_SIG|darwin-aarch64/.test(wf));
 
 console.log('\n发布链路');
 // 服务端在 Woodpecker，客户端在 GitHub Actions。两边都认 v* tag，
@@ -186,7 +185,7 @@ ok('发 Release 需要写权限', /permissions:\s*\n\s*contents:\s*write/.test(w
 // 没有 --verify-tag 时，tag 不存在会让 gh 从默认分支悄悄造一个，Release 就指向错的提交
 ok('建 Release 校验 tag 真实存在', /gh release create[^\n]*--verify-tag/.test(wf));
 ok('PR 不跑真机构建', /\$\{\{\s*github\.event_name == 'pull_request'\s*\}\}/.test(wf));
-ok('打包 job 跳过 PR', (wf.match(/\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/g) ?? []).length >= 2);
+ok('打包 job 跳过 PR', (wf.match(/\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/g) ?? []).length >= 1);
 // 版本号来源只有一处：tag -> set-version 脚本。写死会让安装包版本和 tag 对不上
 ok('产物版本来自 tag', /scripts\/set-version\.mjs/.test(wf));
 // GitHub 的 Release 附件名只收 ASCII，中文前缀会被静默丢掉，

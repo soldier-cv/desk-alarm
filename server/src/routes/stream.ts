@@ -18,25 +18,28 @@ export async function streamRoutes(app: FastifyInstance) {
         query: { token: url.searchParams.get('token') },
       } as never);
 
-      if (!session) {
+      // Agent 令牌只走 MCP；Web / 看板没有设备行，也不建立实时通道
+      if (!session || session.kind === 'agent' || !session.device) {
         socket.close(4401, 'unauthorized');
         return;
       }
 
+      const userId = session.user.id;
       const device = session.device;
-      const client = hub.add(device.id, socket);
+      const client = hub.add(userId, device.id, socket);
       await markOnline(device.id);
-      log.info('ws connected', { device: device.name, connections: hub.connectionCount });
+      log.info('ws connected', {
+        user: session.user.username, device: device.name, connections: hub.connectionCount,
+      });
 
-      // welcome 带漏掉的提醒，客户端一上线就知道该补什么
       hub.send(client, {
         t: 'welcome',
         serverTs: Date.now(),
         deviceId: device.id,
-        missed: await findMissed(device.id),
-        settings: await getSettings(),
+        missed: await findMissed(userId, device.id),
+        settings: await getSettings(userId),
       });
-      hub.broadcast({ t: 'devices.changed', devices: await listDevices() });
+      hub.broadcastToUser(userId, { t: 'devices.changed', devices: await listDevices(userId) });
 
       socket.on('message', (buf) => {
         let msg: ClientMessage;
@@ -55,33 +58,25 @@ export async function streamRoutes(app: FastifyInstance) {
           case 'ping':
             hub.send(client, { t: 'pong', at: msg.at });
             break;
-
           case 'entry.ack':
             await onAck(msg.entryId, msg.action, msg.snoozeTo);
             break;
-
           case 'entry.dismiss':
             await onDismiss(msg.entryId, msg.reason);
             break;
-
           default:
             break;
         }
       }
 
-      /**
-       * 确认。走 WS 而不是 HTTP 是为了让「响铃的那台设备」零延迟停铃，
-       * 不依赖它还有一条可用的 HTTP 连接
-       */
       async function onAck(entryId: string, action: AckAction, snoozeToMs?: number) {
-        const cur = await getEntry(entryId);
+        const cur = await getEntry(entryId, userId);
         if (!cur) return;
 
         await markAcked(entryId, device.id, action);
 
         if (action === 'silence') {
-          // 只压掉这一次，条目本身不动
-          hub.broadcast({
+          hub.broadcastToUser(userId, {
             t: 'entry.acked', entryId,
             deviceId: device.id, deviceName: device.name, action,
           });
@@ -90,34 +85,32 @@ export async function streamRoutes(app: FastifyInstance) {
 
         let updated;
         try {
-          updated = await ackEntry(entryId, action, device.name, snoozeToMs);
+          updated = await ackEntry(entryId, userId, action, device.name, snoozeToMs);
         } catch {
           return;
         }
 
-        hub.broadcast({ t: 'entry.updated', entry: updated });
-        // 关键广播：其它正在响的设备收到后立刻静音并降级显示
-        hub.broadcast({
+        hub.broadcastToUser(userId, { t: 'entry.updated', entry: updated });
+        hub.broadcastToUser(userId, {
           t: 'entry.acked', entryId,
           deviceId: device.id, deviceName: device.name, action,
         });
         log.info('ws ack', { entryId, action, by: device.name });
       }
 
-      /** 弱提示的忽略。和 ack 走同一个广播，好让别处的横幅跟着收 */
       async function onDismiss(entryId: string, reason?: string) {
-        const cur = await getEntry(entryId);
+        const cur = await getEntry(entryId, userId);
         if (!cur) return;
         try {
-          const r = await dismissEntry(entryId, device.id, device.name, reason);
+          const r = await dismissEntry(entryId, userId, device.id, device.name, reason);
           await markAcked(entryId, device.id, 'dismiss');
-          hub.broadcast({ t: 'entry.updated', entry: r.entry });
-          hub.broadcast({
+          hub.broadcastToUser(userId, { t: 'entry.updated', entry: r.entry });
+          hub.broadcastToUser(userId, {
             t: 'entry.acked', entryId,
             deviceId: device.id, deviceName: device.name, action: 'dismiss' as DismissAction,
           });
           if (r.suggestion && r.entry.strength === 'weak') {
-            hub.broadcast({
+            hub.broadcastToUser(userId, {
               t: 'entry.downgraded', entry: r.entry,
               dismissCount: r.dismissCount, reason: r.suggestion,
             });
@@ -130,7 +123,7 @@ export async function streamRoutes(app: FastifyInstance) {
         hub.remove(client);
         void markOfflineHint(device.id);
         void (async () => {
-          hub.broadcast({ t: 'devices.changed', devices: await listDevices() });
+          hub.broadcastToUser(userId, { t: 'devices.changed', devices: await listDevices(userId) });
         })();
         log.info('ws closed', { device: device.name, connections: hub.connectionCount });
       });
@@ -138,9 +131,6 @@ export async function streamRoutes(app: FastifyInstance) {
       socket.on('error', () => hub.remove(client));
     })().catch((err) => {
       log.error('ws setup failed', err);
-      try { socket.close(1011, 'setup failed'); } catch { /* ignore */ }
     });
   });
 }
-
-export type { ServerMessage };

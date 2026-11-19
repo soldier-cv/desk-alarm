@@ -13,7 +13,7 @@
  *       "args": ["/path/to/server/dist/server/src/mcp/stdio.js"],
  *       "env": {
  *         "DESKALARM_API": "http://127.0.0.1:8787",
- *         "DESKALARM_TOKEN": "你的 MCP_TOKEN"
+ *         "DESKALARM_TOKEN": "在客户端「服务端与本机设备」里签发的 Agent 令牌"
  *       }
  *     }
  *   }
@@ -29,7 +29,7 @@ const TOKEN = process.env.DESKALARM_TOKEN ?? '';
 const PROTOCOL = '2025-06-18';
 
 if (!TOKEN) {
-  process.stderr.write('[deskalarm-mcp] 缺 DESKALARM_TOKEN，agent 只能读不能写\n');
+  process.stderr.write('[deskalarm-mcp] 缺 DESKALARM_TOKEN（Agent 令牌），MCP 调用会被 401\n');
 }
 
 interface Rpc {

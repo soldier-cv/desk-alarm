@@ -11,27 +11,36 @@ const DEFAULTS: Settings = {
   neglectedAfter: 3,
 };
 
-let cache: Settings | null = null;
+// 每个用户一份缓存。原来全局只有一份，多用户后会互相看到对方的设置
+const cache = new Map<string, Settings>();
 
-/**
- * 0 是合法值（quietStartMin=0 就是零点整），不能用 `||` 兜底，
- * 否则用户把静音开始设成 0 点会被悄悄改回 23:30
- */
 function num(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') return fallback;
   const n = Number(raw);
   return Number.isFinite(n) ? n : fallback;
 }
 
-export async function getSettings(): Promise<Settings> {
-  if (cache) return cache;
+export async function ensureSettings(userId: string): Promise<void> {
+  const entries = Object.entries(DEFAULTS);
+  const values = entries.map((_, i) => `($1, $${i * 2 + 2}, $${i * 2 + 3})`).join(', ');
+  const params = [userId, ...entries.flatMap(([k, v]) => [k, String(v)])];
+  await run(
+    `INSERT INTO settings (user_id, key, value) VALUES ${values}
+     ON CONFLICT (user_id, key) DO NOTHING`,
+    params,
+  );
+}
+
+export async function getSettings(userId: string): Promise<Settings> {
+  const hit = cache.get(userId);
+  if (hit) return hit;
   const rs = await rows<{ key: string; value: string }>(
-    `SELECT key, value FROM settings WHERE key = ANY($1::text[])`,
-    [Object.keys(DEFAULTS)],
+    `SELECT key, value FROM settings WHERE user_id = $1 AND key = ANY($2::text[])`,
+    [userId, Object.keys(DEFAULTS)],
   );
   const map = new Map(rs.map((x) => [x.key, x.value]));
   const sound = map.get('sound');
-  cache = {
+  const out: Settings = {
     escalateAfterSec: num(map.get('escalateAfterSec'), DEFAULTS.escalateAfterSec),
     repeatEverySec: num(map.get('repeatEverySec'), DEFAULTS.repeatEverySec),
     quietStartMin: num(map.get('quietStartMin'), DEFAULTS.quietStartMin),
@@ -40,11 +49,11 @@ export async function getSettings(): Promise<Settings> {
     autoDowngradeAfter: num(map.get('autoDowngradeAfter'), DEFAULTS.autoDowngradeAfter),
     neglectedAfter: num(map.get('neglectedAfter'), DEFAULTS.neglectedAfter),
   };
-  return cache;
+  cache.set(userId, out);
+  return out;
 }
 
-/** 只认已知键。原来是把 body 里每个键都写进库，拼错一个键就多一行垃圾数据 */
-export async function patchSettings(p: Partial<Settings>): Promise<Settings> {
+export async function patchSettings(userId: string, p: Partial<Settings>): Promise<Settings> {
   for (const [k, v] of Object.entries(p)) {
     if (v === undefined || !Object.hasOwn(DEFAULTS, k)) continue;
     const key = k as keyof Settings;
@@ -53,15 +62,19 @@ export async function patchSettings(p: Partial<Settings>): Promise<Settings> {
     } else {
       const n = typeof v === 'number' ? v : Number.NaN;
       if (!Number.isFinite(n) || n < 0) continue;
-      // 静音时段是 0:00 起算的分钟数，跨过一天就没有意义了
       if ((key === 'quietStartMin' || key === 'quietEndMin') && n >= 24 * 60) continue;
     }
     await run(
-      `INSERT INTO settings (key, value) VALUES ($1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-      [key, String(v)],
+      `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value`,
+      [userId, key, String(v)],
     );
   }
-  cache = null;
-  return getSettings();
+  cache.delete(userId);
+  return getSettings(userId);
+}
+
+export function clearSettingsCache(userId?: string) {
+  if (userId) cache.delete(userId);
+  else cache.clear();
 }

@@ -3,6 +3,7 @@ import type { WebSocket } from 'ws';
 
 interface Client {
   id: number;
+  userId: string;
   deviceId: string;
   socket: WebSocket;
 }
@@ -10,70 +11,77 @@ interface Client {
 let seq = 0;
 
 class Hub {
-  /** deviceId -> 该设备的连接集合。同一设备重连时留新踢旧 */
-  private byDevice = new Map<string, Set<Client>>();
+  /** userId -> deviceId -> 连接集合。同设备重连时留新踢旧由上层处理 */
+  private byUser = new Map<string, Map<string, Set<Client>>>();
 
-  add(deviceId: string, socket: WebSocket): Client {
-    const client: Client = { id: ++seq, deviceId, socket };
-    let set = this.byDevice.get(deviceId);
+  add(userId: string, deviceId: string, socket: WebSocket): Client {
+    const client: Client = { id: ++seq, userId, deviceId, socket };
+    let devices = this.byUser.get(userId);
+    if (!devices) {
+      devices = new Map();
+      this.byUser.set(userId, devices);
+    }
+    let set = devices.get(deviceId);
     if (!set) {
       set = new Set();
-      this.byDevice.set(deviceId, set);
+      devices.set(deviceId, set);
     }
     set.add(client);
     return client;
   }
 
   remove(client: Client) {
-    const set = this.byDevice.get(client.deviceId);
+    const devices = this.byUser.get(client.userId);
+    const set = devices?.get(client.deviceId);
     if (!set) return;
     set.delete(client);
-    if (set.size === 0) this.byDevice.delete(client.deviceId);
+    if (set.size === 0) devices!.delete(client.deviceId);
+    if (devices!.size === 0) this.byUser.delete(client.userId);
   }
 
-  /** 写成功返回 true。投递轮转器靠这个判断 delivered，所以不能静默失败 */
   send(client: Client, msg: ServerMessage): boolean {
-    if (client.socket.readyState !== 1) return false; // 1 = OPEN
+    if (client.socket.readyState !== 1) return false;
     try {
       client.socket.send(JSON.stringify(msg));
       return true;
     } catch {
-      // socket 已死，交给 close 事件清理
       return false;
     }
   }
 
   sendTo(deviceId: string, msg: ServerMessage): boolean {
-    const set = this.byDevice.get(deviceId);
-    if (!set) return false;
     let any = false;
-    for (const c of set) any = this.send(c, msg) || any;
+    for (const devices of this.byUser.values()) {
+      const set = devices.get(deviceId);
+      if (!set) continue;
+      for (const c of set) any = this.send(c, msg) || any;
+    }
     return any;
   }
 
-  sendToMany(deviceIds: string[], msg: ServerMessage) {
-    for (const id of deviceIds) this.sendTo(id, msg);
-  }
-
-  /** 广播给所有在线设备。条目同步用这个，不区分推送范围 */
-  broadcast(msg: ServerMessage) {
-    for (const set of this.byDevice.values()) {
+  /** 广播只发给同一用户的设备。跨用户广播就是数据泄漏 */
+  broadcastToUser(userId: string, msg: ServerMessage) {
+    const devices = this.byUser.get(userId);
+    if (!devices) return;
+    for (const set of devices.values()) {
       for (const c of set) this.send(c, msg);
     }
   }
 
   isOnline(deviceId: string): boolean {
-    const set = this.byDevice.get(deviceId);
-    if (!set) return false;
-    for (const c of set) {
-      if (c.socket.readyState === 1) return true;
+    for (const devices of this.byUser.values()) {
+      const set = devices.get(deviceId);
+      if (!set) continue;
+      for (const c of set) if (c.socket.readyState === 1) return true;
     }
     return false;
   }
 
   get connectionCount() {
     let n = 0;
-    for (const set of this.byDevice.values()) n += set.size;
+    for (const devices of this.byUser.values()) {
+      for (const set of devices.values()) n += set.size;
+    }
     return n;
   }
 }

@@ -23,6 +23,8 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# 单实例：重复启动时只把已有窗口唤出来，绝不出现第二个托盘图标
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -31,6 +33,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
 # 插件的 endpoints() 要的是 url::Url
 url = "2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.50"
 
 [profile.release]
 panic = "abort"

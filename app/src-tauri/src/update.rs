@@ -63,13 +63,6 @@ struct Platform {
 fn platform_key() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows-x86_64"
-    } else if cfg!(target_os = "macos") {
-        // 打包只出 aarch64（CI 用 macos-15 arm64 runner）
-        if cfg!(target_arch = "aarch64") {
-            "darwin-aarch64"
-        } else {
-            "darwin-x86_64"
-        }
     } else {
         "linux-x86_64"
     }

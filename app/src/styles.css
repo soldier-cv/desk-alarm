@@ -208,6 +208,26 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .panel-submit { width: 100%; height: 36px; margin-top: 14px; }
 .panel-err:not(:empty) { margin-top: 10px; font-size: 11.5px; color: var(--muted); }
 .login-go { height: 38px; }
+.mid-block { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.mid-title { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.mid-row { display: flex; gap: 8px; align-items: center; }
+.mid-val { flex: 1; min-width: 0; font-size: 11px; }
+.mid-block .login-hint { margin-top: 7px; }
+.agent-list { margin-top: 10px; max-height: 130px; overflow-y: auto; }
+.agent-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; font-size: 11.5px; border-bottom: 1px solid var(--line-soft); }
+
+/* 开发看板：应用内的一个视图，不是独立页面 */
+.dash { padding: 4px 2px 20px; }
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.dash-card { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); padding: 12px 14px; }
+.dash-card h3 { margin: 0 0 10px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.dash-body { font-size: 12px; line-height: 1.9; color: var(--text); }
+.dash-body b { color: var(--flare-text); font-weight: 600; }
+.dash-body .ok { color: var(--ok); }
+.dash-body .danger { color: var(--danger-text); }
+.dash-foot { margin-top: 14px; font-size: 11px; color: var(--dim); }
+.dash-err { margin-top: 10px; color: var(--danger-text); font-size: 12px; }
+.dash-err-line { margin-top: 6px; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 删除确认。默认焦点在「取消」上，回车不会误删 */
 .panel-sm { width: min(360px, 100%); }

@@ -1,12 +1,13 @@
 name: build-client
 
 # 客户端打包。服务端部署在 Woodpecker，那边认 v* tag，这里也认同一个 tag，
-# 推一次 v0.2.0 两边一起走：服务端换镜像，客户端出安装包。
+# 推一次 v0.2.0 两边一起走：服务端换镜像，客户端出 Windows 安装包。
+# Android 不在这条流水线里：在有 Android SDK 的机器上用 scripts/build-android.ps1 本地构建。
 #
-#   推 tag v*        打包 Windows + macOS，建 Release 并挂上 exe/dmg
+#   推 tag v*        打包 Windows，建 Release 并挂上安装包
 #   手动填 tag       同上，用于给某个版本补包或重跑
 #   手动不填 tag     只打包，产物留在 workflow artifact，不动 Release
-#   PR               只跑静态检查，不打包（省 macOS 额度，几分钟出结果）
+#   PR               只跑静态检查，不打包
 #   push main        不触发
 #
 # 日常改客户端代码不用等 tag：本地 npx tsc --noEmit && npx vite build 就能挡大部分问题。
@@ -214,109 +215,13 @@ jobs:
             "release-assets/desk-alarm_${V}_x64-setup.exe" \
             "release-assets/desk-alarm_${V}_x64-setup.exe.sig" --clobber
 
-  macos:
-    if: ${{ github.event_name != 'pull_request' }}
-    needs: plan
-    runs-on: macos-15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            app/package-lock.json
-            server/package-lock.json
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          # GitHub 只保留最新两个 macOS 版本，macos-13 已下线。
-          # 用已下线的标签会永远卡在「Waiting for a runner」：不报错也不失败。
-          # 这里用 macos-15（arm64），Rust target 必须跟着用 aarch64。
-          targets: aarch64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: app/src-tauri
-
-      - name: Install dependencies
-        run: |
-          cd app && npm ci
-          cd ../server && npm ci
-
-      - name: Set version from tag
-        if: ${{ needs.plan.outputs.release_tag != '' }}
-        run: node scripts/set-version.mjs ${{ needs.plan.outputs.release_tag }}
-
-      # 这里不加 --target：arm64 runner 上默认就编 aarch64，产物落在
-      # target/release。一旦加了 --target，路径会变成 target/<triple>/release
-      # 私钥注入的意义同 windows job：dmg 旁边会产出 .sig
-      - name: Build macOS app and dmg
-        if: ${{ needs.plan.outputs.publish == 'true' }}
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          cd app
-          npx tauri build --bundles app,dmg
-
-      - name: Build macOS app and dmg (no signing)
-        if: ${{ needs.plan.outputs.publish != 'true' }}
-        run: |
-          cd app
-          npx tauri build --bundles app,dmg
-          rm -f app/src-tauri/target/release/bundle/dmg/*.sig
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: deskalarm-macos
-          path: |
-            app/src-tauri/target/release/bundle/macos/*.app
-            app/src-tauri/target/release/bundle/dmg/*.dmg
-            app/src-tauri/target/release/bundle/dmg/*.sig
-          if-no-files-found: error
-
-      - name: Publish to release
-        if: ${{ needs.plan.outputs.publish == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.plan.outputs.release_tag }}
-        run: |
-          set -euo pipefail
-          # 两个 job 并发跑，Release 可能已经被 windows 那个建好了
-          if [ -z "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
-            echo "::error::远端没有 tag $TAG。请先推送该 tag：git push origin $TAG"
-            exit 1
-          fi
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
-          # 附件名统一成 desk-alarm_<版本>_<架构>（理由同 windows job）
-          V="${TAG#v}"
-          mkdir -p release-assets
-          cp app/src-tauri/target/release/bundle/dmg/*.dmg "release-assets/desk-alarm_${V}_aarch64.dmg"
-          cp app/src-tauri/target/release/bundle/dmg/*.sig "release-assets/desk-alarm_${V}_aarch64.dmg.sig"
-          # .app 是目录，打进 zip 才能作为 Release 附件；dmg 本来就能直接下载。
-          # 更新走 dmg 而不是 app.zip：插件在 macOS 上装的是 tar.gz/dmg 这类
-          # 它认得的形态，zip 里的 .app 它不会用
-          ( cd app/src-tauri/target/release/bundle/macos && zip -qry "$GITHUB_WORKSPACE/release-assets/desk-alarm_${V}_aarch64.app.zip" ./*.app )
-          gh release upload "$TAG" \
-            "release-assets/desk-alarm_${V}_aarch64.dmg" \
-            "release-assets/desk-alarm_${V}_aarch64.dmg.sig" \
-            "release-assets/desk-alarm_${V}_aarch64.app.zip" --clobber
-
   # 生成客户端读的 latest.json。
   #
-  # 插件要的不是"Release 里有包"，而是一个写着版本号 + 各平台下载 URL +
+  # 插件要的不是"Release 里有包"，而是一个写着版本号 + 下载 URL +
   # 签名内容的静态 JSON。缺了它客户端连"有没有新版"都问不出来。
-  #
-  # 两个平台的包由不同 runner 产出，所以这一步必须等 windows/macos 都发完，
-  # 再回过头从 Release 上把 URL 抄进 JSON。
   latest-json:
     if: ${{ needs.plan.outputs.publish == 'true' }}
-    needs: [plan, windows, macos]
+    needs: [plan, windows]
     runs-on: ubuntu-latest
     env:
       TAG: ${{ needs.plan.outputs.release_tag }}
@@ -330,18 +235,16 @@ jobs:
           GH_REL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
           GITEE_REL="https://gitee.com/huaxudong/desk-alarm/releases/download/${TAG}"
 
-          # 签名内容从 GitHub Release 附件里读：两个平台的 .sig 各由
-          # 自己那台 runner 传上来，这里只能从远端取
+          # 签名内容从 GitHub Release 附件里读
           sig() {
             curl -fsSL "${GH_REL}/$1" | tr -d '\r\n'
           }
 
           WIN_SIG="$(sig "desk-alarm_${V}_x64-setup.exe.sig")"
-          MAC_SIG="$(sig "desk-alarm_${V}_aarch64.dmg.sig")"
 
           # 签名拿不到就停：没有 signature 客户端会拒绝安装，
           # 而发一个"看起来有新版但装不上"的 JSON 比不发更糟
-          if [ -z "$WIN_SIG" ] || [ -z "$MAC_SIG" ]; then
+          if [ -z "$WIN_SIG" ]; then
             echo "::error::取不到 .sig（可能打包时没注入 TAURI_SIGNING_PRIVATE_KEY）"
             exit 1
           fi
@@ -357,15 +260,12 @@ jobs:
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg winUrl "${GITEE_REL}/desk-alarm_${V}_x64-setup.exe" \
             --arg winSig "$WIN_SIG" \
-            --arg macUrl "${GITEE_REL}/desk-alarm_${V}_aarch64.dmg" \
-            --arg macSig "$MAC_SIG" \
             '{
               version: $v,
               notes: $notes,
               pub_date: $date,
               platforms: {
-                "windows-x86_64": { url: $winUrl, signature: $winSig },
-                "darwin-aarch64": { url: $macUrl, signature: $macSig }
+                "windows-x86_64": { url: $winUrl, signature: $winSig }
               }
             }' > latest.json
 
@@ -374,9 +274,6 @@ jobs:
           echo "latest.json 已上传（v$V）"
 
   # GitHub Release 挂好包之后，把同一个 tag 和同样的安装包同步到 Gitee。
-  # 单独串成一个 job：windows / macos 两个 job 并发跑在**不同 runner** 上，
-  # 产物不在同一台机器，所以只能等两边都发完再从 GitHub Release 回取。
-  #
   # continue-on-error 是刻意的：GitHub Release 这时已经建好、用户已经能下载，
   # 镜像失败不该让整个发版显示为失败。代价是失败不在 job 状态里，
   # 所以脚本内部对关键失败一律 `echo ::error::` + exit 1，日志里必须看得见。
@@ -384,7 +281,7 @@ jobs:
     if: ${{ needs.plan.outputs.publish == 'true' && github.repository == 'soldier-cv/desk-alarm' }}
     # 排在 latest-json 之后：镜像要连 latest.json 一起搬过去，
     # 否则 Gitee 上有安装包却没有清单，客户端照样问不出版本
-    needs: [plan, windows, macos, latest-json]
+    needs: [plan, windows, latest-json]
     runs-on: ubuntu-latest
     env:
       GITEE_OWNER: huaxudong
@@ -442,7 +339,7 @@ jobs:
 
           # Release 说明直接复用 GitHub 那份，两边内容不会分叉
           BODY="$(gh release view "$TAG" --json body -q .body || true)"
-          [ -n "$BODY" ] || BODY="桌面提醒工具（Windows 安装版 / macOS dmg 与 app）。国内高速下载。"
+          [ -n "$BODY" ] || BODY="桌面提醒工具（Windows 安装版）。国内高速下载。"
 
           # 1. 建 Release。用 multipart form 而不是 JSON：Gitee 对 application/json
           #    的 POST 有概率被 WAF 拦成 400，form 一直正常；顺带也免了正文里

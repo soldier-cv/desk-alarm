@@ -3,8 +3,11 @@
 
 use serde_json::Value;
 use tauri::AppHandle;
+#[cfg(desktop)]
 use tauri_plugin_autostart::ManagerExt;
+#[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+#[cfg(desktop)]
 use tauri_plugin_opener::OpenerExt;
 
 use crate::windows;
@@ -47,6 +50,7 @@ pub fn hide_capture(app: AppHandle) {
 }
 
 /// 打开链接。用户在提醒里点了「打开链接」时用，走系统默认浏览器。
+#[cfg(desktop)]
 #[tauri::command]
 pub fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     // 只放行 http/https，挡掉 file: 和 javascript:
@@ -59,6 +63,7 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 }
 
 /// 开机自启开关。Windows 下写当前用户的 Run 键，不需要管理员
+#[cfg(desktop)]
 #[tauri::command]
 pub fn set_autostart(app: AppHandle, enable: bool) -> Result<bool, String> {
     let mgr = app.autolaunch();
@@ -72,6 +77,7 @@ pub fn set_autostart(app: AppHandle, enable: bool) -> Result<bool, String> {
     mgr.is_enabled().map_err(|e| e.to_string())
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 pub fn is_autostart_enabled(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
@@ -94,6 +100,7 @@ pub fn ping(app: AppHandle, title: String, body: String) -> Result<(), String> {
  * 注册全局热键。写在 Rust 侧而不是用 JS 插件，是为了让它在
  * 前端 webview 还没加载完时就能工作，程序刚起来就能用。
  */
+#[cfg(desktop)]
 pub fn register_capture_hotkey(app: &AppHandle, accelerator: &str) -> Result<(), String> {
     let shortcut: Shortcut = accelerator.parse().map_err(|e| format!("{e:?}"))?;
     app.global_shortcut()
@@ -107,6 +114,96 @@ pub fn register_capture_hotkey(app: &AppHandle, accelerator: &str) -> Result<(),
         .map_err(|e| e.to_string())
 }
 
+#[cfg(desktop)]
+#[allow(dead_code)]
 pub fn unregister_all(app: &AppHandle) {
     let _ = app.global_shortcut().unregister_all();
+}
+
+#[cfg(target_os = "windows")]
+fn read_machine_id() -> Option<String> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Cryptography")
+        .ok()?;
+    let guid: String = key.get_value("MachineGuid").ok()?;
+    let guid = guid.trim();
+    (!guid.is_empty()).then(|| guid.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn read_machine_id() -> Option<String> {
+    let id = std::fs::read_to_string("/etc/machine-id").ok()?;
+    let id = id.trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+#[cfg(target_os = "android")]
+fn read_machine_id() -> Option<String> {
+    use std::process::Command;
+    // Android 没有 /etc/machine-id；用系统属性里的稳定标识
+    for key in ["ro.serialno", "ro.boot.serialno", "ro.android_id"] {
+        let out = Command::new("getprop").arg(key).output().ok()?;
+        if !out.status.success() {
+            continue;
+        }
+        let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !id.is_empty() {
+            return Some(id);
+        }
+    }
+    None
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "android")))]
+fn read_machine_id() -> Option<String> {
+    None
+}
+
+/// 取不到真实 id 也得稳定，否则每次登录服务端都当成一台新设备
+fn fallback_machine_id() -> String {
+    #[cfg(target_os = "windows")]
+    let host = std::env::var("COMPUTERNAME").unwrap_or_default();
+    #[cfg(target_os = "android")]
+    let host = {
+        use std::process::Command;
+        ["ro.product.brand", "ro.product.model", "ro.build.fingerprint"]
+            .iter()
+            .filter_map(|k| Command::new("getprop").arg(k).output().ok())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+    #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
+    let host = std::env::var("HOSTNAME")
+        .or_else(|_| std::fs::read_to_string("/etc/hostname"))
+        .unwrap_or_default();
+
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in format!("deskalarm-salt-v1:{host}").bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fallback-{hash:016x}")
+}
+
+#[tauri::command]
+pub fn machine_id() -> Result<String, String> {
+    Ok(read_machine_id().unwrap_or_else(fallback_machine_id))
+}
+
+/// 前端按平台决定显示哪些原生按钮。移动端没有托盘和全局热键。
+#[tauri::command]
+pub fn platform() -> String {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "web"
+    };
+    os.to_string()
 }

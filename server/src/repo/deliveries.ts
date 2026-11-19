@@ -11,6 +11,7 @@ import { transportFor } from '../transport/index.js';
 
 interface PendingRow {
   id: number;
+  user_id: string;
   entry_id: string;
   device_id: string;
   fire_key: string;
@@ -18,28 +19,24 @@ interface PendingRow {
   attempts: number;
 }
 
-/**
- * 生成一次触发的标识。同一次触发不管过多少轮、投递多少设备，
- * fire_key 都是同一个值，跨端去重就靠它。
- */
 export function makeFireKey(entryId: string, firedAt: number): string {
   return `${entryId}:${firedAt}`;
 }
 
-/** 调度器到点时调用，只写 outbox，不投递 */
-export function enqueueDelivery(entryId: string, deviceId: string, fireKey: string, firedAt: Date) {
+export function enqueueDelivery(
+  userId: string, entryId: string, deviceId: string, fireKey: string, firedAt: Date,
+) {
   return run(
-    `INSERT INTO deliveries (entry_id, device_id, fire_key, state, fired_at)
-     VALUES ($1, $2, $3, 'pending', $4)
+    `INSERT INTO deliveries (user_id, entry_id, device_id, fire_key, state, fired_at)
+     VALUES ($1,$2,$3,$4,'pending',$5)
      ON CONFLICT (entry_id, device_id, fire_key) DO NOTHING`,
-    [entryId, deviceId, fireKey, firedAt],
+    [userId, entryId, deviceId, fireKey, firedAt],
   );
 }
 
-/** 一次拉一批待投递的。按创建顺序，保证同一批提醒按时间先后到 */
 export function takePending(limit = 200): Promise<PendingRow[]> {
   return rows<PendingRow>(
-    `SELECT id, entry_id, device_id, fire_key, transport, attempts
+    `SELECT id, user_id, entry_id, device_id, fire_key, transport, attempts
        FROM deliveries
       WHERE state = 'pending'
       ORDER BY fired_at ASC, id ASC
@@ -74,8 +71,6 @@ export async function markFailed(
       WHERE id = ANY($1::bigint[]) AND state = 'pending'`,
     [ids, error.slice(0, 300), transportName],
   );
-  // 明确失效的 token 没什么好重试的，标成 acked 之外的状态不好，
-  // 直接删掉这行，设备下次上线会被提醒重新注册 token
   if (fatal) {
     await run(
       `DELETE FROM deliveries WHERE id = ANY($1::bigint[]) AND state = 'pending'`,
@@ -84,10 +79,6 @@ export async function markFailed(
   }
 }
 
-/**
- * 投递一批。返回成功和失败的 id 列表。
- * 失败不抛异常，写进 last_error 供排查
- */
 export async function deliverBatch(batch: PendingRow[]): Promise<{
   ok: number; fail: number; byTransport: Record<string, number>;
 }> {
@@ -95,14 +86,21 @@ export async function deliverBatch(batch: PendingRow[]): Promise<{
   const failByTransport = new Map<string, { ids: number[]; error: string; fatal: boolean }>();
   const byTransport: Record<string, number> = {};
 
-  // 同一批里同一条目会出现多次，先按 id 去重取一次
-  const entryIds = [...new Set(batch.map((r) => r.entry_id))];
-  const entries = new Map((await getEntries(entryIds)).map((e) => [e.id, e]));
+  const byUser = new Map<string, string[]>();
+  for (const r of batch) {
+    if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
+    byUser.get(r.user_id)!.push(r.entry_id);
+  }
+  const entries = new Map<string, Entry>();
+  await Promise.all([...byUser].map(async ([userId, ids]) => {
+    const es = await getEntries([...new Set(ids)], userId);
+    for (const e of es) entries.set(e.id, e);
+  }));
+
   const transports = new Map(await Promise.all(
     [...new Set(batch.map((r) => r.device_id))].map(async (id) => [id, await deviceTransport(id)] as const),
   ));
 
-  // 按通道分组，同一条通道的设备并发发
   const byT = new Map<string, PendingRow[]>();
   for (const row of batch) {
     const name = transports.get(row.device_id) ?? row.transport ?? 'ws';
@@ -116,9 +114,7 @@ export async function deliverBatch(batch: PendingRow[]): Promise<{
 
     await Promise.all(rowsOfT.map(async (row) => {
       const entry = entries.get(row.entry_id);
-      if (!entry) return; // 条目被删了，外键级联会清掉这行
-
-      // 条目已经被别的设备确认了，没必要再投
+      if (!entry) return;
       if (entry.doneAt !== null) return;
 
       const r = await t.send(row.device_id, entry, entry.firedAt ?? Date.now());
@@ -145,7 +141,6 @@ export async function deliverBatch(batch: PendingRow[]): Promise<{
   return { ok, fail: failed, byTransport };
 }
 
-/** 设备通道缓存。设备数量是几十这个量级，超过上限就整体丢掉重建，不做 LRU */
 const TRANSPORT_CACHE_MAX = 500;
 let transportCache = new Map<string, string | null>();
 
@@ -158,12 +153,10 @@ async function deviceTransport(deviceId: string): Promise<string | null> {
   return r?.transport ?? null;
 }
 
-/** 设备改了通道或换了 token 之后要清缓存 */
 export function invalidateTransport(deviceId: string) {
   transportCache.delete(deviceId);
 }
 
-/** 给设备注册 push token。通道取这台设备自己的，不能信调用方会话里的 */
 export async function setPushToken(deviceId: string, transport: string | null, token: string | null) {
   await run(
     `UPDATE devices SET transport = COALESCE($2, transport), push_token = $3 WHERE id = $1`,
@@ -172,7 +165,6 @@ export async function setPushToken(deviceId: string, transport: string | null, t
   invalidateTransport(deviceId);
 }
 
-/** 放弃重试太久的，把机会留给设备上线时的 missed 补发 */
 export async function sweepStale() {
   const cutoff = new Date(Date.now() - env.DELIVERY_RETRY_MS);
   const n = await run(
@@ -185,9 +177,6 @@ export async function sweepStale() {
   if (n > 0) log.warn('outbox', `${n} 条投递重试超时，放弃并留给补发`);
 }
 
-/* ------------------------------------------------------- 跨端去重 */
-
-/** 有没有别的设备已经确认过这条提醒 */
 export async function ackedElsewhere(entryId: string, exceptDeviceId: string): Promise<string | null> {
   const r = await one<{ device_id: string }>(
     `SELECT device_id FROM deliveries
@@ -208,11 +197,7 @@ export async function markAcked(entryId: string, deviceId: string, action: strin
   );
 }
 
-/**
- * 设备上线时补发的漏掉的提醒。
- * 判据是 fire_key 对不上当前这次触发：说明已重排过，或重复规则已排了下一次
- */
-export async function findMissed(deviceId: string): Promise<Array<{
+export async function findMissed(userId: string, deviceId: string): Promise<Array<{
   entry: Entry; firedAt: number; lateByMs: number;
 }>> {
   const cutoff = new Date(Date.now() - env.MISSED_AFTER_MS);
@@ -220,21 +205,21 @@ export async function findMissed(deviceId: string): Promise<Array<{
     `SELECT d.id, d.entry_id, d.fire_key, d.fired_at
        FROM deliveries d
        JOIN entries e ON e.id = d.entry_id
-      WHERE d.device_id = $1
+      WHERE d.user_id = $1 AND d.device_id = $2
         AND d.state = 'pending'
-        AND d.fired_at <= $2
+        AND d.fired_at <= $3
         AND e.done_at IS NULL
         AND e.fired_at IS NOT NULL
       ORDER BY d.fired_at ASC
       LIMIT 50`,
-    [deviceId, cutoff],
+    [userId, deviceId, cutoff],
   );
 
   const out: Array<{ entry: Entry; firedAt: number; lateByMs: number }> = [];
   const stale: number[] = [];
 
   for (const r of pending) {
-    const entry = await getEntry(r.entry_id);
+    const entry = await getEntry(r.entry_id, userId);
     if (!entry) continue;
 
     const currentKey = makeFireKey(entry.id, entry.firedAt ?? 0);
@@ -252,7 +237,6 @@ export async function findMissed(deviceId: string): Promise<Array<{
   return out;
 }
 
-/** 清理已完成条目的投递记录，7 天后 */
 export async function purgeSettled() {
   await run(`DELETE FROM deliveries WHERE state = 'acked' AND acked_at < now() - interval '7 days'`);
 }

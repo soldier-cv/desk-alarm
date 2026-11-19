@@ -132,8 +132,6 @@ function startServer() {
       PGHOST: '127.0.0.1', PGPORT: '15432', PGDATABASE: DB,
       PGSCHEMA: SCHEMA,
       PGUSER: 'desk_alarm', PGPASSWORD: PG_PASS,
-      DESKALARM_PASSCODE: 'test-pass-123',
-      MCP_TOKEN: 'mcp-token-xyz',
       TICK_MS: '200', ROTATE_MS: '200',
       MISSED_AFTER_MS: '1500',
       DELIVERY_RETRY_MS: '3000', DELIVERY_MAX_ATTEMPTS: '2',
@@ -186,15 +184,34 @@ try {
   startServer();   // 库就位之后才起服务，否则连的是一个刚被 DROP 掉的库
   ok('服务能起来（连得上 Postgres）', await waitReady());
 
+  /* ------------------------------------------------------ 管理员初始化 */
+  console.log('\n管理员初始化');
+  const status = await api('/setup/status');
+  ok('全新库需要初始化', status.json.needed === true);
+  const badSetup = await api('/setup', { method: 'POST', body: {
+    username: 'admin', password: 'test-pass-123', confirmPassword: 'other',
+  } });
+  ok('两次密码不一致被拒', badSetup.status === 400);
+  const setup = await api('/setup', { method: 'POST', body: {
+    username: 'admin', password: 'test-pass-123', confirmPassword: 'test-pass-123',
+    machineId: 'machine-a',
+  } });
+  ok('初始化管理员成功', setup.status === 201 && !!setup.json.token);
+  ok('初始化顺带建了设备', !!setup.json.device?.id);
+  ok('初始化后不再需要 setup', (await api('/setup/status')).json.needed === false);
+  ok('重复初始化被拒', (await api('/setup', { method: 'POST', body: {
+    username: 'admin2', password: 'test-pass-123', confirmPassword: 'test-pass-123',
+  } })).status === 409);
+
   /* ---------------------------------------------------------- 鉴权 */
   console.log('\n鉴权');
-  const bad = await api('/auth/login', { method: 'POST', body: { passcode: 'wrong', deviceName: 'x', platform: 'windows' } });
-  ok('错误口令被拒 401', bad.status === 401);
+  const bad = await api('/auth/login', { method: 'POST', body: { username: 'admin', password: 'wrong', deviceName: 'x', platform: 'windows' } });
+  ok('错误密码被拒 401', bad.status === 401);
   ok('无 token 访问被拒 401', (await api('/entries')).status === 401);
 
-  const a = await api('/auth/login', { method: 'POST', body: { passcode: 'test-pass-123', deviceName: '我的笔记本', platform: 'windows' } });
+  const a = await api('/auth/login', { method: 'POST', body: { username: 'admin', password: 'test-pass-123', deviceName: '我的笔记本', platform: 'windows', machineId: 'machine-a' } });
   ok('笔记本登录成功', a.status === 200 && !!a.json.token);
-  const b = await api('/auth/login', { method: 'POST', body: { passcode: 'test-pass-123', deviceName: '工位台式机', platform: 'windows' } });
+  const b = await api('/auth/login', { method: 'POST', body: { username: 'admin', password: 'test-pass-123', deviceName: '工位台式机', platform: 'windows', machineId: 'machine-b' } });
   ok('台式机登录成功', b.status === 200 && !!b.json.token);
   const ta = a.json.token, tb = b.json.token, da = a.json.device.id, dbt = b.json.device.id;
   ok('两台设备 ID 不同', da !== dbt);
@@ -202,7 +219,7 @@ try {
 
   const phone = await api('/auth/login', {
     method: 'POST',
-    body: { passcode: 'test-pass-123', deviceName: '小米手机', platform: 'android', transport: 'fcm', pushToken: 'fake-token' },
+    body: { username: 'admin', password: 'test-pass-123', deviceName: '小米手机', platform: 'android', machineId: 'machine-phone', transport: 'fcm', pushToken: 'fake-token' },
   });
   ok('安卓设备可注册 fcm 通道', phone.json.device?.transport === 'fcm');
   ok('有 push token 就算配好了', phone.json.device?.pushReady === true);
@@ -442,18 +459,42 @@ try {
   ok('同一个幂等键只建一条', i1.json.entry.id === i2.json.entry.id);
 
   /* ------------------------------------------------------------ MCP */
-  console.log('\nMCP');
+  console.log('\nMCP / Agent 令牌');
+  const issued = await api('/agent-tokens', {
+    method: 'POST', token: ta,
+    body: { name: '冒烟测试 Agent', machineId: 'machine-a', scope: 'write' },
+  });
+  const AT = issued.json.plain;
+  ok('用户能签发 Agent 令牌', issued.status === 201 && !!AT);
+  ok('令牌只返回一次明文', !issued.json.token?.hash);
+  ok('令牌带 scope', issued.json.token?.scope === 'write');
   ok('MCP 无 token 被拒', (await mcp('list_entries', {}, null)).status === 401);
-  ok('MCP 独立 token 能用', (await mcp('list_entries', {}, 'mcp-token-xyz')).status === 200);
+  const readIssued = await api('/agent-tokens', {
+    method: 'POST', token: ta,
+    body: { name: '只读 Agent', scope: 'read' },
+  });
+  ok('只读令牌可签发且无需 machineId', readIssued.status === 201 && !!readIssued.json.plain);
+  ok('只读令牌不能写', (await mcp('create_entry', { text: '不该建成' }, readIssued.json.plain)).status === 403);
+  ok('登录 token 调不了 MCP', (await mcp('list_entries', {}, ta)).status === 403);
+  ok('Agent 令牌调不了主 API', (await api('/entries', { token: AT })).status === 403);
+  ok('Agent 令牌能用', (await mcp('list_entries', {}, AT)).status === 200);
+  const agentWho = await fetch(`${BASE.replace('/api/v1', '')}/api/agent/whoami`, {
+    headers: { authorization: `Bearer ${AT}` },
+  }).then((r) => r.json());
+  ok('Agent 专用 API 可访问', agentWho?.scope === 'write');
+  const agentFromLogin = await fetch(`${BASE.replace('/api/v1', '')}/api/agent/whoami`, {
+    headers: { authorization: `Bearer ${ta}` },
+  });
+  ok('登录 token 进不了 Agent API', agentFromLogin.status === 403);
 
-  const list = await fetch(`${MCP}/tools`, { headers: { authorization: 'Bearer mcp-token-xyz' } });
+  const list = await fetch(`${MCP}/tools`, { headers: { authorization: `Bearer ${AT}` } });
   const tools = (await list.json()).tools;
   ok('工具清单可取到', tools.length >= 8, `${tools.length} 个`);
   ok('有 today_digest', tools.some((t) => t.name === 'today_digest'));
   ok('有 plan_changes', tools.some((t) => t.name === 'plan_changes'));
   ok('有 apply_changes', tools.some((t) => t.name === 'apply_changes'));
 
-  const digest = await mcp('today_digest', {}, 'mcp-token-xyz');
+  const digest = await mcp('today_digest', {}, AT);
   ok('today_digest 可调', digest.status === 200);
   ok('digest 汇总非空', digest.json.result?.概览 !== undefined);
   ok('digest 含被反复忽略的条目', digest.json.result?.被反复忽略?.条目?.length >= 1,
@@ -463,11 +504,11 @@ try {
   // 硬规则：强提示必须有依据
   const badStrong = await mcp('create_entry', {
     text: 'agent 擅自建强提示', remindAt: Date.now() + 60_000, strength: 'strong',
-  }, 'mcp-token-xyz');
+  }, AT);
   ok('agent 建强提示被拦下', badStrong.status === 400, `status=${badStrong.status}`);
   ok('拦下时说明了要 reason', /reason/.test(badStrong.json.message ?? ''));
 
-  const okWeak = await mcp('create_entry', { text: 'agent 建的弱提示' }, 'mcp-token-xyz');
+  const okWeak = await mcp('create_entry', { text: 'agent 建的弱提示' }, AT);
   ok('agent 建弱提示成功', okWeak.status === 200);
   ok('默认就是 weak', okWeak.json.result?.entry?.strength === 'weak');
   ok('来源标为 mcp', okWeak.json.result?.entry?.source === 'mcp');
@@ -476,7 +517,7 @@ try {
   const okStrong = await mcp('create_entry', {
     text: '用户明确要求响铃的', remindAt: Date.now() + 60_000,
     strength: 'strong', reason: '用户原话：一定要提醒我',
-  }, 'mcp-token-xyz');
+  }, AT);
   ok('给了 reason 就放行强提示', okStrong.status === 200);
   ok('强提示也标来源 mcp', okStrong.json.result?.entry?.source === 'mcp');
 
@@ -487,25 +528,25 @@ try {
       { kind: 'snooze', id: target.id, to: Date.now() + 3600_000 },
       { kind: 'complete', id: target.id },
     ],
-  }, 'mcp-token-xyz');
+  }, AT);
   ok('plan_changes 可调', plan.status === 200);
   ok('plan 返回 plan_id', !!plan.json.result?.planId);
   ok('plan 给出预览', plan.json.result?.预览?.includes('推迟'));
   const beforeApply = (await api(`/entries/${target.id}`, { token: ta })).json.entry;
   ok('plan 阶段没有落库', beforeApply.remindAt === target.remindAt);
 
-  const badPlan = await mcp('apply_changes', { planId: 'not-a-real-plan' }, 'mcp-token-xyz');
+  const badPlan = await mcp('apply_changes', { planId: 'not-a-real-plan' }, AT);
   ok('伪造 plan_id 被拒', badPlan.status === 400);
 
-  const applied = await mcp('apply_changes', { planId: plan.json.result.planId }, 'mcp-token-xyz');
+  const applied = await mcp('apply_changes', { planId: plan.json.result.planId }, AT);
   ok('apply_changes 成功', applied.status === 200);
   const afterApply = (await api(`/entries/${target.id}`, { token: ta })).json.entry;
   ok('apply 之后才落库', afterApply.status === 'done' || afterApply.remindAt !== target.remindAt);
 
-  const reuse = await mcp('apply_changes', { planId: plan.json.result.planId }, 'mcp-token-xyz');
+  const reuse = await mcp('apply_changes', { planId: plan.json.result.planId }, AT);
   ok('同一个 plan 不能用第二次', reuse.status === 400, `status=${reuse.status}`);
 
-  const unknown = await mcp('no_such_tool', {}, 'mcp-token-xyz');
+  const unknown = await mcp('no_such_tool', {}, AT);
   ok('未知工具被拒', unknown.status === 400 || unknown.status === 500);
 
   /* -------------------------------------------------------- 空 body */
@@ -616,7 +657,7 @@ try {
   // sessions.device_id 是级联删除的，删了就把自己踢下线了
   const spare = await api('/auth/login', {
     method: 'POST',
-    body: { passcode: 'test-pass-123', deviceName: '备用机', platform: 'windows' },
+    body: { username: 'admin', password: 'test-pass-123', deviceName: '备用机', platform: 'windows', machineId: 'machine-spare' },
   });
   const dSpare = spare.json.device.id;
 

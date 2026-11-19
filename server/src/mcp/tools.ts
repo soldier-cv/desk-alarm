@@ -12,6 +12,7 @@ import {
   getEntry, listDismissals, listEntries, listNeglected, searchEntries, updateEntry,
 } from '../repo/entries.js';
 import { getSettings } from '../repo/settings.js';
+import { hub } from '../hub.js';
 import { listDevices } from '../repo/devices.js';
 
 export interface ToolDef {
@@ -27,6 +28,7 @@ const plans = new Map<string, {
   at: number;
   deviceName: string;
   summary: string;
+  userId: string;
 }>();
 
 export type Op =
@@ -170,9 +172,10 @@ export const TOOLS: ToolDef[] = [
 /* ---------------------------------------------------------------- 执行 */
 
 export interface McpCtx {
-  /** 这条写操作是谁发起的。会写到 entry.source */
   source: 'mcp';
   deviceName: string;
+  /** MCP session 绑定的用户。所有读写都按这个用户隔离 */
+  userId: string;
 }
 
 export async function callTool(
@@ -180,31 +183,32 @@ export async function callTool(
 ): Promise<unknown> {
   gcPlans();
   switch (name) {
-    case 'today_digest': return todayDigest(args.includeInbox !== false);
+    case 'today_digest': return todayDigest(ctx.userId, args.includeInbox !== false);
     case 'list_entries': return listEntries(
-      String(args.view ?? 'all') as Parameters<typeof listEntries>[0],
+      ctx.userId,
+      String(args.view ?? 'all') as Parameters<typeof listEntries>[1],
       Number(args.limit) || 50,
     );
-    case 'search_entries': return searchEntries(String(args.query ?? ''));
+    case 'search_entries': return searchEntries(ctx.userId, String(args.query ?? ''));
     case 'create_entry': return toolCreate(args, ctx);
-    case 'plan_changes': return toolPlan(args);
+    case 'plan_changes': return toolPlan(args, ctx);
     case 'apply_changes': return toolApply(args, ctx);
     case 'complete_entry': return toolComplete(String(args.id), ctx);
     case 'snooze_entry': return toolSnooze(args, ctx);
-    case 'device_health': return listDevices();
+    case 'device_health': return listDevices(ctx.userId);
     default: throw new Error(`未知工具 ${name}`);
   }
 }
 
 /* -------------------------------------------------------------- 各工具 */
 
-async function todayDigest(includeInbox: boolean) {
+async function todayDigest(userId: string, includeInbox: boolean) {
   const [today, inbox, neglected, settings, dismissals] = await Promise.all([
-    listEntries('today', 50),
-    includeInbox ? listEntries('inbox', 20) : Promise.resolve([]),
-    listNeglected(2),
-    getSettings(),
-    listDismissals(10),
+    listEntries(userId, 'today', 50),
+    includeInbox ? listEntries(userId, 'inbox', 20) : Promise.resolve([]),
+    listNeglected(userId, 2),
+    getSettings(userId),
+    listDismissals(userId, 10),
   ]);
 
   const overdue = today.filter((e) => e.status === 'missed');
@@ -279,10 +283,11 @@ async function toolCreate(args: Record<string, unknown>, ctx: McpCtx) {
   };
   if (!req.text.trim()) throw new Error('text 不能为空');
 
-  const entry = await createEntry(req, {
+  const entry = await createEntry(ctx.userId, req, {
     source: 'mcp',
     idempotencyKey: args.idempotencyKey ? `mcp:${args.idempotencyKey}` : undefined,
   });
+  hub.broadcastToUser(ctx.userId, { t: 'entry.created', entry });
   return {
     entry,
     说明: strength === 'weak'
@@ -292,7 +297,7 @@ async function toolCreate(args: Record<string, unknown>, ctx: McpCtx) {
   };
 }
 
-async function toolPlan(args: Record<string, unknown>) {
+async function toolPlan(args: Record<string, unknown>, ctx: McpCtx) {
   const ops = (args.operations as Op[]) ?? [];
   if (ops.length === 0) throw new Error('operations 不能为空');
   if (ops.length > 50) throw new Error('一次最多 50 个操作，别一把梭');
@@ -302,7 +307,7 @@ async function toolPlan(args: Record<string, unknown>) {
 
   for (const [i, op] of ops.entries()) {
     try {
-      changes.push(await describeOp(op, i));
+      changes.push(await describeOp(op, i, ctx.userId));
     } catch (e) {
       warnings.push(`第 ${i + 1} 个操作无法解析: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -314,7 +319,7 @@ async function toolPlan(args: Record<string, unknown>) {
     .map((c) => `  ${c.动作} ${c.目标}`)
     .join('\n');
 
-  plans.set(planId, { ops, at: Date.now(), deviceName: '', summary });
+  plans.set(planId, { ops, at: Date.now(), deviceName: '', summary, userId: ctx.userId });
 
   return {
     planId,
@@ -325,7 +330,7 @@ async function toolPlan(args: Record<string, unknown>) {
   };
 }
 
-async function describeOp(op: Op, i: number): Promise<Record<string, unknown>> {
+async function describeOp(op: Op, i: number, userId: string): Promise<Record<string, unknown>> {
   const n = i + 1;
   switch (op.kind) {
     case 'create': {
@@ -345,7 +350,7 @@ async function describeOp(op: Op, i: number): Promise<Record<string, unknown>> {
       };
     }
     case 'snooze': {
-      const e = await getEntry(op.id);
+      const e = await getEntry(op.id, userId);
       if (!e) throw new Error(`找不到条目 ${op.id}`);
       return {
         序号: n, 动作: '推迟', 目标: e.text,
@@ -356,17 +361,17 @@ async function describeOp(op: Op, i: number): Promise<Record<string, unknown>> {
       };
     }
     case 'complete': {
-      const e = await getEntry(op.id);
+      const e = await getEntry(op.id, userId);
       if (!e) throw new Error(`找不到条目 ${op.id}`);
       return { 序号: n, 动作: '完成', 目标: e.text, 详情: { 当前状态: e.status } };
     }
     case 'dismiss': {
-      const e = await getEntry(op.id);
+      const e = await getEntry(op.id, userId);
       if (!e) throw new Error(`找不到条目 ${op.id}`);
       return { 序号: n, 动作: '忽略', 目标: e.text, 详情: { 理由: op.reason ?? '(没写)' } };
     }
     case 'update': {
-      const e = await getEntry(op.id);
+      const e = await getEntry(op.id, userId);
       if (!e) throw new Error(`找不到条目 ${op.id}`);
       return {
         序号: n, 动作: '改设置', 目标: e.text,
@@ -374,7 +379,7 @@ async function describeOp(op: Op, i: number): Promise<Record<string, unknown>> {
       };
     }
     case 'delete': {
-      const e = await getEntry(op.id);
+      const e = await getEntry(op.id, userId);
       if (!e) throw new Error(`找不到条目 ${op.id}`);
       return { 序号: n, 动作: '删除', 目标: e.text, 详情: { 已推迟次数: e.snoozeCount, 忽略次数: e.dismissCount } };
     }
@@ -387,6 +392,7 @@ async function toolApply(args: Record<string, unknown>, ctx: McpCtx) {
   const planId = String(args.planId ?? '');
   const plan = plans.get(planId);
   if (!plan) throw new Error('计划不存在或已过期（有效期 10 分钟），重新 plan_changes');
+  if (plan.userId !== ctx.userId) throw new Error('这个计划属于其它用户，不能执行');
   plans.delete(planId); // 一次计划只能执行一次，避免 agent 重试造出重复
 
   const done: Array<Record<string, unknown>> = [];
@@ -396,42 +402,48 @@ async function toolApply(args: Record<string, unknown>, ctx: McpCtx) {
     try {
       switch (op.kind) {
         case 'create': {
-          const e = await createEntry({
+          const e = await createEntry(ctx.userId, {
             text: op.text, remindAt: op.remindAt,
             strength: op.strength ?? 'weak',
             repeat: (op.repeat as CreateEntryRequest['repeat']) ?? 'none',
             bypassQuiet: op.bypassQuiet ?? false,
             devices: op.devices,
           }, { source: 'mcp' });
+          hub.broadcastToUser(ctx.userId, { t: 'entry.created', entry: e });
           done.push({ 动作: '新建', id: e.id, text: e.text, 提醒: e.remindAt, 强度: e.strength });
           break;
         }
         case 'snooze': {
-          const e = await ackEntry(op.id, 'snooze', ctx.deviceName, op.to);
+          const e = await ackEntry(op.id, ctx.userId, 'snooze', ctx.deviceName, op.to);
+          hub.broadcastToUser(ctx.userId, { t: 'entry.updated', entry: e });
           done.push({ 动作: '推迟', id: e.id, text: e.text, 新的提醒时间: e.remindAt });
           break;
         }
         case 'complete': {
-          const e = await ackEntry(op.id, 'done', ctx.deviceName);
+          const e = await ackEntry(op.id, ctx.userId, 'done', ctx.deviceName);
+          hub.broadcastToUser(ctx.userId, { t: 'entry.updated', entry: e });
           done.push({ 动作: '完成', id: e.id, text: e.text });
           break;
         }
         case 'dismiss': {
-          const r = await dismissEntry(op.id, 'mcp', ctx.deviceName, op.reason);
+          const r = await dismissEntry(op.id, ctx.userId, 'mcp', ctx.deviceName, op.reason);
+          hub.broadcastToUser(ctx.userId, { t: 'entry.updated', entry: r.entry });
           done.push({ 动作: '忽略', id: r.entry.id, text: r.entry.text, 累计: r.dismissCount, 建议: r.suggestion });
           break;
         }
         case 'update': {
-          const cur = await getEntry(op.id);
+          const cur = await getEntry(op.id, ctx.userId);
           if (!cur) throw new Error(`找不到条目 ${op.id}`);
-          const e = await updateEntry(op.id, {
+          const e = await updateEntry(op.id, ctx.userId, {
             strength: op.strength, bypassQuiet: op.bypassQuiet, version: cur.version,
           });
+          hub.broadcastToUser(ctx.userId, { t: 'entry.updated', entry: e });
           done.push({ 动作: '改设置', id: e.id, text: e.text, 强度: e.strength });
           break;
         }
         case 'delete': {
-          await deleteEntry(op.id);
+          await deleteEntry(op.id, ctx.userId);
+          hub.broadcastToUser(ctx.userId, { t: 'entry.deleted', entryId: op.id });
           done.push({ 动作: '删除', id: op.id });
           break;
         }
@@ -445,20 +457,22 @@ async function toolApply(args: Record<string, unknown>, ctx: McpCtx) {
 }
 
 async function toolComplete(id: string, ctx: McpCtx) {
-  const entry = await ackEntry(id, 'done', ctx.deviceName);
+  const entry = await ackEntry(id, ctx.userId, 'done', ctx.deviceName);
+  hub.broadcastToUser(ctx.userId, { t: 'entry.updated', entry });
   return { entry, 说明: '其它设备上正在响的会立刻停' };
 }
 
 async function toolSnooze(args: Record<string, unknown>, ctx: McpCtx) {
   const id = String(args.id ?? '');
-  const cur = await getEntry(id);
+  const cur = await getEntry(id, ctx.userId);
   if (!cur) throw new Error(`找不到条目 ${id}`);
 
   const to = typeof args.to === 'number'
     ? args.to
     : Math.max(cur.remindAt ?? 0, Date.now()) + Number(args.minutes ?? 10) * 60_000;
 
-  const entry = await ackEntry(id, 'snooze', ctx.deviceName, to);
+  const entry = await ackEntry(id, ctx.userId, 'snooze', ctx.deviceName, to);
+  hub.broadcastToUser(ctx.userId, { t: 'entry.updated', entry });
   return { entry, 新的提醒时间: new Date(entry.remindAt!).toLocaleString('zh-CN') };
 }
 

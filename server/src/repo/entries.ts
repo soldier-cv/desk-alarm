@@ -7,6 +7,7 @@ import { makeFireKey, enqueueDelivery } from './deliveries.js';
 
 interface Row {
   id: string;
+  user_id: string;
   text: string;
   kind: string;
   url: string | null;
@@ -49,9 +50,9 @@ function toEntry(r: Row, devices: string[]): Entry {
     remindAt: toMs(r.remind_at),
     repeat: r.repeat as RepeatRule,
     status: deriveStatus(r),
-    strength: (r.strength as Strength) ?? 'strong',
+    strength: (r.strength as Strength) ?? 'weak',
     bypassQuiet: !!r.bypass_quiet,
-    hard: !!r.bypass_quiet, // 兼容旧客户端的字段名
+    hard: !!r.bypass_quiet,
     firedAt: toMs(r.fired_at),
     doneAt: toMs(r.done_at),
     doneDevice: r.done_device,
@@ -65,7 +66,6 @@ function toEntry(r: Row, devices: string[]): Entry {
   };
 }
 
-/** 没有 scope 行 = 推给全部设备，对外统一表达成 ['*'] */
 async function targetsOf(entryId: string): Promise<string[]> {
   const r = await rows<{ device_id: string }>(
     'SELECT device_id FROM entry_devices WHERE entry_id = $1 ORDER BY device_id', [entryId],
@@ -73,7 +73,6 @@ async function targetsOf(entryId: string): Promise<string[]> {
   return r.length === 0 ? ['*'] : r.map((x) => x.device_id);
 }
 
-/** 批量取推送范围，避免列表页 N+1 */
 async function targetsBatch(ids: string[]): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
   if (ids.length === 0) return map;
@@ -93,15 +92,17 @@ async function toEntries(rs: Row[]): Promise<Entry[]> {
   return rs.map((r) => toEntry(r, map.get(r.id) ?? ['*']));
 }
 
-export async function getEntry(id: string): Promise<Entry | undefined> {
-  const r = await one<Row>('SELECT * FROM entries WHERE id = $1', [id]);
+export async function getEntry(id: string, userId: string): Promise<Entry | undefined> {
+  const r = await one<Row>('SELECT * FROM entries WHERE id = $1 AND user_id = $2', [id, userId]);
   if (!r) return undefined;
   return toEntry(r, await targetsOf(id));
 }
 
-export async function getEntries(ids: string[]): Promise<Entry[]> {
+export async function getEntries(ids: string[], userId: string): Promise<Entry[]> {
   if (ids.length === 0) return [];
-  return toEntries(await rows<Row>('SELECT * FROM entries WHERE id = ANY($1::text[])', [ids]));
+  return toEntries(await rows<Row>(
+    'SELECT * FROM entries WHERE id = ANY($1::text[]) AND user_id = $2', [ids, userId],
+  ));
 }
 
 /* ---------------------------------------------------------------- 读 */
@@ -109,37 +110,34 @@ export async function getEntries(ids: string[]): Promise<Entry[]> {
 export type ListView = 'today' | 'upcoming' | 'inbox' | 'all' | 'done';
 
 export async function listEntries(
-  view: ListView = 'all', limit?: number,
+  userId: string, view: ListView = 'all', limit?: number,
 ): Promise<Entry[]> {
   const cap = Math.min(limit ?? 200, 1000);
-  // 按本机时区算「明天零点」。进程虽然是 UTC，但用户看的是自己墙上的钟
   const tomorrow = new Date();
   tomorrow.setHours(0, 0, 0, 0);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const weekEnd = new Date(tomorrow.getTime() + 7 * 86400_000);
 
   let where: string;
-  let params: unknown[] = [];
+  let params: unknown[] = [userId];
 
   switch (view) {
     case 'today':
-      // 只用 remind_at < 明天 来切，已逾期的条目时间早就过去了，漏掉分支就会凭空消失
-      where = `done_at IS NULL AND (remind_at IS NULL OR remind_at < $1)`;
-      params = [tomorrow];
+      where = `user_id = $1 AND done_at IS NULL AND (remind_at IS NULL OR remind_at < $2)`;
+      params.push(tomorrow);
       break;
     case 'upcoming':
-      // 不能排除 fired_at：逾期未处理也是「即将到来」里该看见的东西
-      where = 'done_at IS NULL AND remind_at >= $1 AND remind_at <= $2';
-      params = [tomorrow, weekEnd];
+      where = 'user_id = $1 AND done_at IS NULL AND remind_at >= $2 AND remind_at <= $3';
+      params.push(tomorrow, weekEnd);
       break;
     case 'inbox':
-      where = 'done_at IS NULL AND remind_at IS NULL';
+      where = 'user_id = $1 AND done_at IS NULL AND remind_at IS NULL';
       break;
     case 'done':
-      where = 'done_at IS NOT NULL';
+      where = 'user_id = $1 AND done_at IS NOT NULL';
       break;
     default:
-      where = 'done_at IS NULL';
+      where = 'user_id = $1 AND done_at IS NULL';
   }
 
   params.push(cap);
@@ -152,16 +150,15 @@ export async function listEntries(
   return toEntries(rs);
 }
 
-export async function searchEntries(q: string, limit = 30): Promise<Entry[]> {
+export async function searchEntries(userId: string, q: string, limit = 30): Promise<Entry[]> {
   const term = q.trim();
   if (!term) return [];
-  // 中文没有分词，GIN 的 tsvector 索引命中不了，直接用 ILIKE 扫
   const rs = await rows<Row>(
     `SELECT * FROM entries
-      WHERE done_at IS NULL AND (text ILIKE $1 OR note ILIKE $1 OR path ILIKE $1)
+      WHERE user_id = $1 AND done_at IS NULL AND (text ILIKE $2 OR note ILIKE $2 OR path ILIKE $2)
       ORDER BY remind_at NULLS LAST, created_at DESC
-      LIMIT $2`,
-    [`%${term}%`, Math.min(limit, 200)],
+      LIMIT $3`,
+    [userId, `%${term}%`, Math.min(limit, 200)],
   );
   return toEntries(rs);
 }
@@ -170,11 +167,9 @@ export async function searchEntries(q: string, limit = 30): Promise<Entry[]> {
 
 function toEpoch(v: number | string | null | undefined): Date | null {
   if (v === null || v === undefined || v === '') return null;
-  const ms = toDt(v);
-  return ms;
+  return toDt(v);
 }
 
-/** 粘贴链接识别成 link，Windows 路径识别成 path */
 function guessKind(text: string): EntryKind {
   const t = text.trim();
   if (/^(https?:\/\/|www\.)\S+/i.test(t)) return 'link';
@@ -182,31 +177,30 @@ function guessKind(text: string): EntryKind {
   return 'text';
 }
 
-export async function createEntry(req: CreateEntryRequest, opts: {
+export async function createEntry(userId: string, req: CreateEntryRequest, opts: {
   source?: 'app' | 'mcp';
-  /** 幂等键。agent 重试同一个键不会造出两条 */
   idempotencyKey?: string;
 } = {}): Promise<Entry> {
   if (opts.idempotencyKey) {
     const hit = await one<{ entry_id: string }>(
-      'SELECT entry_id FROM idempotency WHERE key = $1', [opts.idempotencyKey],
+      'SELECT entry_id FROM idempotency WHERE user_id = $1 AND key = $2',
+      [userId, opts.idempotencyKey],
     );
-    if (hit) return (await getEntry(hit.entry_id))!;
+    if (hit) return (await getEntry(hit.entry_id, userId))!;
   }
 
   const remindAt = toEpoch(req.remindAt);
   const kind: EntryKind = req.kind ?? guessKind(req.text);
-  // 给了时间不等于强提示。强不强由调用方按关键词判过再传，没传就是 weak
   const strength: Strength = req.strength === 'strong' ? 'strong' : 'weak';
   const text = req.text.trim();
 
   const id = await tx(async (q) => {
     const r = await q.one<{ id: string }>(
       `INSERT INTO entries
-         (text, kind, url, path, note, remind_at, repeat, strength, bypass_quiet, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         (user_id, text, kind, url, path, note, remind_at, repeat, strength, bypass_quiet, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        RETURNING id`,
-      [text, kind, req.url ?? null, req.path ?? null,
+      [userId, text, kind, req.url ?? null, req.path ?? null,
        req.note?.trim() || null, remindAt, req.repeat ?? 'none', strength,
        req.bypassQuiet ? true : false, (opts.source ?? 'app') as 'app' | 'mcp'],
     );
@@ -214,7 +208,10 @@ export async function createEntry(req: CreateEntryRequest, opts: {
 
     if (req.devices && req.devices.length > 0 && !req.devices.includes('*')) {
       for (const deviceId of req.devices) {
-        // 逐个插。直接把数组当一个参数传进去会插出一行 device_id='[a,b]'
+        const owned = await q.one<{ id: string }>(
+          'SELECT id FROM devices WHERE id = $1 AND user_id = $2', [deviceId, userId],
+        );
+        if (!owned) continue;
         await q.run(
           `INSERT INTO entry_devices (entry_id, device_id) VALUES ($1, $2)
            ON CONFLICT DO NOTHING`,
@@ -223,37 +220,37 @@ export async function createEntry(req: CreateEntryRequest, opts: {
       }
     }
     if (opts.idempotencyKey) {
-      await q.run('INSERT INTO idempotency (key, entry_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [opts.idempotencyKey, r.id]);
+      await q.run(
+        'INSERT INTO idempotency (user_id, key, entry_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+        [userId, opts.idempotencyKey, r.id],
+      );
     }
     return r.id;
   });
 
-  return (await getEntry(id))!;
+  return (await getEntry(id, userId))!;
 }
 
 export class VersionConflict extends Error {
   constructor(public current: Entry) { super('条目已被其它设备修改'); }
 }
 
-export async function updateEntry(id: string, req: UpdateEntryRequest): Promise<Entry> {
-  const cur = await getEntry(id);
+export async function updateEntry(id: string, userId: string, req: UpdateEntryRequest): Promise<Entry> {
+  const cur = await getEntry(id, userId);
   if (!cur) throw new Error('NOT_FOUND');
   if (req.version !== undefined && req.version !== cur.version) {
     throw new VersionConflict(cur);
   }
 
   const remindAt = 'remindAt' in req ? toEpoch(req.remindAt) : toDt(cur.remindAt);
-  // 改了时间就当没响过，重新排进调度队列
   const timeChanged = (toMs(remindAt) ?? null) !== cur.remindAt;
 
   await tx(async (q) => {
-    // 版本条件写进 WHERE：上面那次读和这次写之间，别的设备可能已经改过
     const n = await q.run(
       `UPDATE entries SET
          text = $2, note = $3, remind_at = $4, repeat = $5, strength = $6,
          bypass_quiet = $7, fired_at = $8, version = version + 1, updated_at = now()
-       WHERE id = $1 AND version = $9`,
+       WHERE id = $1 AND user_id = $9 AND version = $10`,
       [id,
        req.text?.trim() ?? cur.text,
        'note' in req ? (req.note?.trim() || null) : cur.note,
@@ -262,6 +259,7 @@ export async function updateEntry(id: string, req: UpdateEntryRequest): Promise<
        req.strength ?? cur.strength,
        req.bypassQuiet === undefined ? cur.bypassQuiet : req.bypassQuiet,
        timeChanged ? null : toDt(cur.firedAt),
+       userId,
        req.version ?? cur.version],
     );
     if (n === 0) throw new Error('VERSION_RACE');
@@ -270,6 +268,10 @@ export async function updateEntry(id: string, req: UpdateEntryRequest): Promise<
       await q.run('DELETE FROM entry_devices WHERE entry_id = $1', [id]);
       if (req.devices.length > 0 && !req.devices.includes('*')) {
         for (const d of req.devices) {
+          const owned = await q.one<{ id: string }>(
+            'SELECT id FROM devices WHERE id = $1 AND user_id = $2', [d, userId],
+          );
+          if (!owned) continue;
           await q.run(
             'INSERT INTO entry_devices (entry_id, device_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
             [id, d],
@@ -279,86 +281,79 @@ export async function updateEntry(id: string, req: UpdateEntryRequest): Promise<
     }
   }).catch(async (err) => {
     if (err instanceof Error && err.message === 'VERSION_RACE') {
-      const now = await getEntry(id);
+      const now = await getEntry(id, userId);
       if (!now) throw new Error('NOT_FOUND');
       throw new VersionConflict(now);
     }
     throw err;
   });
 
-  return (await getEntry(id))!;
+  return (await getEntry(id, userId))!;
 }
 
-export async function deleteEntry(id: string) {
-  await run('DELETE FROM entries WHERE id = $1', [id]);
+export async function deleteEntry(id: string, userId: string) {
+  await run('DELETE FROM entries WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
-/**
- * 确认。done / snooze 改条目，silence 只压掉这一次。幂等。
- * 返回值必须事务提交后回读：事务里走连接池读到的是提交前的旧值
- */
 export async function ackEntry(
-  id: string, action: AckAction, deviceName: string, snoozeToMs?: number,
+  id: string, userId: string, action: AckAction, deviceName: string, snoozeToMs?: number,
 ): Promise<Entry> {
   await tx(async (q) => {
-    const cur = await getEntry(id);
+    const cur = await getEntry(id, userId);
     if (!cur) throw new Error('NOT_FOUND');
 
     if (action === 'done') {
       if (cur.doneAt === null) {
         await q.run(
-          `UPDATE entries SET done_at = now(), done_device = $2,
-             version = version + 1, updated_at = now() WHERE id = $1`,
-          [id, deviceName],
+          `UPDATE entries SET done_at = now(), done_device = $3,
+             version = version + 1, updated_at = now() WHERE id = $1 AND user_id = $2`,
+          [id, userId, deviceName],
         );
       }
     } else if (action === 'snooze' && snoozeToMs) {
       await q.run(
-        `UPDATE entries SET remind_at = $2, fired_at = NULL,
+        `UPDATE entries SET remind_at = $3, fired_at = NULL,
            snooze_count = snooze_count + 1, version = version + 1, updated_at = now()
-         WHERE id = $1`,
-        [id, toDt(snoozeToMs)],
+         WHERE id = $1 AND user_id = $2`,
+        [id, userId, toDt(snoozeToMs)],
       );
     }
-    // silence 不动条目本身
   });
 
-  // 提交之后再读，拿到的一定是最终状态
-  const after = await getEntry(id);
+  const after = await getEntry(id, userId);
   if (!after) throw new Error('NOT_FOUND');
   return after;
 }
 
-/* ------------------------------------------------------- 弱提示忽略 */
-
 export async function dismissEntry(
-  id: string, deviceId: string, deviceName: string, reason?: string,
+  id: string, userId: string, deviceId: string, deviceName: string, reason?: string,
 ): Promise<{ entry: Entry; dismissCount: number; suggestion: string | null }> {
   const result = await tx(async (q) => {
-    const cur = await getEntry(id);
+    const cur = await getEntry(id, userId);
     if (!cur) throw new Error('NOT_FOUND');
 
     await q.run(
-      `INSERT INTO dismissals (entry_id, device_id, device_name, reason) VALUES ($1,$2,$3,$4)`,
-      [id, deviceId, deviceName, reason?.trim() || null],
+      `INSERT INTO dismissals (user_id, entry_id, device_id, device_name, reason)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [userId, id, deviceId, deviceName, reason?.trim() || null],
     );
     const n = (await q.scalar<number>(
-      'UPDATE entries SET dismiss_count = dismiss_count + 1, updated_at = now() WHERE id = $1 RETURNING dismiss_count',
-      [id],
+      `UPDATE entries SET dismiss_count = dismiss_count + 1, updated_at = now()
+        WHERE id = $1 AND user_id = $2 RETURNING dismiss_count`,
+      [id, userId],
     )) ?? 0;
 
-    // 忽略 2 次自动降级为弱提示。系统在替用户学习，
-    // 不是每次都等用户自己去改
     if (n >= 2 && cur.strength === 'strong') {
       await q.run(
-        `UPDATE entries SET strength = 'weak', version = version + 1, updated_at = now() WHERE id = $1`,
-        [id],
+        `UPDATE entries SET strength = 'weak', version = version + 1, updated_at = now()
+          WHERE id = $1 AND user_id = $2`,
+        [id, userId],
       );
     }
     return n;
   });
 
-  const entry = (await getEntry(id))!;
+  const entry = (await getEntry(id, userId))!;
   return {
     entry,
     dismissCount: result,
@@ -370,16 +365,16 @@ export async function dismissEntry(
   };
 }
 
-export async function listDismissals(limit = 100): Promise<Array<Dismissal & { text: string }>> {
+export async function listDismissals(userId: string, limit = 100): Promise<Array<Dismissal & { text: string }>> {
   const rs = await rows<{
     id: number; entry_id: string; device_id: string; device_name: string;
     reason: string | null; at: Date; text: string;
   }>(
     `SELECT d.id, d.entry_id, d.device_id, d.device_name, d.reason, d.at, e.text
        FROM dismissals d JOIN entries e ON e.id = d.entry_id
-      WHERE e.done_at IS NULL
-      ORDER BY d.at DESC LIMIT $1`,
-    [Math.min(limit, 500)],
+      WHERE d.user_id = $1 AND e.done_at IS NULL
+      ORDER BY d.at DESC LIMIT $2`,
+    [userId, Math.min(limit, 500)],
   );
   return rs.map((r) => ({
     id: r.id,
@@ -392,13 +387,12 @@ export async function listDismissals(limit = 100): Promise<Array<Dismissal & { t
   }));
 }
 
-/** 被反复忽略的条目。这个视图是「强弱提示」整套设计真正的收益点 */
-export async function listNeglected(minCount = 2): Promise<Entry[]> {
+export async function listNeglected(userId: string, minCount = 2): Promise<Entry[]> {
   const rs = await rows<Row>(
     `SELECT * FROM entries
-      WHERE done_at IS NULL AND dismiss_count >= $1
+      WHERE user_id = $1 AND done_at IS NULL AND dismiss_count >= $2
       ORDER BY dismiss_count DESC, updated_at DESC LIMIT 50`,
-    [minCount],
+    [userId, minCount],
   );
   return toEntries(rs);
 }
@@ -407,6 +401,7 @@ export async function listNeglected(minCount = 2): Promise<Entry[]> {
 
 export interface DueEntry {
   entry: Entry;
+  userId: string;
   targetIds: string[];
 }
 
@@ -418,33 +413,33 @@ export async function findDue(limit = 50): Promise<DueEntry[]> {
     [limit],
   );
   const entries = await toEntries(rs);
-  return Promise.all(entries.map(async (entry) => ({
-    entry,
-    targetIds: await resolveTargets(entry.id),
-  })));
+  return Promise.all(entries.map(async (entry) => {
+    const row = rs.find((r) => r.id === entry.id)!;
+    return {
+      entry,
+      userId: row.user_id,
+      targetIds: await resolveTargets(entry.id, row.user_id),
+    };
+  }));
 }
 
-async function resolveTargets(entryId: string): Promise<string[]> {
+async function resolveTargets(entryId: string, userId: string): Promise<string[]> {
   const scoped = await rows<{ device_id: string }>(
     `SELECT d.device_id FROM entry_devices d
        JOIN devices dv ON dv.id = d.device_id
-      WHERE d.entry_id = $1 AND dv.push_enabled`,
-    [entryId],
+      WHERE d.entry_id = $1 AND dv.user_id = $2 AND dv.push_enabled`,
+    [entryId, userId],
   );
   if (scoped.length > 0) return scoped.map((r) => r.device_id);
 
-  // 没有指定范围 = 全部开了推送的设备
   const all = await rows<{ id: string }>(
-    'SELECT id FROM devices WHERE push_enabled ORDER BY id',
+    'SELECT id FROM devices WHERE user_id = $1 AND push_enabled ORDER BY id',
+    [userId],
   );
   return all.map((r) => r.id);
 }
 
-/**
- * 写入 fired_at。全系统唯一决定「这条提醒响了」的地方。
- * 投递 outbox 同事务写入，两者不可能只成功一半
- */
-export async function markFired(entry: Entry): Promise<{ entry: Entry; repeat: RepeatRule }> {
+export async function markFired(entry: Entry, userId: string): Promise<{ entry: Entry; repeat: RepeatRule }> {
   const fireAt = new Date();
   let nextRemind: Date | null = toDt(entry.remindAt);
 
@@ -456,35 +451,33 @@ export async function markFired(entry: Entry): Promise<{ entry: Entry; repeat: R
     if (nextRemind && entry.repeat !== 'none') {
       await q.run(
         `UPDATE entries SET fired_at = $2, remind_at = $3,
-           version = version + 1, updated_at = now() WHERE id = $1`,
-        [entry.id, fireAt, nextRemind],
+           version = version + 1, updated_at = now()
+         WHERE id = $1 AND user_id = $4`,
+        [entry.id, fireAt, nextRemind, userId],
       );
     } else {
       await q.run(
-        `UPDATE entries SET fired_at = $2, version = version + 1, updated_at = now() WHERE id = $1`,
-        [entry.id, fireAt],
+        `UPDATE entries SET fired_at = $2, version = version + 1, updated_at = now()
+          WHERE id = $1 AND user_id = $3`,
+        [entry.id, fireAt, userId],
       );
     }
 
-    const ids = await resolveTargets(entry.id);
+    const ids = await resolveTargets(entry.id, userId);
     const key = makeFireKey(entry.id, fireAt.getTime());
     for (const deviceId of ids) {
       await q.run(
-        `INSERT INTO deliveries (entry_id, device_id, fire_key, state, fired_at)
-         VALUES ($1,$2,$3,'pending',$4)
+        `INSERT INTO deliveries (user_id, entry_id, device_id, fire_key, state, fired_at)
+         VALUES ($1,$2,$3,$4,'pending',$5)
          ON CONFLICT (entry_id, device_id, fire_key) DO NOTHING`,
-        [entry.id, deviceId, key, fireAt],
+        [userId, entry.id, deviceId, key, fireAt],
       );
     }
   });
 
-  return { entry: (await getEntry(entry.id))!, repeat: entry.repeat };
+  return { entry: (await getEntry(entry.id, userId))!, repeat: entry.repeat };
 }
 
-/**
- * 算下一次。月末要钳位：1 月 31 日加一个月应该落到 2 月最后一天，
- * 不能让 setMonth 溢出到 3 月 3 号
- */
 export function nextOccurrence(from: number, rule: RepeatRule): Date {
   const d = new Date(from);
   switch (rule) {

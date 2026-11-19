@@ -5,9 +5,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import {
-  ApiError, Realtime, api, clearToken, dayLabel, hhmm, hostOf, lateBy, loadConfig,
-  normalizeBaseUrl, parseInput, probeServer, saveConfig, serverNow, switchServer, urgencyOf,
-  type AckAction, type Device, type Dismissal, type Entry, type ServerMessage,
+  ApiError, Realtime, api, clearToken, dayLabel, getMachineId, getPlatform, hhmm, hostOf,
+  lateBy, loadConfig, normalizeBaseUrl, parseInput, probeServer, saveConfig,
+  serverNow, switchServer, urgencyOf,
+  type AckAction, type AgentScope, type Device, type Dismissal, type Entry, type Overview, type ServerMessage,
 } from '../api';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
@@ -68,7 +69,7 @@ function on<T>(name: string, fn: (payload: T) => void) {
 
 /* ------------------------------------------------------------ 状态 */
 
-type View = 'today' | 'upcoming' | 'inbox' | 'all' | 'done' | 'dismissed' | 'neglected';
+type View = 'today' | 'upcoming' | 'inbox' | 'all' | 'done' | 'dismissed' | 'neglected' | 'dashboard' | 'tokens';
 
 const VIEWS: Record<View, { title: string; sub: string }> = {
   today: { title: '今天', sub: '' },
@@ -78,6 +79,8 @@ const VIEWS: Record<View, { title: string; sub: string }> = {
   done: { title: '已完成', sub: '保留 7 天后自动清理' },
   dismissed: { title: '已忽略', sub: '弱提示里点了「忽略」的记录，连带你写的理由' },
   neglected: { title: '老是被忽略', sub: '这些提醒可能该删了，或者降成弱提示' },
+  dashboard: { title: '开发看板', sub: '服务端总览，仅管理员可见，每 5 秒刷新' },
+  tokens: { title: 'Agent 令牌', sub: '给 MCP / Agent 用的访问令牌，每个用户都能签发自己的' },
 };
 
 const state = {
@@ -89,8 +92,13 @@ const state = {
 };
 
 let rt: Realtime | null = null;
+
 /** 本地直接改过之后，服务端回来的旧版本不覆盖输入框，谁也不希望打字打到一半被清掉 */
 let editingLocal = false;
+
+/** 启动时探测一次；桌面专属的按钮、设备行和自启项都看它 */
+let platform: 'web' | 'windows' | 'macos' | 'linux' | 'android' = 'web';
+const isDesktop = () => platform === 'windows' || platform === 'macos' || platform === 'linux';
 
 /* ------------------------------------------------------- 强提醒链路 */
 
@@ -129,70 +137,83 @@ const alarm = new AlarmController({
 
 function renderLogin() {
   const cfg = loadConfig();
+  // Web 端没有原生 machine-id，也不建设备行；地址默认就是当前站点，别让用户自己拼
+  const web = !hasTauri();
+  const baseValue = cfg.baseUrl || (web ? location.origin : '');
   document.body.innerHTML = `
   <div class="login">
     <div class="login-card">
       <div class="mark"><i></i></div>
       <h1>DeskAlarm</h1>
-      <p>输入口令连接你的服务端。多台设备登录后共享同一份提醒。</p>
+      <p>用账号连接你的服务端。每台设备用自己的身份登录，提醒按用户隔离。</p>
       <form id="form">
         <div>
           <label for="base">服务端地址</label>
-          <input class="input" id="base" placeholder="http://192.168.1.10:8787" value="${esc(cfg.baseUrl)}" spellcheck="false" autocomplete="off">
+          <input class="input" id="base" placeholder="http://192.168.1.10:8787" value="${esc(baseValue)}" spellcheck="false" autocomplete="off">
           <div class="login-row">
             <span class="login-hint" id="probe">端口只填对外服务的那一个</span>
             <button type="button" class="btn sm" id="test">测试连接</button>
           </div>
         </div>
-        <div>
-          <label for="code">口令</label>
-          <input class="input" id="code" type="password" autocomplete="current-password" value="${esc(cfg.passcode)}">
+        <div class="row">
+          <div>
+            <label for="user">用户名</label>
+            <input class="input" id="user" autocomplete="username" value="${esc(cfg.user?.username ?? '')}">
+          </div>
+          <div>
+            <label for="code">密码</label>
+            <input class="input" id="code" type="password" autocomplete="current-password">
+          </div>
         </div>
+        ${web ? '' : `
         <div>
           <label for="name">这台设备叫什么</label>
           <input class="input" id="name" value="${esc(cfg.deviceName)}">
-        </div>
+        </div>`}
         <div class="login-err" id="err"></div>
-        <button class="btn solid login-go" id="go">连接</button>
+        <button class="btn solid login-go" id="go">登录</button>
       </form>
-      <div class="login-foot">
-        带 <span class="mono">--minimized</span> 启动表示开机自启，只进托盘不弹窗
-      </div>
     </div>
   </div>`;
 
   const err = $<HTMLDivElement>('#err')!;
   const go = $<HTMLButtonElement>('#go')!;
+  const user = $<HTMLInputElement>('#user')!;
   const code = $<HTMLInputElement>('#code')!;
   const base = $<HTMLInputElement>('#base')!;
   const probe = $<HTMLSpanElement>('#probe')!;
   const test = $<HTMLButtonElement>('#test')!;
-  code.focus();
+  (user.value ? code : user).focus();
 
   const submit = async () => {
     err.textContent = '';
     const norm = normalizeBaseUrl(base.value);
     if (!norm) { err.textContent = '地址格式不对，需要 http:// 或 https:// 开头'; return; }
+    const username = user.value.trim();
+    if (!username) { err.textContent = '请填用户名'; user.focus(); return; }
+    if (!code.value) { err.textContent = '请填密码'; code.focus(); return; }
     go.disabled = true;
-    go.textContent = '连接中';
+    go.textContent = '登录中';
     try {
       // 地址要先落盘再请求，否则这次登录还打的是旧地址
       switchServer(norm);
       base.value = norm;
-      const name = $<HTMLInputElement>('#name')!.value.trim() || '我的笔记本';
-      const r = await api.login(code.value, name);
-      saveConfig({ passcode: code.value, deviceName: name, token: r.token, device: r.device });
+      const name = web ? '' : ($<HTMLInputElement>('#name')?.value.trim() || '我的笔记本');
+      const r = await api.login(username, code.value, name, web ? 'web' : 'windows');
+      saveConfig({ user: r.user, deviceName: name, token: r.token, device: r.device });
       boot();
+      // Web 本来就故意不建设备；桌面端没拿到才需要提醒用户
+      if (!web && !r.device) flash('服务端没建设备，实时提醒不可用');
     } catch (e) {
       err.textContent = e instanceof ApiError && e.status === 401
-        ? '口令不对'
+        ? '用户名或密码不对'
         : '连不上服务端，确认地址和服务是否在跑';
       go.disabled = false;
-      go.textContent = '连接';
+      go.textContent = '登录';
     }
   };
 
-  // 地址填错是新手最常撞的坑，先测一下再让他去猜口令
+  // 地址填错是新手最常撞的坑，先测一下再让他去猜账号
   test.addEventListener('click', async () => {
     const norm = normalizeBaseUrl(base.value);
     if (!norm) { probe.textContent = '地址格式不对'; probe.className = 'login-hint bad'; return; }
@@ -210,6 +231,102 @@ function renderLogin() {
     void submit();
   });
   go.addEventListener('click', () => void submit());
+}
+
+/* -------------------------------------------------- 首次管理员初始化 */
+
+function renderSetup() {
+  const baseValue = loadConfig().baseUrl;
+  document.body.innerHTML = `
+  <div class="login">
+    <div class="login-card">
+      <div class="mark"><i></i></div>
+      <h1>初始化管理员</h1>
+      <p>这个服务端还没有管理员。创建第一个账号后即可登录使用，此入口只会显示一次。</p>
+      <form id="form">
+        <div>
+          <label for="base">服务端地址</label>
+          <input class="input" id="base" placeholder="http://192.168.1.10:8787" value="${esc(baseValue)}" spellcheck="false" autocomplete="off">
+          <div class="login-row">
+            <span class="login-hint" id="probe">端口只填对外服务的那一个</span>
+            <button type="button" class="btn sm" id="test">测试连接</button>
+          </div>
+        </div>
+        <div>
+          <label for="su-user">用户名</label>
+          <input class="input" id="su-user" autocomplete="username">
+        </div>
+        <div class="row">
+          <div>
+            <label for="su-pass">密码</label>
+            <input class="input" id="su-pass" type="password" autocomplete="new-password">
+          </div>
+          <div>
+            <label for="su-confirm">确认密码</label>
+            <input class="input" id="su-confirm" type="password" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="login-err" id="err"></div>
+        <button class="btn solid login-go" id="go">创建管理员</button>
+      </form>
+      <div class="login-foot">
+        密码至少 8 位，两次输入必须一致。
+        <div class="login-row" style="margin-top:8px">
+          <button type="button" class="btn sm" id="to-login">服务端已有管理员？去登录</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  const err = $<HTMLDivElement>('#err')!;
+  const go = $<HTMLButtonElement>('#go')!;
+  const base = $<HTMLInputElement>('#base')!;
+  const probe = $<HTMLSpanElement>('#probe')!;
+  const test = $<HTMLButtonElement>('#test')!;
+  $<HTMLInputElement>('#su-user')!.focus();
+
+  const submit = async () => {
+    err.textContent = '';
+    const norm = normalizeBaseUrl(base.value);
+    if (!norm) { err.textContent = '地址格式不对，需要 http:// 或 https:// 开头'; return; }
+    const username = $<HTMLInputElement>('#su-user')!.value.trim();
+    const password = $<HTMLInputElement>('#su-pass')!.value;
+    const confirm = $<HTMLInputElement>('#su-confirm')!.value;
+    if (!username) { err.textContent = '请填用户名'; return; }
+    if (password.length < 8) { err.textContent = '密码至少 8 位'; return; }
+    if (password !== confirm) { err.textContent = '两次密码不一致'; return; }
+    go.disabled = true;
+    go.textContent = '创建中…';
+    try {
+      // 地址要先落盘再请求，否则这次初始化还打的是旧地址
+      switchServer(norm);
+      base.value = norm;
+      const machineId = await getMachineId();
+      const r = await api.setup({ username, password, confirmPassword: confirm, machineId });
+      saveConfig({ token: r.token, user: r.user, device: r.device });
+      boot();
+    } catch (e) {
+      err.textContent = e instanceof ApiError ? e.message : '连不上服务端，确认地址和服务是否在跑';
+      go.disabled = false;
+      go.textContent = '创建管理员';
+    }
+  };
+
+  test.addEventListener('click', async () => {
+    const norm = normalizeBaseUrl(base.value);
+    if (!norm) { probe.textContent = '地址格式不对'; probe.className = 'login-hint bad'; return; }
+    test.disabled = true;
+    probe.textContent = '测试中...';
+    probe.className = 'login-hint';
+    const r = await probeServer(norm);
+    test.disabled = false;
+    probe.className = `login-hint ${r.ok ? 'ok' : 'bad'}`;
+    probe.textContent = r.ok ? '连上了' : r.reason;
+  });
+
+  $<HTMLFormElement>('#form')!.addEventListener('submit', (ev) => { ev.preventDefault(); void submit(); });
+  go.addEventListener('click', () => void submit());
+  $<HTMLButtonElement>('#to-login')!.onclick = () => renderLogin();
 }
 
 /* ------------------------------------------------------------ 主题 */
@@ -236,10 +353,11 @@ function renderShell() {
       <div class="sp"></div>
       <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
       <button class="btn sm no-drag" id="btn-theme" title="切换配色"></button>
+      ${isDesktop() ? `
       <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>
       <button class="btn sm no-drag" id="btn-test">试响</button>
       <button class="btn sm no-drag" id="btn-update" title="检查更新">更新</button>
-      <button class="btn sm no-drag" id="btn-hide">缩到托盘</button>
+      <button class="btn sm no-drag" id="btn-hide">缩到托盘</button>` : ''}
     </div>
 
     <div id="weak-host"></div>
@@ -275,17 +393,20 @@ function renderShell() {
       <span id="s-server">服务端 -</span>
       <span class="skew">时钟偏差 <span class="mono" id="s-skew">0 ms</span></span>
       <div class="sp"></div>
-      <span>开机自启 <b id="s-auto">-</b></span>
+      ${isDesktop() ? '<span>开机自启 <b id="s-auto">-</b></span>' : ''}
+      <span>登录为 <b id="s-user">${esc(loadConfig().user?.username ?? '?')}</b></span>
       <button class="btn sm" id="btn-logout">退出登录</button>
     </div>
   </div>`;
 
-  $<HTMLButtonElement>('#btn-hide')!.onclick = () => void native('hide_main');
-  $<HTMLButtonElement>('#btn-test')!.onclick = () => {
-    void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
-  };
-  $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
-  $<HTMLButtonElement>('#btn-update')!.onclick = () => void checkUpdate();
+  if (isDesktop()) {
+    $<HTMLButtonElement>('#btn-hide')!.onclick = () => void native('hide_main');
+    $<HTMLButtonElement>('#btn-test')!.onclick = () => {
+      void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
+    };
+    $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
+    $<HTMLButtonElement>('#btn-update')!.onclick = () => void checkUpdate();
+  }
   // 点连接状态就能换服务端地址，不用翻设置
   $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
   renderThemeButton();
@@ -342,10 +463,12 @@ function renderShell() {
   $<HTMLElement>('#editor')!.addEventListener('input', onEditorInput);
 
   onWeakChange(renderWeakBanner);
-  void native<boolean>('is_autostart_enabled').then((on) => {
-    const el = $<HTMLElement>('#s-auto');
-    if (el) el.textContent = on === null ? '未知' : on ? '开' : '关';
-  });
+  if (isDesktop()) {
+    void native<boolean>('is_autostart_enabled').then((on) => {
+      const el = $<HTMLElement>('#s-auto');
+      if (el) el.textContent = on === null ? '未知' : on ? '开' : '关';
+    });
+  }
 }
 
 /* -------------------------------------------------------- 弱提示横幅 */
@@ -421,6 +544,20 @@ async function weakDismiss(id: string, reason?: string) {
 }
 
 // 版本比较与「镜像落后就改用 GitHub」在 Rust 侧做（update.rs），这里只管交互
+/** 启动时后台查一次，一天最多一次。有新版本只提示，不自动安装 */
+function autoCheckUpdate() {
+  const KEY = 'deskalarm.lastUpdateCheck';
+  const last = Number(localStorage.getItem(KEY) ?? 0);
+  if (Date.now() - last < 24 * 3600_000) return;
+  localStorage.setItem(KEY, String(Date.now()));
+  if (!hasTauri()) return;
+  void invoke<UpdateInfo>('check_update')
+    .then((info) => {
+      if (info?.available) flash(`发现新版本 v${info.latestVersion}，点顶栏「更新」安装`);
+    })
+    .catch(() => { /* 后台检查失败不该打扰用户 */ });
+}
+
 async function checkUpdate() {
   const btn = $<HTMLButtonElement>('#btn-update');
   if (!btn) return;
@@ -471,12 +608,40 @@ function flash(text: string) {
   flashTimer = window.setTimeout(() => el?.classList.remove('on'), 6000);
 }
 
+/** webview 里 navigator.clipboard 有时不可用，退回到选中文本复制 */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;top:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  }
+}
+
 /* ------------------------------------------------------------ 渲染 */
+
+let dashboardTimer: number | null = null;
 
 function setView(v: View) {
   state.view = v;
   state.selected = null;
-  void refresh();
+  if (dashboardTimer !== null) {
+    clearInterval(dashboardTimer);
+    dashboardTimer = null;
+  }
+  if (v === 'dashboard') {
+    void refresh();
+    dashboardTimer = window.setInterval(() => void refresh(), 5_000);
+  } else {
+    void refresh();
+  }
 }
 
 function counts() {
@@ -516,6 +681,8 @@ function renderSidebar() {
     <div class="nav-head">弱提示</div>
     <button class="nav ${state.view === 'dismissed' ? 'on' : ''}" data-view="dismissed">已忽略<span class="count">${state.dismissals.length}</span></button>
     <button class="nav ${state.view === 'neglected' ? 'on' : ''}" data-view="neglected">老是被忽略</button>
+    <button class="nav ${state.view === 'tokens' ? 'on' : ''}" data-view="tokens">Agent 令牌</button>
+    ${isDesktop() ? `
     <div class="nav-sep"></div>
     <div class="nav-head">推送设备</div>
     <div class="dev-list">
@@ -527,32 +694,195 @@ function renderSidebar() {
           <span class="sdot ${d.online ? '' : d.pushReady ? 'off' : 'alert'}"></span>${esc(d.name)}
           <span class="count">${d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送'}</span>
         </div>`).join('')}
-      ${others.length === 0 ? '<div class="nav-note">还没有别的设备登录。多台设备用同一个口令登录后，这里会列出来。</div>' : ''}
-    </div>
+      ${others.length === 0 ? '<div class="nav-note">还没有别的设备登录。同一账号在多台设备登录后，这里会列出来。</div>' : ''}
+    </div>` : ''}
     <div class="sp"></div>
-    <button class="nav" id="btn-autostart"><span class="sdot ${loadConfig().settings.sound === 'none' ? 'off' : ''}"></span>开机自启<span class="count" id="auto-state">-</span></button>`;
+    ${loadConfig().user?.role === 'admin' ? `
+    <button class="nav ${state.view === 'dashboard' ? 'on' : ''}" data-view="dashboard">开发看板</button>
+    <div class="nav-sep"></div>` : ''}
+    ${isDesktop() ? `<button class="nav" id="btn-autostart"><span class="sdot ${loadConfig().settings.sound === 'none' ? 'off' : ''}"></span>开机自启<span class="count" id="auto-state">-</span></button>` : ''}`;
 
-  const auto = $<HTMLButtonElement>('#btn-autostart')!;
-  auto.onclick = async () => {
-    const el = $<HTMLSpanElement>('#auto-state')!;
-    const cur = el.dataset.on === '1';
-    const now = await native<boolean>('set_autostart', { enable: !cur });
-    if (now === null) { el.textContent = '失败'; return; }
-    el.dataset.on = now ? '1' : '0';
-    el.textContent = now ? '开' : '关';
-  };
-  void native<boolean>('is_autostart_enabled').then((on) => {
-    const el = $<HTMLSpanElement>('#auto-state');
-    if (!el) return;
-    // 读不到就别显示「关」，那是在说一个不确定的事
-    if (on === null) { el.textContent = '未知'; return; }
-    el.dataset.on = on ? '1' : '0';
-    el.textContent = on ? '开' : '关';
-  });
+  const auto = document.querySelector<HTMLButtonElement>('#btn-autostart');
+  if (auto) {
+    auto.onclick = async () => {
+      const el = $<HTMLSpanElement>('#auto-state')!;
+      const cur = el.dataset.on === '1';
+      const now = await native<boolean>('set_autostart', { enable: !cur });
+      if (now === null) { el.textContent = '失败'; return; }
+      el.dataset.on = now ? '1' : '0';
+      el.textContent = now ? '开' : '关';
+    };
+    void native<boolean>('is_autostart_enabled').then((on) => {
+      const el = $<HTMLSpanElement>('#auto-state');
+      if (!el) return;
+      // 读不到就别显示「关」，那是在说一个不确定的事
+      if (on === null) { el.textContent = '未知'; return; }
+      el.dataset.on = on ? '1' : '0';
+      el.textContent = on ? '开' : '关';
+    });
+  }
+}
+
+function renderDashboard(box: HTMLElement) {
+  if (!box.querySelector('.dash')) {
+    box.innerHTML = `
+      <div class="dash">
+        <div class="dash-grid">
+          <section class="dash-card"><h3>服务健康</h3><div id="dash-health" class="dash-body">读取中…</div></section>
+          <section class="dash-card"><h3>调度器</h3><div id="dash-sched" class="dash-body">读取中…</div></section>
+          <section class="dash-card"><h3>条目状态</h3><div id="dash-entries" class="dash-body">读取中…</div></section>
+          <section class="dash-card"><h3>投递状态</h3><div id="dash-deliveries" class="dash-body">读取中…</div></section>
+          <section class="dash-card"><h3>设备</h3><div id="dash-devices" class="dash-body">读取中…</div></section>
+          <section class="dash-card"><h3>用户</h3><div id="dash-users" class="dash-body">读取中…</div></section>
+        </div>
+        <div class="dash-err" id="dash-err"></div>
+        <div class="dash-foot">上次更新 <span id="dash-at">-</span> · 每 5 秒自动刷新</div>
+      </div>`;
+  }
+  void loadOverview();
+}
+
+function put(id: string, html: string) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+
+async function loadOverview() {
+  try {
+    const o = await api.overview();
+    put('dash-health', `
+      <div>数据库 <b class="${o.db.ok ? 'ok' : 'danger'}">${o.db.ok ? '正常' : '异常'}</b></div>
+      <div>运行时长 ${Math.round(o.uptimeMs / 60000)} 分钟</div>
+      <div>服务端时间 ${new Date(o.serverTs).toLocaleTimeString('zh-CN')}</div>`);
+    put('dash-sched', `
+      <div>扫描间隔 ${o.scheduler.tickMs} ms · 轮转 ${o.scheduler.rotateMs} ms</div>
+      <div>累计 tick <b>${o.scheduler.ticks}</b> · 轮转中 ${o.scheduler.rotating ? '是' : '否'}</div>
+      <div>上次 ${o.scheduler.lastTickAt ? new Date(o.scheduler.lastTickAt).toLocaleTimeString('zh-CN') : '-'}</div>`);
+    put('dash-entries', `
+      <div>全部 <b>${o.entries.total}</b> · 待处理 ${o.entries.pending} · 逾期 ${o.entries.missed}</div>
+      <div>收集箱 ${o.entries.inbox} · 已完成 ${o.entries.done}</div>
+      <div>被反复忽略 ${o.entries.neglected}</div>`);
+    const states = Object.entries(o.deliveries.byState).map(([k, v]) => `${k} ${v}`).join(' · ') || '无';
+    const errs = o.deliveries.recentErrors;
+    put('dash-deliveries', `
+      <div>${esc(states)}</div>
+      <div>最近失败 ${errs.length} 条</div>
+      ${errs.slice(0, 3).map((e) => `<div class="dash-err-line" title="${esc(e.error)}">${esc(e.entryId)} → ${esc(e.deviceId)}</div>`).join('')}`);
+    const plats = Object.entries(o.devices.byPlatform).map(([k, v]) => `${k} ${v}`).join(' · ') || '无';
+    put('dash-devices', `<div>总数 <b>${o.devices.total}</b> · 在线 ${o.devices.online}</div><div>${esc(plats)}</div>`);
+    put('dash-users', `<div>总数 <b>${o.users.total}</b></div>`);
+    put('dash-at', new Date(o.serverTs).toLocaleTimeString('zh-CN'));
+    put('dash-err', '');
+  } catch (e) {
+    put('dash-err', `<div class="dash-err-line">${esc(e instanceof Error ? e.message : String(e))}</div>`);
+  }
+}
+
+function renderTokens(box: HTMLElement) {
+  if (!box.querySelector('.tokens')) {
+    box.innerHTML = `
+      <div class="tokens">
+        <div class="dash-grid">
+          <section class="dash-card">
+            <h3>我的 Agent 令牌</h3>
+            <div id="tk-list" class="agent-list">读取中…</div>
+          </section>
+          <section class="dash-card">
+            <h3>签发新令牌</h3>
+            <div class="fld"><label>名称</label><input class="input" id="tk-name" spellcheck="false" placeholder="如「Claude Code」"></div>
+            <div class="fld"><label>权限</label><select class="input" id="tk-scope"><option value="write">读写</option><option value="read">只读</option></select></div>
+            <div class="fld">
+              <label>绑定 machine-id（可选）</label>
+              <input class="input mono" id="tk-mid" spellcheck="false" placeholder="留空则不绑定设备">
+              <div class="hint">桌面端默认填本机 id，可以清空；云端 agent 留空即可。</div>
+            </div>
+            <div class="login-row">
+              <span class="login-hint" id="tk-hint">令牌只显示一次，复制后妥善保存</span>
+              <button type="button" class="btn sm solid" id="tk-issue">签发</button>
+            </div>
+            <div class="mid-row" style="margin-top:8px">
+              <input class="input mono mid-val" id="tk-plain" readonly spellcheck="false" placeholder="新令牌（仅显示一次）">
+              <button type="button" class="btn sm" id="tk-copy">复制</button>
+            </div>
+          </section>
+        </div>
+      </div>`;
+
+    void getMachineId().then((id) => {
+      const el = box.querySelector<HTMLInputElement>('#tk-mid');
+      if (el && id && !el.value) el.value = id;
+    });
+
+    const hint = box.querySelector<HTMLSpanElement>('#tk-hint')!;
+    box.querySelector<HTMLButtonElement>('#tk-issue')!.onclick = async (ev) => {
+      const name = box.querySelector<HTMLInputElement>('#tk-name')!.value.trim();
+      if (!name) { hint.textContent = '先给令牌起个名字'; return; }
+      const scope = box.querySelector<HTMLSelectElement>('#tk-scope')!.value as AgentScope;
+      const machineId = box.querySelector<HTMLInputElement>('#tk-mid')!.value.trim();
+      const btn = ev.currentTarget as HTMLButtonElement;
+      btn.disabled = true;
+      hint.textContent = '签发中…';
+      try {
+        const r = await api.issueAgentToken({ name, scope, ...(machineId ? { machineId } : {}) });
+        box.querySelector<HTMLInputElement>('#tk-plain')!.value = r.plain;
+        hint.textContent = '已签发，令牌只显示这一次';
+        void loadAgentTokens(box);
+      } catch (e) {
+        hint.textContent = e instanceof Error ? e.message : '签发失败';
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    box.querySelector<HTMLButtonElement>('#tk-copy')!.onclick = async () => {
+      const plain = box.querySelector<HTMLInputElement>('#tk-plain')!.value;
+      if (!plain) { hint.textContent = '还没有令牌可复制'; return; }
+      const ok = await copyText(plain);
+      hint.textContent = ok ? '已复制令牌' : '复制失败，请手动选中';
+    };
+  }
+  void loadAgentTokens(box);
+}
+
+async function loadAgentTokens(box: HTMLElement) {
+  const list = box.querySelector<HTMLElement>('#tk-list');
+  if (!list) return;
+  try {
+    const { tokens } = await api.agentTokens();
+    list.innerHTML = tokens.length
+      ? tokens.map((t) => `
+          <div class="agent-item">
+            <span>${esc(t.name)} <span class="oc-muted">${esc(t.prefix)}… · ${t.scope} · ${new Date(t.createdAt).toLocaleString('zh-CN')}</span></span>
+            <button type="button" class="btn sm" data-revoke="${esc(t.id)}">撤销</button>
+          </div>`).join('')
+      : '<div class="login-hint">还没有 Agent 令牌</div>';
+    list.querySelectorAll<HTMLButtonElement>('[data-revoke]').forEach((b) => {
+      b.onclick = async () => {
+        try {
+          await api.revokeAgentToken(b.dataset.revoke!);
+          void loadAgentTokens(box);
+        } catch (e) {
+          const hint = box.querySelector<HTMLSpanElement>('#tk-hint');
+          if (hint) hint.textContent = e instanceof Error ? e.message : '撤销失败';
+        }
+      };
+    });
+  } catch (e) {
+    list.innerHTML = `<div class="login-hint bad">${esc(e instanceof Error ? e.message : '读取令牌失败')}</div>`;
+  }
 }
 
 function renderList() {
   const box = $<HTMLDivElement>('#list')!;
+
+  if (state.view === 'dashboard') {
+    renderDashboard(box);
+    return;
+  }
+  if (state.view === 'tokens') {
+    renderTokens(box);
+    return;
+  }
 
   // 已忽略是一张独立的表，不是条目列表
   if (state.view === 'dismissed') {
@@ -640,6 +970,8 @@ function rowHtml(e: Entry): string {
 
   const u = urgencyOf(e);
   const label = timeLabel(e);
+  // 逾期时长单独包一层，tick 只换它；整行重写会冲掉用户选中的文字
+  const timeText = missed ? missedTimeHtml(e) : esc(label);
 
   return `
   <div class="item${done ? ' done' : ''}${u === 'none' ? '' : ` u-${u}`}${state.selected === e.id ? ' on' : ''}"
@@ -649,7 +981,7 @@ function rowHtml(e: Entry): string {
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4"><path d="M4 12.5l5 5L20 6.5"/></svg>
     </div>
     <div>
-      <div class="it-time">${u === 'none' ? '' : `<i class="udot ${u}"></i>`}${esc(label)}</div>
+      <div class="it-time">${u === 'none' ? '' : `<i class="udot ${u}"></i>`}<span class="it-time-text">${timeText}</span></div>
       <div class="it-title">${esc(e.text)}</div>
       <div class="it-meta">${meta}</div>
     </div>
@@ -659,10 +991,19 @@ function rowHtml(e: Entry): string {
   </div>`;
 }
 
+/** 逾期时长锚在「应到时间」，firedAt 是补火时刻，重启后会把它冲成刚过 */
+function lateText(e: Entry): string {
+  return e.remindAt === null ? '' : lateBy(e.remindAt);
+}
+
+function missedTimeHtml(e: Entry): string {
+  return `${dayLabel(e.remindAt!)} ${hhmm(e.remindAt!)} · <span class="late-time">${esc(lateText(e))}</span> 还没处理`;
+}
+
 /** 时间行文案。一小时内报「还有 X 分钟」，临近时差多少比几点钟有用 */
 function timeLabel(e: Entry): string {
   if (e.status === 'missed') {
-    return `${dayLabel(e.remindAt!)} ${hhmm(e.remindAt!)} · ${lateBy(e.firedAt ?? serverNow())} 还没处理`;
+    return `${dayLabel(e.remindAt!)} ${hhmm(e.remindAt!)} · ${lateText(e)} 还没处理`;
   }
   const u = urgencyOf(e);
   if (e.remindAt === null) return '收集箱 · 不定时';
@@ -687,15 +1028,24 @@ function tickUrgency() {
     if (!row) continue;
 
     const u = urgencyOf(e);
-    // 已逾期行的文案不再随时间变化，每次 tick 都重写会把用户的选中文字冲掉
     if (e.status === 'missed') {
-      if (row.dataset.u === 'over') continue;
-      row.dataset.u = 'over';
-      row.dataset.tl = '';
-      row.classList.remove('u-soon', 'u-close', 'u-due');
-      row.classList.add('u-over');
-      const t = row.querySelector('.it-time');
-      if (t) t.innerHTML = `<i class="udot over"></i>${esc(timeLabel(e))}`;
+      if (row.dataset.u !== 'over') {
+        row.dataset.u = 'over';
+        row.dataset.tl = '';
+        row.classList.remove('u-soon', 'u-close', 'u-due');
+        row.classList.add('u-over');
+        const t = row.querySelector<HTMLElement>('.it-time');
+        // 刚从非逾期切过来时还没有时长 span，这一次得整行补上
+        if (t && !t.querySelector('.late-time')) {
+          t.innerHTML = `<i class="udot over"></i><span class="it-time-text">${missedTimeHtml(e)}</span>`;
+        }
+      }
+      // 只换时长这一段，整行重写会冲掉用户选中的文字
+      const lt = row.querySelector<HTMLElement>('.late-time');
+      if (lt) {
+        const next = lateText(e);
+        if (lt.textContent !== next) lt.textContent = next;
+      }
       continue;
     }
 
@@ -708,7 +1058,7 @@ function tickUrgency() {
     if (u !== 'none') row.classList.add(`u-${u}`);
 
     const timeEl = row.querySelector('.it-time');
-    if (timeEl) timeEl.innerHTML = `${u === 'none' ? '' : `<i class="udot ${u}"></i>`}${esc(label)}`;
+    if (timeEl) timeEl.innerHTML = `${u === 'none' ? '' : `<i class="udot ${u}"></i>`}<span class="it-time-text">${esc(label)}</span>`;
   }
 }
 
@@ -824,7 +1174,8 @@ function renderAll() {
       : v.sub;
   renderSidebar();
   renderList();
-  renderEditor();
+  if (state.view === 'dashboard' || state.view === 'tokens') $<HTMLElement>('#editor')!.innerHTML = '';
+  else renderEditor();
   renderSkew();
 }
 
@@ -871,7 +1222,7 @@ function openServerPanel() {
   host.innerHTML = `
     <div class="panel">
       <div class="panel-head">
-        <b>服务端地址</b>
+        <b>服务端与本机设备</b>
         <div class="sp"></div>
         <button class="btn sm" id="sp-close">关闭</button>
       </div>
@@ -882,10 +1233,35 @@ function openServerPanel() {
                  value="${esc(loadConfig().baseUrl)}">
         </label>
         <div class="login-row">
-          <span class="login-hint" id="sp-hint">多个设备填同一个地址，就共享同一份提醒</span>
+          <span class="login-hint" id="sp-hint">同一账号的设备填同一个地址，就看同一份提醒</span>
           <button type="button" class="btn sm" id="sp-test">测试连接</button>
         </div>
         <div class="panel-err" id="sp-err"></div>
+        <div class="mid-block">
+          <span class="mid-title">本机 machine-id</span>
+          <div class="mid-row">
+            <input class="input mono mid-val" id="sp-mid" readonly spellcheck="false" value="读取中…">
+            <button type="button" class="btn sm" id="sp-copy">复制</button>
+          </div>
+          <div class="login-hint">签发 Agent 令牌时可选绑定这个 id，绑定后 agent 只能以本机身份调用 MCP。</div>
+        </div>
+        ${loadConfig().user?.role === 'admin' ? `
+        <div class="mid-block">
+          <span class="mid-title">用户管理（管理员）</span>
+          <div class="mid-row">
+            <input class="input" id="sp-u-name" spellcheck="false" placeholder="用户名">
+            <input class="input" id="sp-u-pass" type="password" placeholder="密码（至少 8 位）">
+            <select class="input" id="sp-u-role">
+              <option value="user">普通用户</option>
+              <option value="admin">管理员</option>
+            </select>
+          </div>
+          <div class="login-row">
+            <span class="login-hint" id="sp-u-hint">不同用户之间的数据完全隔离</span>
+            <button type="button" class="btn sm" id="sp-u-add">创建用户</button>
+          </div>
+          <div id="sp-u-list" class="agent-list"></div>
+        </div>` : ''}
       </div>
     </div>`;
   document.body.appendChild(host);
@@ -904,6 +1280,67 @@ function openServerPanel() {
 
   q<HTMLButtonElement>('#sp-close').onclick = close;
   host.addEventListener('click', (ev) => { if (ev.target === host) close(); });
+
+  const mid = q<HTMLInputElement>('#sp-mid');
+  void getMachineId().then((id) => { mid.value = id || '不是桌面客户端，没有 machine-id'; });
+  q<HTMLButtonElement>('#sp-copy').onclick = async () => {
+    const id = await getMachineId();
+    if (!id) { setHint('拿不到 machine-id', 'bad'); return; }
+    const ok = await copyText(id);
+    setHint(ok ? '已复制 machine-id' : '复制失败，请手动选中', ok ? 'ok' : 'bad');
+  };
+
+  const uList = host.querySelector<HTMLDivElement>('#sp-u-list');
+  if (uList) {
+    const uHint = q<HTMLSpanElement>('#sp-u-hint');
+    const me = loadConfig().user?.id;
+
+    async function loadUsers() {
+      try {
+        const { users } = await api.users();
+        uList!.innerHTML = users.map((u) => `
+          <div class="agent-item">
+            <span>${esc(u.username)} <span class="oc-muted">${u.role === 'admin' ? '管理员' : '用户'}${u.disabled ? ' · 已禁用' : ''}</span></span>
+            <span>
+              ${u.id === me ? '' : `<button type="button" class="btn sm" data-toggle="${esc(u.id)}" data-disabled="${u.disabled}">${u.disabled ? '启用' : '禁用'}</button>`}
+              ${u.id === me ? '' : `<button type="button" class="btn sm" data-del="${esc(u.id)}">删除</button>`}
+            </span>
+          </div>`).join('');
+        uList!.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach((b) => {
+          b.onclick = async () => {
+            await api.updateUser(b.dataset.toggle!, { disabled: b.dataset.disabled !== 'true' });
+            await loadUsers();
+          };
+        });
+        uList!.querySelectorAll<HTMLButtonElement>('[data-del]').forEach((b) => {
+          b.onclick = async () => {
+            if (!window.confirm('确认删除这个用户？他名下的提醒和设备会一起清掉。')) return;
+            await api.deleteUser(b.dataset.del!);
+            await loadUsers();
+          };
+        });
+      } catch (e) {
+        uHint.textContent = e instanceof Error ? e.message : '读取用户失败';
+      }
+    }
+    void loadUsers();
+
+    q<HTMLButtonElement>('#sp-u-add').onclick = async () => {
+      const username = q<HTMLInputElement>('#sp-u-name').value.trim();
+      const password = q<HTMLInputElement>('#sp-u-pass').value;
+      const role = q<HTMLSelectElement>('#sp-u-role').value as 'user' | 'admin';
+      if (!username || password.length < 8) { uHint.textContent = '用户名必填，密码至少 8 位'; return; }
+      try {
+        await api.createUser({ username, password, role });
+        q<HTMLInputElement>('#sp-u-name').value = '';
+        q<HTMLInputElement>('#sp-u-pass').value = '';
+        uHint.textContent = '已创建';
+        await loadUsers();
+      } catch (e) {
+        uHint.textContent = e instanceof Error ? e.message : '创建失败';
+      }
+    };
+  }
 
   q<HTMLButtonElement>('#sp-test').onclick = async (ev) => {
     const norm = normalizeBaseUrl(url.value);
@@ -941,6 +1378,10 @@ function openServerPanel() {
 /* ------------------------------------------------------------ 操作 */
 
 async function refresh() {
+  if (state.view === 'dashboard' || state.view === 'tokens') {
+    renderAll();
+    return;
+  }
   try {
     if (state.view === 'dismissed') {
       const [d, devs] = await Promise.all([api.dismissed(), api.devices()]);
@@ -1244,6 +1685,8 @@ function onEditorInput(ev: Event) {
 /* ------------------------------------------------------ 跨窗口事件 */
 
 function wireEvents() {
+  // Tauri 事件在浏览器里会直接 reject，Web 端没有这些窗口/托盘事件
+  if (!hasTauri()) return;
   listen<{ entryId: string; action: AckAction; snoozeTo?: number }>(
     'takeover:action', async (ev) => {
       const { entryId, action, snoozeTo } = ev.payload;
@@ -1297,6 +1740,13 @@ function boot() {
   rt = new Realtime(onRealtime, setLink);
   rt.connect();
   void refresh();
+
+  // Web 没有设备行、不建 WS，只能靠轮询感知服务端变化
+  if (!loadConfig().device) {
+    window.setInterval(() => void refresh(), 10_000);
+  }
+
+  autoCheckUpdate();
 
   // 临近梯度随时间自己往前走，事件刷新不会推进它
   tickUrgency();
@@ -1359,6 +1809,16 @@ function onRealtime(msg: ServerMessage) {
 // 先挂主题再渲染，否则会先闪一帧暗色再跳到浅色
 applyTheme(loadTheme());
 
-if (loadConfig().token) boot();
-else renderLogin();
+(async () => {
+  // 首屏先定平台，桌面专属按钮才不会闪一下又消失
+  platform = await getPlatform();
+  const cfg = loadConfig();
+  // 全新安装还没有地址，没法问服务端；直接给初始化页，让用户填地址并建管理员
+  if (!cfg.token && !cfg.baseUrl) { renderSetup(); return; }
+  try {
+    if ((await api.setupStatus()).needed) { renderSetup(); return; }
+  } catch { /* 连不上就走原来的登录/启动流程 */ }
+  if (cfg.token) boot();
+  else renderLogin();
+})();
 

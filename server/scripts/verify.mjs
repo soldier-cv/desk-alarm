@@ -2,11 +2,8 @@
 const BASE = process.env.BASE ?? 'http://127.0.0.1:8091';
 const API = `${BASE}/api/v1`;
 const MCP = `${BASE}/api/mcp`;
-const PASS = process.env.DESKALARM_PASSCODE;
-if (!PASS) {
-  console.error('缺少 DESKALARM_PASSCODE：verify 打的是真实部署，没口令验不了鉴权链路');
-  process.exit(1);
-}
+const USER = 'admin';
+const PASS = process.env.ADMIN_PASSWORD ?? 'admin123456';
 
 let pass = 0, fail = 0;
 const ok = (n, c, x = '') => {
@@ -32,25 +29,34 @@ const mcpCall = (name, args, token) => fetch(`${MCP}/call`, {
 
 console.log(`\n\x1b[1m端到端验证\x1b[0m ${BASE}\n`);
 
-console.log('静态与健康');
-const root = await fetch(`${BASE}/`).then((r) => r.status);
-ok('网关根路径出静态页', root === 200, `status=${root}`);
+console.log('健康');
 const hz = await fetch(`${BASE}/healthz`).then((r) => r.json());
-ok('网关健康检查透传到 API', hz?.ok === true && hz?.db === true, JSON.stringify(hz));
+ok('API 直接对外、健康检查可用', hz?.ok === true && hz?.db === true, JSON.stringify(hz));
+
+console.log('\n管理员初始化');
+const setupState = await call('/setup/status');
+if (setupState.json.needed) {
+  const s = await call('/setup', { method: 'POST', body: {
+    username: USER, password: PASS, confirmPassword: PASS,
+  } });
+  ok('首次初始化管理员', s.status === 201 && !!s.json.token, JSON.stringify(s.json).slice(0, 120));
+} else {
+  ok('已有管理员，跳过初始化', true);
+}
 
 console.log('\n鉴权与设备');
-const bad = await call('/auth/login', { method: 'POST', body: { passcode: 'nope', deviceName: 'x', platform: 'windows' } });
-ok('错误口令被拒', bad.status === 401);
+const bad = await call('/auth/login', { method: 'POST', body: { username: USER, password: 'nope', deviceName: 'x', platform: 'windows' } });
+ok('错误密码被拒', bad.status === 401);
 const login = await call('/auth/login', {
   method: 'POST',
-  body: { passcode: PASS, deviceName: '验证机', platform: 'windows', transport: 'ws' },
+  body: { username: USER, password: PASS, deviceName: '验证机', platform: 'windows', machineId: `verify-${Date.now()}`, transport: 'ws' },
 });
-ok('正确口令能登录', login.status === 200 && !!login.json.token, JSON.stringify(login.json));
+ok('正确密码能登录', login.status === 200 && !!login.json.token, JSON.stringify(login.json));
 const t = login.json.token;
 
 const phone = await call('/auth/login', {
   method: 'POST',
-  body: { passcode: PASS, deviceName: '小米手机', platform: 'android', transport: 'fcm', pushToken: 'x' },
+  body: { username: USER, password: PASS, deviceName: '小米手机', platform: 'android', machineId: `verify-phone-${Date.now()}`, transport: 'fcm', pushToken: 'x' },
 });
 ok('安卓设备能注册 fcm 通道', phone.json.device?.transport === 'fcm');
 ok('安卓设备标为未在线', phone.json.device?.online === false);
@@ -69,15 +75,21 @@ ok('已忽略视图可访问', Array.isArray(dismissedView.json.dismissals));
 const neglected = await call('/neglected', { token: t });
 ok('被反复忽略视图可访问', Array.isArray(neglected.json.entries));
 
-console.log('\nMCP');
+console.log('\nMCP / Agent 令牌');
 const mh = { authorization: `Bearer ${t}` };
-const tools = await fetch(`${MCP}/tools`, { headers: mh }).then((r) => r.json());
+const issued = await call('/agent-tokens', { method: 'POST', token: t, body: {
+  name: '验证用 Agent', machineId: `verify-agent-${Date.now()}`, scope: 'write',
+} });
+const AT = issued.json.plain;
+ok('Agent 令牌签发成功', !!AT, JSON.stringify(issued.json).slice(0, 120));
+ok('登录 token 调不了 MCP', (await mcpCall('today_digest', {}, t)).status === 403);
+const tools = await fetch(`${MCP}/tools`, { headers: { authorization: `Bearer ${AT}` } }).then((r) => r.json());
 ok('工具清单能取到', (tools.tools?.length ?? 0) >= 8, `${tools.tools?.length}`);
-const digest = await mcpCall('today_digest', {}, t);
+const digest = await mcpCall('today_digest', {}, AT);
 ok('today_digest 可调', digest.status === 200 && !!digest.json.result?.概览);
-const strong = await mcpCall('create_entry', { text: 'x', remindAt: Date.now() + 60_000, strength: 'strong' }, t);
+const strong = await mcpCall('create_entry', { text: 'x', remindAt: Date.now() + 60_000, strength: 'strong' }, AT);
 ok('agent 建强提示被拦', strong.status === 400 && /reason/.test(strong.json.message ?? ''));
-const weakm = await mcpCall('create_entry', { text: '端到端 agent 建的弱提示' }, t);
+const weakm = await mcpCall('create_entry', { text: '端到端 agent 建的弱提示' }, AT);
 ok('agent 建弱提示放行', weakm.status === 200 && weakm.json.result?.entry?.strength === 'weak');
 
 console.log('\n幂等与并发');

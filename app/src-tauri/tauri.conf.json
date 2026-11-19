@@ -60,13 +60,6 @@
     ],
     "security": {
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:"
-    },
-    "trayIcon": {
-      "id": "main-tray",
-      "iconPath": "icons/32x32.png",
-      "iconAsTemplate": false,
-      "menuOnLeftClick": false,
-      "tooltip": "DeskAlarm"
     }
   },
   "plugins": {
@@ -79,28 +72,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "app", "dmg"],
+    "targets": ["nsis"],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.ico",
-      "icons/icon.icns"
+      "icons/icon.ico"
     ],
     "windows": {
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,
         "languages": ["SimpChinese", "English"]
-      }
-    },
-    "macOS": {
-      "minimumSystemVersion": "11.0",
-      "dmg": {
-        "appPosition": { "x": 180, "y": 170 },
-        "applicationFolderPosition": { "x": 480, "y": 170 },
-        "windowSize": { "width": 660, "height": 400 }
       }
     },
     "shortDescription": "桌面强提醒工具",

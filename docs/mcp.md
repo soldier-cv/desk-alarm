@@ -18,21 +18,25 @@ cd server && npm run build
       "args": ["D:\\project\\desk-alarm\\server\\dist\\server\\mcp\\stdio.js"],
       "env": {
         "DESKALARM_API": "http://127.0.0.1:8787",
-        "DESKALARM_TOKEN": "你的 MCP_TOKEN"
+        "DESKALARM_TOKEN": "在客户端签发并复制的 Agent 令牌"
       }
     }
   }
 }
 ```
 
-`MCP_TOKEN` 配在服务端 `.env`。**建议给 agent 单独发一个**，出问题能单独吊销，不影响你自己的登录会话。
+Agent 令牌不是登录 token，也不来自服务端 env。打开客户端左侧「Agent 令牌」，填名字、选读写/只读，点签发。machine-id 可选：桌面端可绑定本机，云端 agent 留空即可。令牌绑定签发用户的账号，**明文只显示一次**，服务端只存哈希。登录 token 调 MCP 会被 403。
+
+除 MCP 外还有独立的 `/api/agent` 接口（同样只认 Agent 令牌、按 scope 限制读写），适合未来把 agent 接到提醒服务里。
+
+只读令牌能查条目和设备，不能建/改/删。撤销在客户端同一个面板里点一下即可，立刻生效。
 
 HTTP 入口也能直接用（调试和脚本方便）：
 
 ```bash
-curl http://127.0.0.1:8091/api/mcp/tools -H "Authorization: Bearer $MCP_TOKEN"
+curl http://127.0.0.1:8091/api/mcp/tools -H "Authorization: Bearer $AGENT_TOKEN"
 curl -X POST http://127.0.0.1:8091/api/mcp/call \
-  -H "Authorization: Bearer $MCP_TOKEN" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H 'content-type: application/json' \
   -d '{"name":"today_digest","arguments":{}}'
 ```
 

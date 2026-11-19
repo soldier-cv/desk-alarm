@@ -6,11 +6,14 @@ import { hub } from './hub.js';
 import { diagnose, ensureSchema, migrate, pool } from './db.js';
 import { startScheduler, stopScheduler, schedulerStats } from './scheduler.js';
 import { initTransports } from './transport/index.js';
-import { requireAuth } from './auth.js';
+import { setupRoutes } from './routes/setup.js';
 import { deviceRoutes } from './routes/devices.js';
 import { entryRoutes } from './routes/entries.js';
 import { streamRoutes } from './routes/stream.js';
 import { mcpRoutes } from './routes/mcp.js';
+import { adminRoutes } from './routes/admin.js';
+import { agentTokenRoutes } from './routes/agent-tokens.js';
+import { agentApiRoutes } from './routes/agent-api.js';
 
 const app = Fastify({
   logger: false,
@@ -80,6 +83,12 @@ app.get('/healthz', async (_req, reply) => {
 
 /* ---------------------------------------------------------------- API */
 
+// 初始化接口必须公开：users 表为空时还没有任何账号能登录
+await app.register(
+  async (api) => { await setupRoutes(api); },
+  { prefix: '/api/v1' },
+);
+
 // 每组路由单独 register，形成独立封装作用域。
 // entryRoutes 内部用了 app 级 preHandler，共用实例的话钩子会泄漏到 /auth/login
 await app.register(
@@ -97,12 +106,29 @@ await app.register(
   { prefix: '/api/v1' },
 );
 
+await app.register(
+  async (api) => { await agentTokenRoutes(api); },
+  { prefix: '/api/v1' },
+);
+
+await app.register(
+  async (api) => { await adminRoutes(api); },
+  { prefix: '/api/v1' },
+);
+
 /* --------------------------------------------------------------- MCP */
 // agent 用的 HTTP 入口。stdio 版本在 mcp/stdio.ts，
 // 它是个独立进程，走同样的这些接口
 await app.register(
   async (api) => { await mcpRoutes(api); },
   { prefix: '/api/mcp' },
+);
+
+/* ---------------------------------------------------------- Agent API */
+// 与用户 API 分开的前缀，独立鉴权（只认 Agent 令牌）+ 独立 scope
+await app.register(
+  async (api) => { await agentApiRoutes(api); },
+  { prefix: '/api/agent' },
 );
 
 /* ---------------------------------------------------------------- 启动 */
@@ -136,7 +162,7 @@ async function boot() {
   await app.listen({ port: env.PORT, host: env.HOST });
   log.info('deskalarm api listening', {
     url: `http://${env.HOST}:${env.PORT}`,
-    passcode: env.PASSCODE === 'deskalarm' ? '(默认，生产必须改)' : '(已自定义)',
+    setup: (await import('./repo/users.js')).countUsers().then((n) => (n === 0 ? 'required' : 'done')),
     fcm: env.FCM_PROJECT_ID ? 'on' : 'off',
   });
 }

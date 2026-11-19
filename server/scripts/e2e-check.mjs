@@ -3,11 +3,8 @@
  * 用法：node scripts/e2e-check.mjs
  */
 const BASE = process.env.BASE ?? 'http://127.0.0.1:8787';
-const PASSCODE = process.env.DESKALARM_PASSCODE;
-if (!PASSCODE) {
-  console.error('缺少 DESKALARM_PASSCODE：e2e 连的是真实服务端，没口令跑不了');
-  process.exit(1);
-}
+const USER = 'admin';
+const PASSCODE = process.env.ADMIN_PASSWORD ?? 'admin123456';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -38,15 +35,24 @@ ok('healthz 可达', h?.ok === true, JSON.stringify(h));
 ok('连的是 88 真库', h?.schema === 'desk_alarm', `schema=${h?.schema}`);
 ok('db 连接正常', h?.db === true);
 
+console.log('\n管理员初始化');
+const setupState = await api('/setup/status');
+if (setupState.json.needed) {
+  const s = await api('/setup', { method: 'POST', body: {
+    username: USER, password: PASSCODE, confirmPassword: PASSCODE,
+  } });
+  ok('首次初始化管理员', s.status === 201, JSON.stringify(s.json).slice(0, 120));
+}
+
 console.log('\n鉴权');
-const bad = await api('/auth/login', { method: 'POST', body: { passcode: 'wrong-one', deviceName: 'x' } });
-ok('错误口令被拒', bad.status === 401 || bad.status === 403, `got ${bad.status}`);
+const bad = await api('/auth/login', { method: 'POST', body: { username: USER, password: 'wrong-one', deviceName: 'x' } });
+ok('错误密码被拒', bad.status === 401 || bad.status === 403, `got ${bad.status}`);
 
 const login = await api('/auth/login', {
   method: 'POST',
-  body: { passcode: PASSCODE, deviceName: '联调自检', kind: 'desktop', platform: 'windows' },
+  body: { username: USER, password: PASSCODE, deviceName: '联调自检', platform: 'windows', machineId: `e2e-${Date.now()}` },
 });
-ok('正确口令能登录', login.status === 200 && !!login.json.token, JSON.stringify(login.json).slice(0, 120));
+ok('正确密码能登录', login.status === 200 && !!login.json.token, JSON.stringify(login.json).slice(0, 120));
 const token = login.json.token;
 if (!token) { console.log('\n登录失败，后面没法测'); process.exit(1); }
 
@@ -114,9 +120,14 @@ ok('被忽略 2 次自动降级为弱提示', second.json.entry?.strength === 'w
 ok('降级后仍待处理（不是 done）', second.json.entry?.status !== 'done', `status=${second.json.entry?.status}`);
 ok('被忽略 2 次会给出建议', !!second.json.suggestion, JSON.stringify(second.json).slice(0, 140));
 
-console.log('\nMCP');
+console.log('\nMCP / Agent 令牌');
+const issued = await api('/agent-tokens', { method: 'POST', token, body: {
+  name: '联调 Agent', machineId: `e2e-agent-${Date.now()}`, scope: 'write',
+} });
+const AT = issued.json.plain;
+ok('Agent 令牌签发成功', !!AT, JSON.stringify(issued.json).slice(0, 120));
 const tools = await fetch(`${BASE}/api/mcp/tools`, {
-  headers: { authorization: `Bearer ${token}` },
+  headers: { authorization: `Bearer ${AT}` },
 }).then((r) => r.json()).catch(() => null);
 ok('工具清单能取', Array.isArray(tools?.tools) && tools.tools.length >= 8, `count=${tools?.tools?.length}`);
 const names = (tools?.tools ?? []).map((t) => t.name);
@@ -126,8 +137,8 @@ ok('有 plan_changes', names.includes('plan_changes'), names.join(','));
 // MCP 侧强提示必须给 reason，这是给 agent 的防呆规则（HTTP 侧不强制）
 const call = async (tool, args) => fetch(`${BASE}/api/mcp/call`, {
   method: 'POST',
-  headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-  body: JSON.stringify({ tool, arguments: args }),
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${AT}` },
+  body: JSON.stringify({ name: tool, arguments: args }),
 }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => null) })).catch(() => ({ status: 0, json: null }));
 
 const strongNoReason = await call('create_entry', { text: 'agent 建的强提示', strength: 'strong', remindAt: Date.now() + 600000 });

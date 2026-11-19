@@ -2,24 +2,62 @@
  * 客户端与服务端的通信层。HTTP 走增删改，WS 收触发与跨端广播。
  * 触发权威在服务端，本地预判只让提示早一点出现，最终以 serverTs 为准
  */
+import { invoke } from '@tauri-apps/api/core';
 import type {
-  AckAction, CreateEntryRequest, Device, Dismissal, Entry, MissedFire,
-  RepeatRule, ServerMessage, Settings, Strength, TransportName,
+  AckAction, AgentScope, AgentToken, CreateEntryRequest, Device, Dismissal, Entry,
+  LoginResponse, MissedFire, Overview, RepeatRule, Role, ServerMessage, Settings, Strength, TransportName, User,
 } from '../../shared/types';
 
-export type { AckAction, Device, Dismissal, Entry, MissedFire, RepeatRule, ServerMessage, Settings, Strength, TransportName };
+export type {
+  AckAction, AgentScope, AgentToken, Device, Dismissal, Entry, MissedFire, RepeatRule,
+  Overview, ServerMessage, Settings, Strength, TransportName, User,
+};
 
 const LS_KEY = 'deskalarm.config';
 
 /** serverNow 的时钟偏差缓存，不进 localStorage */
 let skewCache: number | null = null;
 
+/** machine-id 一次读到就缓存：注册表/ioreg 不会在会话中变，重复调用纯属浪费 */
+let machineIdCache: string | null = null;
+
+/** 平台探测结果缓存。首屏要等它，重复 invoke 没意义 */
+let platformCache: ClientPlatform | null = null;
+
+export type ClientPlatform = 'web' | 'windows' | 'macos' | 'linux' | 'android';
+
+function inTauri(): boolean {
+  return typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+}
+
+export async function getPlatform(): Promise<ClientPlatform> {
+  if (platformCache !== null) return platformCache;
+  if (!inTauri()) return (platformCache = 'web');
+  try {
+    const p = await invoke<string>('platform');
+    platformCache = (p === 'windows' || p === 'macos' || p === 'linux' || p === 'android') ? p : 'web';
+  } catch {
+    platformCache = 'web';
+  }
+  return platformCache;
+}
+
+/** 非 Tauri（vite 开发、看板）拿不到机器指纹，返回空串让服务端不建设备行 */
+export async function getMachineId(): Promise<string> {
+  if (!inTauri()) return '';
+  if (machineIdCache !== null) return machineIdCache;
+  try {
+    machineIdCache = (await invoke<string>('machine_id')) ?? '';
+  } catch {
+    machineIdCache = '';
+  }
+  return machineIdCache;
+}
+
 export interface Config {
   baseUrl: string;
-  passcode: string;
+  user: User | null;
   deviceName: string;
-  /** 设备指纹。服务端靠它判断是重连还是新设备 */
-  deviceId: string;
   token: string;
   device: Device | null;
   /** 上次收到 welcome 的服务端时刻，用来算本机时钟偏差 */
@@ -37,24 +75,10 @@ const DEFAULT_SETTINGS: Settings = {
   neglectedAfter: 3,
 };
 
-// 设备指纹只能生成一次并落盘。写成 DEFAULT_CONFIG 里的表达式的话，
-// 每次 loadConfig 都是新 id，同一台机器登录几次就多出几台设备
-const DEVICE_ID_KEY = 'deskalam.deviceId';
-
-function deviceId(): string {
-  let id = localStorage.getItem(DEVICE_ID_KEY);
-  if (!id) {
-    id = `dev_${Math.random().toString(36).slice(2, 14)}`;
-    localStorage.setItem(DEVICE_ID_KEY, id);
-  }
-  return id;
-}
-
 export const DEFAULT_CONFIG: Config = {
   baseUrl: '',
-  passcode: '',
+  user: null,
   deviceName: '我的笔记本',
-  deviceId: '',
   token: '',
   device: null,
   serverSkewMs: 0,
@@ -64,13 +88,11 @@ export const DEFAULT_CONFIG: Config = {
 export function loadConfig(): Config {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    const cfg: Config = raw
+    return raw
       ? { ...DEFAULT_CONFIG, ...(JSON.parse(raw) as Partial<Config>) }
       : { ...DEFAULT_CONFIG };
-    if (!cfg.deviceId) cfg.deviceId = deviceId();
-    return cfg;
   } catch {
-    return { ...DEFAULT_CONFIG, deviceId: deviceId() };
+    return { ...DEFAULT_CONFIG };
   }
 }
 
@@ -101,9 +123,9 @@ export function normalizeBaseUrl(input: string): string {
   }
 }
 
-/** 换服务端地址。清掉旧会话：旧 token 对新地址无效 */
+/** 换服务端地址。清掉旧会话：旧 token 和新地址上的用户都对不上 */
 export function switchServer(baseUrl: string) {
-  saveConfig({ baseUrl, token: '', device: null, serverSkewMs: 0 });
+  saveConfig({ baseUrl, token: '', user: null, device: null, serverSkewMs: 0 });
 }
 
 /** 探测地址是否真的是 DeskAlarm 服务端，顺便同步时钟偏差 */
@@ -124,7 +146,7 @@ export async function probeServer(baseUrl: string): Promise<{ ok: boolean; reaso
 }
 
 export function clearToken() {
-  saveConfig({ token: '', device: null });
+  saveConfig({ token: '', user: null, device: null });
 }
 
 /** 服务端权威时间。所有「到点了吗」的判断都用它，不用本机 Date.now() */
@@ -164,17 +186,25 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  login: (passcode: string, deviceName: string, platform: string = 'windows') =>
-    req<{ token: string; device: Device }>('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({
-        passcode, deviceName, platform,
-        deviceId: loadConfig().deviceId,
-        transport: 'ws',
-      }),
+  setupStatus: () => req<{ needed: boolean }>('/setup/status'),
+
+  setup: (body: { username: string; password: string; confirmPassword: string; machineId?: string }) =>
+    req<{ token: string; user: User; device: Device | null }>('/setup', {
+      method: 'POST', body: JSON.stringify(body),
     }),
 
-  entries: (view: string) => req<{ entries: Entry[]; dismissals?: Dismissal[] }>(`/entries?view=${view}`),
+  login: async (username: string, password: string, deviceName: string, platform: string = 'windows') => {
+    const machineId = await getMachineId();
+    const r = await req<LoginResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, deviceName, platform, machineId, transport: 'ws' }),
+    });
+    saveConfig({ user: r.user });
+    return r;
+  },
+
+  entries: (view: string) =>
+    req<{ entries: Entry[]; dismissals?: Dismissal[] }>(`/entries?view=${view}`),
 
   dismissed: () => req<{ dismissals: Dismissal[] }>('/entries?view=dismissed'),
 
@@ -217,6 +247,28 @@ export const api = {
     req<{ settings: Settings }>('/settings', { method: 'PATCH', body: JSON.stringify(p) }),
 
   missed: () => req<{ missed: MissedFire[] }>('/missed'),
+
+  agentTokens: () => req<{ tokens: AgentToken[] }>('/agent-tokens'),
+
+  issueAgentToken: (body: {
+    name: string; machineId?: string; scope?: AgentScope; days?: number;
+  }) => req<{ token: AgentToken; plain: string }>('/agent-tokens', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+
+  revokeAgentToken: (id: string) => req<{ ok: true }>(`/agent-tokens/${id}`, { method: 'DELETE' }),
+
+  users: () => req<{ users: User[] }>('/admin/users'),
+
+  createUser: (body: { username: string; password: string; role: Role }) =>
+    req<{ user: User }>('/admin/users', { method: 'POST', body: JSON.stringify(body) }),
+
+  updateUser: (id: string, body: { role?: Role; disabled?: boolean; password?: string }) =>
+    req<{ user: User }>(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  deleteUser: (id: string) => req<{ ok: true }>(`/admin/users/${id}`, { method: 'DELETE' }),
+
+  overview: () => req<Overview>('/admin/overview'),
 };
 
 /* -------------------------------------------------------- WebSocket */
@@ -236,6 +288,8 @@ export class Realtime {
   connect() {
     const cfg = loadConfig();
     if (!cfg.token) return;
+    // Web/看板没有设备行，服务端不认这条 WS session；桌面端才有实时提醒
+    if (!cfg.device) return;
     this.closed = false;
     this.onStatus('connecting');
 

@@ -8,19 +8,20 @@ import {
 } from './repo/deliveries.js';
 import { listDevices, sweepOffline, touchDevice } from './repo/devices.js';
 import { invalidateTransport } from './repo/deliveries.js';
-import { getSettings } from './repo/settings.js';
 
 let tickTimer: NodeJS.Timeout | null = null;
 let rotateTimer: NodeJS.Timeout | null = null;
 let ticks = 0;
 let rotating = false;
+let lastTickAt: number | null = null;
+let lastRotateAt: number | null = null;
 
-/** 调度器：唯一决定「这条提醒响了没有」的地方。只写 outbox，不投递 */
 async function tick() {
   try {
+    lastTickAt = Date.now();
     const due = await findDue();
-    for (const { entry } of due) {
-      const { entry: fired, repeat } = await markFired(entry);
+    for (const { entry, userId } of due) {
+      const { entry: fired, repeat } = await markFired(entry, userId);
       log.info('fired', {
         id: fired.id,
         text: fired.text.slice(0, 40),
@@ -31,11 +32,17 @@ async function tick() {
     }
 
     if (++ticks % 60 === 0) {
-      for (const d of await sweepOffline()) {
+      const offline = await sweepOffline();
+      const byUser = new Map<string, string[]>();
+      for (const d of offline) {
         await touchDevice(d.id, false);
-        hub.broadcast({ t: 'devices.changed', devices: await listDevices() });
-        log.info('device offline', { id: d.id });
+        if (!byUser.has(d.user_id)) byUser.set(d.user_id, []);
+        byUser.get(d.user_id)!.push(d.id);
       }
+      for (const userId of byUser.keys()) {
+        hub.broadcastToUser(userId, { t: 'devices.changed', devices: await listDevices(userId) });
+      }
+      for (const d of offline) log.info('device offline', { id: d.id });
       await purgeSettled();
     }
   } catch (err) {
@@ -43,10 +50,10 @@ async function tick() {
   }
 }
 
-/** 投递轮转器：把 outbox 里的 pending 投出去。delivered = 通道确认收到，不是我发出去了 */
 async function rotate() {
-  if (rotating) return; // 上一轮还没跑完，跳过，别叠起来
+  if (rotating) return;
   rotating = true;
+  lastRotateAt = Date.now();
   try {
     const batch = await takePending();
     if (batch.length === 0) {
@@ -81,12 +88,15 @@ export function stopScheduler() {
   rotateTimer = null;
 }
 
-export async function schedulerStats() {
+export function schedulerStats() {
   return {
     connections: hub.connectionCount,
     tickMs: env.TICK_MS,
     rotateMs: env.ROTATE_MS,
-    settings: await getSettings(),
+    ticks,
+    lastTickAt,
+    lastRotateAt,
+    rotating,
   };
 }
 

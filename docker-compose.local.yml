@@ -1,0 +1,31 @@
+# 本地 Docker Desktop 调试覆盖层。只在显式 -f 时生效，Woodpecker 生产部署不会碰它。
+# 用法：docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local up -d --build
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: deskalarm-db
+    environment:
+      POSTGRES_USER: "${PGUSER:-desk_alarm}"
+      POSTGRES_PASSWORD: "${PGPASSWORD:-deskalarm}"
+      POSTGRES_DB: "${PGDATABASE:-desk_alarm_local}"
+    ports:
+      - "15432:5432"
+    volumes:
+      # PG18 镜像要求挂这一层，它会自己分 major version 子目录
+      - deskalarm-pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-desk_alarm}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+
+volumes:
+  deskalarm-pg:

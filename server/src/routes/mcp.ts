@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { requireAuth } from '../auth.js';
+import { requireAgent } from '../auth.js';
 import { log } from '../log.js';
 import { TOOLS, callTool, type McpCtx } from '../mcp/tools.js';
 
@@ -12,7 +12,7 @@ import { TOOLS, callTool, type McpCtx } from '../mcp/tools.js';
  */
 export async function mcpRoutes(app: FastifyInstance) {
   // MCP 单独一层鉴权。独立 register，钩子不会泄漏到别处
-  app.addHook('preHandler', requireAuth);
+  app.addHook('preHandler', requireAgent);
 
   /** 工具清单。stdio 和 HTTP 两个入口都从这里取，避免两份定义漂移 */
   app.get('/tools', async () => ({
@@ -27,7 +27,18 @@ export async function mcpRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'name 必填' });
     }
 
-    const ctx: McpCtx = { source: 'mcp', deviceName: `${req.session!.device.name} (agent)` };
+    const READ_TOOLS = new Set(['today_digest', 'list_entries', 'search_entries', 'device_health']);
+    if (req.session!.scope === 'read' && !READ_TOOLS.has(body.name)) {
+      return reply.code(403).send({
+        error: 'SCOPE_DENIED', message: '这个 Agent 令牌只有只读权限，写操作需要签发 write 范围的令牌',
+      });
+    }
+
+    const ctx: McpCtx = {
+      source: 'mcp',
+      deviceName: `${req.session!.device?.name ?? req.session!.user.username} (agent)`,
+      userId: req.session!.user.id,
+    };
 
     try {
       const result = await callTool(body.name, body.arguments ?? {}, ctx);

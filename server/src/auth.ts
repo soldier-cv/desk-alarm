@@ -1,76 +1,189 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { Device, LoginRequest, LoginResponse } from '../../shared/types.js';
-import { env, passcodeMatches, token as newToken } from './env.js';
-import { now, one, run } from './db.js';
-import { getDevice, touch, upsertDevice } from './repo/devices.js';
+import type { Device, LoginRequest, LoginResponse, Role, User } from '../../shared/types.js';
+import { env, token as newToken } from './env.js';
+import { now, run, one } from './db.js';
+import { getByMachineId, getDevice, machineOwner, upsertDeviceByMachine } from './repo/devices.js';
+import { getUser, getUserByUsername, verifyPassword } from './repo/users.js';
+import { resolveToken as resolveAgentToken, touchToken, type AgentScope } from './repo/agent-tokens.js';
 import { invalidateTransport, setPushToken } from './repo/deliveries.js';
+import { ensureSettings } from './repo/settings.js';
 
 interface SessionRow {
   token: string;
-  device_id: string;
+  user_id: string;
+  device_id: string | null;
+  kind: string;
+  username: string;
+  role: string;
+  disabled: boolean;
   expires_at: Date;
 }
 
-export async function login(req: LoginRequest): Promise<LoginResponse | { error: string }> {
-  if (!passcodeMatches(req.passcode)) {
-    return { error: 'BAD_PASSCODE' };
+export interface Session {
+  token: string;
+  user: User;
+  device: Device | null;
+  kind: 'user' | 'dashboard' | 'agent';
+  /** 仅 agent 会话有，MCP 工具按它限制读写 */
+  scope?: AgentScope;
+  agentTokenId?: string;
+}
+
+/* 登录限流：只记失败，按用户名 + IP。15 分钟 8 次 */
+const fails = new Map<string, { count: number; until: number }>();
+const WINDOW_MS = 15 * 60_000;
+const MAX_FAILS = 8;
+
+function rateKey(username: string, ip: string) {
+  return `${username.toLowerCase()}|${ip}`;
+}
+
+function tooMany(key: string): boolean {
+  const e = fails.get(key);
+  if (!e) return false;
+  if (e.until < now()) {
+    fails.delete(key);
+    return false;
   }
-  const device = await upsertDevice({
-    id: req.deviceId,
-    name: req.deviceName || '未命名设备',
-    platform: req.platform,
-    transport: req.transport,
-    pushToken: req.pushToken ?? null,
-  });
+  return e.count >= MAX_FAILS;
+}
+
+function noteFail(key: string) {
+  const e = fails.get(key);
+  if (!e || e.until < now()) fails.set(key, { count: 1, until: now() + WINDOW_MS });
+  else e.count += 1;
+}
+
+function noteSuccess(key: string) {
+  fails.delete(key);
+}
+
+export async function login(
+  req: LoginRequest, ip: string,
+): Promise<LoginResponse | { error: string }> {
+  const key = rateKey(req.username ?? '', ip ?? '');
+  if (tooMany(key)) return { error: 'RATE_LIMITED' };
+
+  const user = await getUserByUsername(req.username ?? '');
+  if (!user || !user.passwordHash || user.disabled) {
+    noteFail(key);
+    // 用户名不存在和口令错误返回同一个错误，避免枚举用户名
+    return { error: 'BAD_CREDENTIALS' };
+  }
+  // 口令校验本身也要跑，否则不存在用户的响应时间会明显更短
+  if (!verifyPassword(req.password ?? '', user.passwordHash)) {
+    noteFail(key);
+    return { error: 'BAD_CREDENTIALS' };
+  }
+  noteSuccess(key);
+
   const tok = newToken();
-  const expires = new Date(Date.now() + env.SESSION_TTL_MS);
+  const expires = new Date(now() + env.SESSION_TTL_MS);
+  let device: Device | null = null;
+
+  if (req.machineId?.trim()) {
+    device = await upsertDeviceByMachine({
+      machineId: req.machineId.trim(),
+      userId: user.id,
+      name: req.deviceName || '未命名设备',
+      platform: req.platform,
+      transport: req.transport,
+      pushToken: req.pushToken ?? null,
+    });
+    // 设备随用户走：同机换人登录，旧用户的会话立即失效
+    await run(
+      `DELETE FROM sessions WHERE device_id = $1 AND user_id <> $2`,
+      [device.id, user.id],
+    );
+    invalidateTransport(device.id);
+    if (req.pushToken) await setPushToken(device.id, req.transport ?? null, req.pushToken);
+  }
+
   await run(
-    `INSERT INTO sessions (token, device_id, expires_at) VALUES ($1,$2,$3)
-     ON CONFLICT (token) DO UPDATE SET device_id = excluded.device_id, expires_at = excluded.expires_at`,
-    [tok, device.id, expires],
+    `INSERT INTO sessions (token, user_id, device_id, kind, expires_at)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [tok, user.id, device?.id ?? null, device ? 'user' : 'dashboard', expires],
   );
-  await touch(device.id);
-  return { token: tok, device };
+  await ensureSettings(user.id);
+
+  return {
+    token: tok,
+    user: { id: user.id, username: user.username, role: user.role, disabled: user.disabled, createdAt: user.createdAt },
+    device,
+  };
 }
 
 export async function logout(tok: string) {
   await run('DELETE FROM sessions WHERE token = $1', [tok]);
 }
 
-export async function resolveSession(req: FastifyRequest): Promise<{ token: string; device: Device } | null> {
+export async function resolveSession(req: FastifyRequest): Promise<Session | null> {
   const header = req.headers.authorization;
   const bearer = header?.startsWith('Bearer ') ? header.slice(7) : null;
   const q = (req.query as { token?: string } | undefined)?.token;
   const tok = bearer ?? q;
   if (!tok) return null;
 
-  // MCP 可以用独立 token，不跟人抢会话
-  if (env.MCP_TOKEN && tok === env.MCP_TOKEN) {
-    // 优先用标记为本机的设备，没有就退回最早登录的那台。
-    // 少了这个兜底，部署完 MCP 直接不可用
-    const d = await one<{ id: string }>(
-      `SELECT id FROM devices
-        ORDER BY is_self DESC, created_at ASC LIMIT 1`,
-    );
-    if (!d) return null;
-    const device = await getDevice(d.id);
-    return device ? { token: tok, device } : null;
+  const row = await one<SessionRow>(
+    `SELECT s.token, s.user_id, s.device_id, s.kind, s.expires_at,
+            u.username, u.role, u.disabled
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token = $1`,
+    [tok],
+  );
+  if (row) {
+    if (new Date(row.expires_at).getTime() < now()) {
+      await run('DELETE FROM sessions WHERE token = $1', [tok]);
+      return null;
+    }
+    if (row.disabled) return null;
+    const device = row.device_id ? (await getDevice(row.device_id)) ?? null : null;
+    return {
+      token: tok,
+      user: {
+        id: row.user_id, username: row.username, role: row.role as Role,
+        disabled: !!row.disabled, createdAt: 0,
+      },
+      device,
+      kind: row.kind as Session['kind'],
+    };
   }
 
-  const row = await one<SessionRow>('SELECT * FROM sessions WHERE token = $1', [tok]);
-  if (!row) return null;
-  if (new Date(row.expires_at).getTime() < now()) {
-    await run('DELETE FROM sessions WHERE token = $1', [tok]);
-    return null;
+  // Agent 令牌是独立凭证，不进 sessions 表，也不借登录会话的身份
+  const agent = await resolveAgentToken(tok);
+  if (!agent) return null;
+  const user = await getUser(agent.userId);
+  if (!user || user.disabled) return null;
+  // 云端 agent 没有 machineId，就不关联设备；有机器时不能借令牌把设备抢回来
+  let device = null;
+  if (agent.machineId) {
+    const owner = await machineOwner(agent.machineId);
+    if (owner && owner !== user.id) return null;
+    device = await getByMachineId(agent.machineId);
+    if (!device) {
+      device = await upsertDeviceByMachine({
+        machineId: agent.machineId,
+        userId: user.id,
+        name: 'Agent',
+        platform: 'windows',
+        transport: 'ws',
+      });
+    }
   }
-  const device = await getDevice(row.device_id);
-  if (!device) return null;
-  return { token: tok, device };
+  await touchToken(agent.id);
+  return {
+    token: tok,
+    user,
+    device,
+    kind: 'agent',
+    scope: agent.scope,
+    agentTokenId: agent.id,
+  };
 }
 
 declare module 'fastify' {
   interface FastifyRequest {
-    session: { token: string; device: Device } | null;
+    session: Session | null;
   }
 }
 
@@ -82,5 +195,36 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply) {
   }
 }
 
+/** 主 API 只认登录会话。Agent 令牌只能走 MCP，管理员接口也不能借它提权 */
+export async function requireHuman(req: FastifyRequest, reply: FastifyReply) {
+  await requireAuth(req, reply);
+  if (reply.sent) return;
+  if (req.session!.kind === 'agent') {
+    await reply.code(403).send({
+      error: 'AGENT_TOKEN_SCOPE', message: 'Agent 令牌只能用于 MCP，请用账号密码登录',
+    });
+  }
+}
+
+/** MCP 只认 agent 令牌。登录 token 调不了，避免一把钥匙开所有门 */
+export async function requireAgent(req: FastifyRequest, reply: FastifyReply) {
+  await requireAuth(req, reply);
+  if (reply.sent) return;
+  if (req.session!.kind !== 'agent') {
+    await reply.code(403).send({
+      error: 'AGENT_TOKEN_REQUIRED', message: 'MCP 只接受 Agent 令牌，请在客户端签发',
+    });
+  }
+}
+
+export async function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
+  if (!req.session) {
+    await reply.code(401).send({ error: 'UNAUTHORIZED', message: '请先登录' });
+    return;
+  }
+  if (req.session.user.role !== 'admin') {
+    await reply.code(403).send({ error: 'FORBIDDEN', message: '需要管理员权限' });
+  }
+}
+
 export { setPushToken, invalidateTransport };
-export { touch };

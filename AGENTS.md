@@ -73,7 +73,7 @@ cd app && node scripts/contrast.mjs
 
 ## 跨平台：不要引入 Windows 专属代码
 
-客户端要同时出 Windows 和 macOS 产物。`app/src-tauri/src/` 下只用 Tauri 跨平台 API。
+客户端出 Windows 安装包；Android 代码就绪、在有 SDK 的机器上构建（见 `docs/android.md`）。`app/src-tauri/src/` 下桌面专属能力用 `#[cfg(desktop)]` 隔开，移动端只保留共用部分。
 
 注意 `windows.rs` 这个文件名有误导性——它管的是「应用自己的三个窗口」，不是 Windows 系统 API。
 
@@ -97,4 +97,4 @@ cd app && node scripts/contrast.mjs
 ## 环境变量
 
 - 改 `.env` 后必须 `docker compose up -d --force-recreate`，`restart` 不重载环境变量
-- 端口：`8091` 网关（`WEB_PORT`）、`8787` API 直连。`8090` 被本机别的服务占了，别用
+- 端口：对外只有 `8091`（`WEB_PORT`，映射到 api 容器的 8787），没有 nginx 网关；`8090` 被本机别的服务占了，别用

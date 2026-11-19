@@ -6,7 +6,31 @@
 export type EntryKind = 'text' | 'link' | 'path';
 export type EntryStatus = 'inbox' | 'pending' | 'done' | 'missed';
 export type RepeatRule = 'none' | 'daily' | 'weekly' | 'monthly';
-export type Platform = 'windows' | 'android' | 'ios' | 'mac' | 'linux';
+export type Platform = 'windows' | 'android' | 'ios' | 'mac' | 'linux' | 'web';
+
+export type Role = 'admin' | 'user';
+
+export type AgentScope = 'read' | 'write';
+
+export interface AgentToken {
+  id: string;
+  name: string;
+  prefix: string;
+  scope: AgentScope;
+  machineId: string | null;
+  createdAt: number;
+  lastUsedAt: number | null;
+  expiresAt: number | null;
+  revokedAt: number | null;
+}
+
+export interface User {
+  id: string;
+  username: string;
+  role: Role;
+  disabled: boolean;
+  createdAt: number;
+}
 
 /**
  * 提醒强度。
@@ -110,11 +134,12 @@ export interface Settings {
 /* ================= HTTP ================= */
 
 export interface LoginRequest {
-  passcode: string;
+  username: string;
+  password: string;
   deviceName: string;
   platform: Platform;
-  /** 客户端要主动重连时带上，服务端据此判断是老设备还是新设备 */
-  deviceId?: string;
+  /** OS 级 machine-id，不可变。Web 端不传，服务端就不建设备行 */
+  machineId?: string;
   transport?: TransportName;
   /** Android 首次注册时带 FCM token */
   pushToken?: string;
@@ -122,7 +147,8 @@ export interface LoginRequest {
 
 export interface LoginResponse {
   token: string;
-  device: Device;
+  user: User;
+  device: Device | null;
 }
 
 export interface CreateEntryRequest {
@@ -210,4 +236,35 @@ export interface MissedFire {
   firedAt: number;
   /** firedAt 与现在相差多少毫秒 */
   lateByMs: number;
+}
+
+/* ================= 开发看板 ================= */
+
+export interface Overview {
+  serverTs: number;
+  uptimeMs: number;
+  db: { ok: boolean };
+  scheduler: {
+    tickMs: number;
+    rotateMs: number;
+    ticks: number;
+    lastTickAt: number | null;
+    lastRotateAt: number | null;
+    rotating: boolean;
+  };
+  entries: {
+    total: number;
+    pending: number;
+    missed: number;
+    inbox: number;
+    done: number;
+    neglected: number;
+  };
+  deliveries: {
+    byState: Record<string, number>;
+    byTransport: Record<string, number>;
+    recentErrors: Array<{ entryId: string; deviceId: string; error: string; at: number }>;
+  };
+  devices: { total: number; online: number; byPlatform: Record<string, number> };
+  users: { total: number };
 }

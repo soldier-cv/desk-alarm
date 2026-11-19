@@ -29,9 +29,6 @@ export const env = {
   PGPASSWORD: str('PGPASSWORD', ''),
   PG_POOL_MAX: int('PG_POOL_MAX', 10),
 
-  /** 登录口令。首次部署必须改掉 */
-  PASSCODE: str('DESKALARM_PASSCODE', 'deskalarm'),
-
   /** 会话有效期，默认 90 天 */
   SESSION_TTL_MS: int('SESSION_TTL_MS', 90 * 24 * 60 * 60 * 1000),
 
@@ -57,20 +54,7 @@ export const env = {
   FCM_CLIENT_EMAIL: str('FCM_CLIENT_EMAIL', ''),
   FCM_PRIVATE_KEY: str('FCM_PRIVATE_KEY', ''),
 
-  /** MCP 的独立 token。不配就复用登录 token */
-  MCP_TOKEN: str('MCP_TOKEN', ''),
-
   LOG_LEVEL: str('LOG_LEVEL', 'info'),
 };
 
 export const token = (bytes = 32) => randomBytes(bytes).toString('base64url');
-
-/** 口令比较用定长比较，避免通过响应时间猜口令 */
-export function passcodeMatches(input: string): boolean {
-  const a = Buffer.from(input);
-  const b = Buffer.from(env.PASSCODE);
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
-}
