@@ -1,8 +1,7 @@
 name: build-client
 
 # 客户端打包。服务端部署在 Woodpecker，那边认 v* tag，这里也认同一个 tag，
-# 推一次 v0.2.0 两边一起走：服务端换镜像，客户端出 Windows 安装包。
-# Android 不在这条流水线里：在有 Android SDK 的机器上用 scripts/build-android.ps1 本地构建。
+# 推一次 v0.2.0 两边一起走：服务端换镜像，客户端出安装包。
 #
 #   推 tag v*        打包 Windows，建 Release 并挂上安装包
 #   手动填 tag       同上，用于给某个版本补包或重跑
@@ -33,7 +32,7 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22.23.4'
 
 jobs:
   # tag 或手动填了 tag 才发 Release；PR 和留着空的手动触发只出 artifact
@@ -156,6 +155,35 @@ jobs:
 
       # 签名私钥注入后，打包器会给安装包产出同名的 .sig。
       # 没有它客户端会拒绝安装更新（插件验签失败），而不是"跳过校验继续装"
+      #
+      # Secret 格式预检（2026-10-20 加）：Tauri 要求 TAURI_SIGNING_PRIVATE_KEY
+      # 是**单行纯 base64**（整个密钥文件本身就是被 base64 过的文本，约 348 字符）。
+      # 粘贴时带进末尾换行/`untrusted comment:` 行会报
+      # `failed to decode base64 key: Invalid symbol 10, offset 348`——
+      # 这个报错发生在打包成功之后，等于白等一轮 6~8 分钟编译。
+      # 这里提前拦住并说清怎么修，而不是让人对着 base64 报错猜。
+      - name: Verify signing secret format
+        if: ${{ needs.plan.outputs.publish == 'true' }}
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 为空，请在 GitHub 仓库 Secrets 中配置。"
+            exit 1
+          fi
+          # 去掉首尾空白后必须是单行、且能被 base64 解回 ASCII 文本
+          TRIMMED="$(printf '%s' "$KEY" | tr -d '[:space:]')"
+          if [ "$TRIMMED" != "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 含空白/换行（粘贴时带入了行尾）。Tauri 需要单行纯 base64（约 348 字符，无换行、无 untrusted comment 行）。修法：在 Settings→Secrets 里重新粘贴，确保末行不留空行。"
+            exit 1
+          fi
+          if ! printf '%s' "$KEY" | base64 -d >/dev/null 2>&1; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 不是合法 base64，请重新用 tauri signer generate 生成的密钥文件内容（整份文件内容即单行 base64）。"
+            exit 1
+          fi
+          echo "签名私钥格式校验通过（长度 ${#KEY}）"
+
       - name: Build Windows installer
         if: ${{ needs.plan.outputs.publish == 'true' }}
         shell: bash
@@ -206,14 +234,32 @@ jobs:
 
           # 统一成小写连字符的附件名（desk-alarm_<版本>_<架构>），
           # 不用打包器默认的 DeskAlarm_0.2.1_x64-setup.exe
+          # gh release upload 偶发 HTTP 502（GitHub 侧），重试即可恢复。
+          # 裸 gh 会让一次抖动把整条发版打红，故加指数退避重试。
+          upload_with_retry() {
+            local tag="$1"; shift
+            local attempt=1 max=5 delay=5
+            while [ "$attempt" -le "$max" ]; do
+              if gh release upload "$tag" "$@" --clobber; then
+                return 0
+              fi
+              if [ "$attempt" -lt "$max" ]; then
+                echo "::warning::gh release upload 第 ${attempt} 次失败（疑似 GitHub 5xx），${delay}s 后重试"
+                sleep "$delay"; delay=$((delay * 2))
+              fi
+              attempt=$((attempt + 1))
+            done
+            echo "::error::gh release upload 重试 ${max} 次仍失败"
+            return 1
+          }
           V="${TAG#v}"
           mkdir -p release-assets
           cp app/src-tauri/target/release/bundle/nsis/*.exe "release-assets/desk-alarm_${V}_x64-setup.exe"
           # 签名文件跟着一起传：latest.json 里的 signature 就是它的内容
           cp app/src-tauri/target/release/bundle/nsis/*.sig "release-assets/desk-alarm_${V}_x64-setup.exe.sig"
-          gh release upload "$TAG" \
+          upload_with_retry "$TAG" \
             "release-assets/desk-alarm_${V}_x64-setup.exe" \
-            "release-assets/desk-alarm_${V}_x64-setup.exe.sig" --clobber
+            "release-assets/desk-alarm_${V}_x64-setup.exe.sig"
 
   # 生成客户端读的 latest.json。
   #
@@ -223,9 +269,18 @@ jobs:
     if: ${{ needs.plan.outputs.publish == 'true' }}
     needs: [plan, windows]
     runs-on: ubuntu-latest
+    # 顶层 permissions 是 contents: read，只读 token 无法上传 Release 附件
+    # （报 HTTP 403 Resource not accessible by integration）。
+    # windows job 声明了 write，这里补上。
+    permissions:
+      contents: write
     env:
       TAG: ${{ needs.plan.outputs.release_tag }}
     steps:
+      # gh CLI 需要 git 仓库上下文才能推断 owner/repo，缺这步会报
+      # `failed to run git: fatal: not a git repository`
+      - uses: actions/checkout@v4
+
       - name: Build and upload latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -270,10 +325,22 @@ jobs:
             }' > latest.json
 
           cat latest.json
-          gh release upload "$TAG" latest.json --clobber
-          echo "latest.json 已上传（v$V）"
+          # 重试上传：GitHub 偶发 5xx
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" latest.json --clobber; then
+              echo "latest.json 已上传（v$V）"
+              break
+            fi
+            if [ "$attempt" = "5" ]; then
+              echo "::error::latest.json 上传重试 5 次仍失败"
+              exit 1
+            fi
+            echo "::warning::latest.json 上传第 ${attempt} 次失败，${attempt}0s 后重试"
+            sleep $((attempt * 10))
+          done
 
   # GitHub Release 挂好包之后，把同一个 tag 和同样的安装包同步到 Gitee。
+  #
   # continue-on-error 是刻意的：GitHub Release 这时已经建好、用户已经能下载，
   # 镜像失败不该让整个发版显示为失败。代价是失败不在 job 状态里，
   # 所以脚本内部对关键失败一律 `echo ::error::` + exit 1，日志里必须看得见。

@@ -1,0 +1,4 @@
+# ai-memory 跨设备落格标记：workspace 必须与服务端默认(default)一致；
+# project 固定为仓库名，使服务器/Windows/手机三边落到同一格。
+workspace = "default"
+project = "desk-alarm-repo"

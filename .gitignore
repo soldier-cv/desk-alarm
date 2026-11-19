@@ -1,20 +1,30 @@
-node_modules
-dist
-data
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+target/
+target-fresh/
+.playwright-mcp/
+
+# 数据与缓存
+data/
 *.db
 *.db-wal
 *.db-shm
-target
-target-fresh
-.playwright-mcp
-app-icon.png
-.openchamber
-.openchamber/screenshots
+*.log
+.DS_Store
 
-.env
-.env.local
-!.env.example
+app-icon.png
+.openchamber/
+.openchamber/screenshots/
+
 .release_tag
 
-# 更新签名私钥。丢了它发不出新版本，泄露它能被人签假包
+# 凭据与密钥（严防泄漏）
+.env
+.env.*
+!.env.example
+*.pem
 *.key
+credentials.json
+*.token
