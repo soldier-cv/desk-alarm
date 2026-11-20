@@ -7,7 +7,7 @@ import { hub } from '../hub.js';
 import { log } from '../log.js';
 import {
   VersionConflict, ackEntry, createEntry, deleteEntry, dismissEntry, getEntry,
-  listDismissals, listEntries, listNeglected, searchEntries, updateEntry,
+  getEntryCounts, listDismissals, listEntries, listNeglected, reopenEntry, searchEntries, updateEntry,
 } from '../repo/entries.js';
 import { findMissed, markAcked } from '../repo/deliveries.js';
 import { getSettings, patchSettings } from '../repo/settings.js';
@@ -20,6 +20,20 @@ export async function entryRoutes(app: FastifyInstance) {
     id: req.session!.device?.id ?? 'web',
     name: req.session!.device?.name ?? req.session!.user.username,
   });
+
+  const ENUMS: Record<string, string[]> = {
+    kind: ['text', 'link', 'path'],
+    repeat: ['none', 'daily', 'weekly', 'monthly'],
+    strength: ['weak', 'strong'],
+  };
+  const badFields = (body: Record<string, unknown>) => {
+    for (const [key, allowed] of Object.entries(ENUMS)) {
+      if (body[key] !== undefined && !allowed.includes(String(body[key]))) return `${key} 取值不合法`;
+    }
+    if (body.bypassQuiet !== undefined && typeof body.bypassQuiet !== 'boolean') return 'bypassQuiet 必须是布尔值';
+    if (body.devices !== undefined && !Array.isArray(body.devices)) return 'devices 必须是数组';
+    return null;
+  };
 
   app.get('/entries', async (req) => {
     const userId = uid(req);
@@ -37,13 +51,19 @@ export async function entryRoutes(app: FastifyInstance) {
     return { entries: await listEntries(userId, view, q.limit ? Number(q.limit) : undefined) };
   });
 
+  app.get('/entries/counts', async (req) => ({ counts: await getEntryCounts(uid(req)) }));
+
   app.get('/entries/:id', async (req, reply) => {
     const e = await getEntry((req.params as { id: string }).id, uid(req));
     if (!e) return reply.code(404).send({ error: 'NOT_FOUND', message: '条目不存在' });
     return { entry: e };
   });
 
-  app.get('/neglected', async (req) => ({ entries: await listNeglected(uid(req), 2) }));
+  app.get('/neglected', async (req) => {
+    const userId = uid(req);
+    const settings = await getSettings(userId);
+    return { entries: await listNeglected(userId, settings.neglectedAfter) };
+  });
 
   app.post('/entries', async (req, reply) => {
     const body = (req.body ?? {}) as CreateEntryRequest & { idempotencyKey?: string };
@@ -56,6 +76,8 @@ export async function entryRoutes(app: FastifyInstance) {
     if (body.strength && body.strength !== 'weak' && body.strength !== 'strong') {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'strength 只能是 weak 或 strong' });
     }
+    const bad = badFields(body as unknown as Record<string, unknown>);
+    if (bad) return reply.code(400).send({ error: 'BAD_REQUEST', message: bad });
 
     const userId = uid(req);
     const entry = await createEntry(userId, body, {
@@ -73,6 +95,14 @@ export async function entryRoutes(app: FastifyInstance) {
   app.patch('/entries/:id', async (req, reply) => {
     const id = (req.params as { id: string }).id;
     const userId = uid(req);
+    const bad = badFields(req.body as Record<string, unknown>);
+    if (bad) return reply.code(400).send({ error: 'BAD_REQUEST', message: bad });
+    const cur = await getEntry(id, userId);
+    if (cur?.doneAt !== undefined && cur?.doneAt !== null) {
+      return reply.code(409).send({
+        error: 'DONE_READONLY', message: '已完成的条目不能修改，可以复制成新条目',
+      });
+    }
     try {
       const entry = await updateEntry(id, userId, req.body as UpdateEntryRequest);
       hub.broadcastToUser(userId, { t: 'entry.updated', entry });
@@ -186,7 +216,7 @@ export async function entryRoutes(app: FastifyInstance) {
     const cur = await getEntry(id, userId);
     if (!cur) return reply.code(404).send({ error: 'NOT_FOUND', message: '条目不存在' });
     const next = cur.remindAt && cur.remindAt > Date.now() ? cur.remindAt : Date.now() + 60_000;
-    const entry = await updateEntry(id, userId, { remindAt: next, version: cur.version });
+    const entry = await reopenEntry(id, userId, next, cur.version);
     hub.broadcastToUser(userId, { t: 'entry.updated', entry });
     return { entry };
   });

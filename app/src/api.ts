@@ -4,12 +4,12 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import type {
-  AckAction, AgentScope, AgentToken, CreateEntryRequest, Device, Dismissal, Entry,
+  AckAction, AgentScope, AgentToken, CreateEntryRequest, Device, Dismissal, Entry, EntryCounts,
   LoginResponse, MissedFire, MyStats, Overview, RepeatRule, Role, ServerMessage, Settings, Strength, TransportName, User,
 } from '../../shared/types';
 
 export type {
-  AckAction, AgentScope, AgentToken, Device, Dismissal, Entry, MissedFire, MyStats, RepeatRule,
+  AckAction, AgentScope, AgentToken, Device, Dismissal, Entry, EntryCounts, MissedFire, MyStats, RepeatRule,
   Overview, ServerMessage, Settings, Strength, TransportName, User,
 };
 
@@ -205,6 +205,8 @@ export const api = {
 
   entries: (view: string) =>
     req<{ entries: Entry[]; dismissals?: Dismissal[] }>(`/entries?view=${view}`),
+
+  counts: () => req<{ counts: EntryCounts }>('/entries/counts'),
 
   dismissed: () => req<{ dismissals: Dismissal[] }>('/entries?view=dismissed'),
 

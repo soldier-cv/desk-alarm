@@ -4,6 +4,7 @@ import type {
 } from '../../../shared/types.js';
 import { one, rows, run, toDt, toMs, tx, type Tx } from '../db.js';
 import { makeFireKey, enqueueDelivery } from './deliveries.js';
+import { getSettings } from './settings.js';
 
 interface Row {
   id: string;
@@ -108,6 +109,28 @@ export async function getEntries(ids: string[], userId: string): Promise<Entry[]
 /* ---------------------------------------------------------------- 读 */
 
 export type ListView = 'today' | 'upcoming' | 'inbox' | 'all' | 'done';
+
+/** 侧栏计数必须独立于当前视图，否则切视图时数字会跳 */
+export async function getEntryCounts(userId: string) {
+  const tomorrow = new Date();
+  tomorrow.setHours(0, 0, 0, 0);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const r = await one<{
+    today: number; up: number; inbox: number; all: number; done: number; missed: number; dismissed: number;
+  }>(
+    `SELECT
+       count(*) FILTER (WHERE done_at IS NULL AND remind_at IS NOT NULL AND remind_at < $2)::int AS today,
+       count(*) FILTER (WHERE done_at IS NULL AND remind_at IS NOT NULL AND remind_at >= $2)::int AS up,
+       count(*) FILTER (WHERE done_at IS NULL AND remind_at IS NULL)::int AS inbox,
+       count(*) FILTER (WHERE done_at IS NULL)::int AS all,
+       count(*) FILTER (WHERE done_at IS NOT NULL)::int AS done,
+       count(*) FILTER (WHERE done_at IS NULL AND fired_at IS NOT NULL AND remind_at <= fired_at)::int AS missed,
+       (SELECT count(*)::int FROM dismissals WHERE user_id = $1) AS dismissed
+     FROM entries WHERE user_id = $1`,
+    [userId, tomorrow],
+  );
+  return r!;
+}
 
 export async function listEntries(
   userId: string, view: ListView = 'all', limit?: number,
@@ -291,6 +314,23 @@ export async function updateEntry(id: string, userId: string, req: UpdateEntryRe
   return (await getEntry(id, userId))!;
 }
 
+/** 重新提醒：必须清掉 done_at，否则条目还是 completed，改 remind_at 也没用 */
+export async function reopenEntry(id: string, userId: string, remindAt: number, version: number) {
+  const n = await run(
+    `UPDATE entries
+        SET done_at = NULL, done_device = NULL, fired_at = NULL,
+            remind_at = $2, version = version + 1, updated_at = now()
+      WHERE id = $1 AND user_id = $3 AND version = $4`,
+    [id, toDt(remindAt), userId, version],
+  );
+  if (n === 0) {
+    const now = await getEntry(id, userId);
+    if (!now) throw new Error('NOT_FOUND');
+    throw new VersionConflict(now);
+  }
+  return (await getEntry(id, userId))!;
+}
+
 export async function deleteEntry(id: string, userId: string) {
   await run('DELETE FROM entries WHERE id = $1 AND user_id = $2', [id, userId]);
 }
@@ -328,6 +368,9 @@ export async function ackEntry(
 export async function dismissEntry(
   id: string, userId: string, deviceId: string, deviceName: string, reason?: string,
 ): Promise<{ entry: Entry; dismissCount: number; suggestion: string | null }> {
+  const settings = await getSettings(userId);
+  const downgradeAfter = settings.autoDowngradeAfter;
+  const neglectAfter = settings.neglectedAfter;
   const result = await tx(async (q) => {
     const cur = await getEntry(id, userId);
     if (!cur) throw new Error('NOT_FOUND');
@@ -343,7 +386,7 @@ export async function dismissEntry(
       [id, userId],
     )) ?? 0;
 
-    if (n >= 2 && cur.strength === 'strong') {
+    if (n >= downgradeAfter && cur.strength === 'strong') {
       await q.run(
         `UPDATE entries SET strength = 'weak', version = version + 1, updated_at = now()
           WHERE id = $1 AND user_id = $2`,
@@ -357,9 +400,9 @@ export async function dismissEntry(
   return {
     entry,
     dismissCount: result,
-    suggestion: result >= 3
+    suggestion: result >= neglectAfter
       ? `这条已经被忽略 ${result} 次了，要么删掉，要么改成弱提示`
-      : result === 2
+      : result === downgradeAfter
         ? '已自动降级为弱提示'
         : null,
   };

@@ -8,8 +8,8 @@ import {
   ApiError, Realtime, api, clearToken, dayLabel, getMachineId, getPlatform, hhmm, hostOf,
   lateBy, loadConfig, normalizeBaseUrl, parseInput, probeServer, saveConfig,
   serverNow, switchServer, urgencyOf,
-  type AckAction, type AgentScope, type Device, type Dismissal, type Entry, type MyStats, type Overview,
-  type ServerMessage, type Settings,
+  type AckAction, type AgentScope, type Device, type Dismissal, type Entry, type EntryCounts,
+  type MyStats, type Overview, type ServerMessage, type Settings,
 } from '../api';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
@@ -58,6 +58,12 @@ function quiet<T = void>(cmd: string, args?: Record<string, unknown>): void {
   void invoke<T>(cmd, args).catch(() => { /* 没通知权限就算了，横幅还在 */ });
 }
 
+/** 提醒音受「声音=静音」控制；设置页的试响不走这里 */
+function ringPing(args: Record<string, unknown>) {
+  if (loadConfig().settings.sound === 'none') return;
+  quiet('ping', args);
+}
+
 /** 跨窗口事件。浏览器里没有 Tauri 事件系统，emit 一样会同步抛，不能直接调 */
 function send(name: string, payload: unknown = {}) {
   if (!hasTauri()) return;
@@ -92,6 +98,7 @@ const state = {
   entries: [] as Entry[],
   dismissals: [] as Dismissal[],
   devices: [] as Device[],
+  counts: null as EntryCounts | null,
   selected: null as string | null,
 };
 
@@ -108,7 +115,7 @@ const isDesktop = () => platform === 'windows' || platform === 'macos' || platfo
 
 const alarm = new AlarmController({
   onNotify: (entry, attempt) => {
-    quiet('ping', {
+    ringPing({
       title: attempt === 1 ? (entry.strength === 'weak' ? '提醒' : 'DeskAlarm') : `DeskAlarm（第 ${attempt} 次）`,
       body: entry.text,
     });
@@ -125,13 +132,13 @@ const alarm = new AlarmController({
 
   onRepeat: (entry, attempt) => {
     quiet('show_takeover', { entry, stage: 'escalated', muted: false });
-    quiet('ping', { title: `DeskAlarm（第 ${attempt} 次）`, body: entry.text });
+    ringPing({ title: `DeskAlarm（第 ${attempt} 次）`, body: entry.text });
   },
 
   onDismiss: (entry, reason) => {
     send('takeover:dismiss');
     if (reason === 'elsewhere') {
-      quiet('ping', { title: 'DeskAlarm', body: '这条已在别的设备上处理掉了' });
+      ringPing({ title: 'DeskAlarm', body: '这条已在别的设备上处理掉了' });
     }
     void refresh();
   },
@@ -203,7 +210,8 @@ function renderLogin() {
       switchServer(norm);
       base.value = norm;
       const name = web ? '' : ($<HTMLInputElement>('#name')?.value.trim() || '我的笔记本');
-      const r = await api.login(username, code.value, name, web ? 'web' : 'windows');
+      const serverPlatform = web ? 'web' : platform === 'macos' ? 'mac' : platform;
+      const r = await api.login(username, code.value, name, serverPlatform);
       saveConfig({ user: r.user, deviceName: name, token: r.token, device: r.device });
       boot();
       // Web 本来就故意不建设备；桌面端没拿到才需要提醒用户
@@ -683,22 +691,12 @@ function setView(v: View) {
   } else {
     void refresh();
   }
-  if (v === 'mystats' || v === 'settings') void reloadPageData();
 }
 
-function counts() {
-  const live = state.entries.filter((e) => e.status !== 'done');
-  const t = new Date(serverNow());
-  t.setHours(0, 0, 0, 0);
-  t.setDate(t.getDate() + 1);
-  const cut = t.getTime();
-  return {
-    today: live.filter((e) => e.remindAt !== null && e.remindAt < cut).length,
-    up: live.filter((e) => e.remindAt !== null && e.remindAt >= cut).length,
-    inbox: live.filter((e) => e.remindAt === null).length,
-    all: live.length,
-    done: state.entries.filter((e) => e.status === 'done').length,
-  };
+/** 侧栏数字只认服务端全局计数；首次响应前的兜底也不能按当前视图算，否则切视图会闪 */
+function counts(): EntryCounts {
+  if (state.counts) return state.counts;
+  return { today: 0, up: 0, inbox: 0, all: 0, done: 0, missed: 0, dismissed: 0 };
 }
 
 function renderSidebar() {
@@ -712,7 +710,7 @@ function renderSidebar() {
   ];
   const me = loadConfig().device;
   const others = state.devices.filter((d) => d.id !== me?.id);
-  const bad = state.entries.filter((e) => e.status === 'missed').length;
+  const bad = c.missed;
   const devLabel = (d: Device) => d.locked ? '已锁定' : d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送';
   const devDot = (d: Device) => d.locked ? 'warn' : d.online ? '' : d.pushReady ? 'off' : 'alert';
 
@@ -723,7 +721,7 @@ function renderSidebar() {
       </button>`).join('')}
     <div class="nav-sep"></div>
     <div class="nav-head">弱提示</div>
-    <button class="nav ${state.view === 'dismissed' ? 'on' : ''}" data-view="dismissed">已忽略<span class="count">${state.dismissals.length}</span></button>
+    <button class="nav ${state.view === 'dismissed' ? 'on' : ''}" data-view="dismissed">已忽略<span class="count">${c.dismissed}</span></button>
     <button class="nav ${state.view === 'neglected' ? 'on' : ''}" data-view="neglected">老是被忽略</button>
     <div class="nav-sep"></div>
     <div class="nav-head">我的</div>
@@ -1044,7 +1042,7 @@ function renderDeviceRows() {
       <span class="mono">${esc(d.lastIp ?? '—')}</span>
       <span>${d.locked ? '已锁定' : d.online ? '在线' : '离线'}</span>
       <span class="hint">${esc(d.platform)}</span>
-      <button class="btn sm" data-ping="${esc(d.id)}" title="让这台设备试响">试响</button>
+      ${d.id === loadConfig().device?.id ? `<button class="btn sm" data-ping="${esc(d.id)}" title="让这台设备试响">试响</button>` : ''}
     </div>`).join('');
   box.onclick = (ev) => {
     const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-ping]');
@@ -1236,7 +1234,7 @@ async function unlockDevice(pin?: string) {
   try {
     const { missed } = await api.missed();
     for (const m of missed) {
-      quiet('ping', { title: '补发提醒', body: `${Math.max(1, Math.round(m.lateByMs / 60_000))} 分钟前就该响：${m.entry.text}` });
+      ringPing({ title: '补发提醒', body: `${Math.max(1, Math.round(m.lateByMs / 60_000))} 分钟前就该响：${m.entry.text}` });
       if (!alarm.fire(m.entry)) pushWeak(m.entry);
     }
   } catch { /* 补发失败就让列表自己刷新出来 */ }
@@ -1607,7 +1605,7 @@ let whenPop: HTMLElement | null = null;
 let whenOut: ((ev: MouseEvent) => void) | null = null;
 
 function closeWhenPicker() {
-  if (whenOut) document.removeEventListener('click', whenOut);
+  if (whenOut) document.removeEventListener('mousedown', whenOut);
   whenOut = null;
   whenPop?.remove();
   whenPop = null;
@@ -1684,6 +1682,13 @@ function openWhenPicker(e: Entry, anchor: HTMLElement) {
       </div>`;
   };
 
+  // 时间下拉的值要即时记下来，否则一点日期重绘就退回旧时间
+  pop.addEventListener('change', (ev) => {
+    const t = ev.target as HTMLSelectElement;
+    if (t.id === 'dp-h') hh = Number(t.value);
+    if (t.id === 'dp-m') mm = Number(t.value);
+  });
+
   pop.addEventListener('click', (ev) => {
     const t = ev.target as HTMLElement;
     const day = t.closest<HTMLElement>('[data-day]');
@@ -1729,8 +1734,9 @@ function openWhenPicker(e: Entry, anchor: HTMLElement) {
   const r = anchor.getBoundingClientRect();
   pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 288))}px`;
   pop.style.top = `${Math.max(8, Math.min(r.bottom + 6, window.innerHeight - 370))}px`;
+  // 用 mousedown 判定点击内外：click 时日期格子已被 render() 换掉，目标节点不在 pop 里会被误判成外部点击
   whenOut = (ev) => { if (!pop.contains(ev.target as Node) && ev.target !== anchor) closeWhenPicker(); };
-  setTimeout(() => document.addEventListener('click', whenOut!), 0);
+  setTimeout(() => document.addEventListener('mousedown', whenOut!), 0);
 }
 
 function renderEditor() {
@@ -1740,7 +1746,9 @@ function renderEditor() {
   // 用户正在这个输入框里打字时不要重画，否则光标和没提交的字都会丢。
   // 条目已经不在了（删掉/换视图）则一定要重画成空状态
   const focused = document.activeElement as HTMLElement | null;
-  if (e && editingLocal && focused && box.contains(focused) && focused.id === 'f-t') return;
+  // 输入框/文本域正聚焦时整块重画会丢光标和没提交的字，任何字段都一样
+  if (e && focused && box.contains(focused) &&
+      (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')) return;
 
   if (!e) {
     box.innerHTML = `
@@ -1749,6 +1757,32 @@ function renderEditor() {
         <b>没有选中的条目</b>
         <p>点左边任意一条来设置强度、时间、推送设备和备注。</p>
       </div>`;
+    return;
+  }
+
+  box.onclick = null;
+  if (e.status === 'done') {
+    box.innerHTML = `
+      <div class="ed-head">已完成</div>
+      <div class="ed-body">
+        <div class="done-view">
+          <p class="done-text">${esc(e.text)}</p>
+          ${e.note ? `<p class="done-note">${esc(e.note)}</p>` : ''}
+          <p class="hint">${e.doneAt ? new Date(e.doneAt).toLocaleString('zh-CN') : ''}${e.doneDevice ? ` · 在 ${esc(e.doneDevice)} 完成` : ''}</p>
+          <p class="hint">已完成的条目不能修改。需要同样的提醒时，复制成新条目再改。</p>
+        </div>
+      </div>
+      <div class="ed-foot">
+        <button class="btn solid" data-copy="1">复制为新条目</button>
+        <button class="btn" data-reopen="1">重新提醒</button>
+        <button class="btn danger sp-left" data-do="del">删除</button>
+      </div>`;
+    box.onclick = (ev) => {
+      const t = ev.target as HTMLElement;
+      if (t.closest('[data-copy]')) void copyEntry(e);
+      else if (t.closest('[data-reopen]')) void api.rearm(e.id).then(refresh).catch((err) => flash(msgOf(err)));
+      else if (t.closest('[data-do="del"]')) void confirmDelete(e);
+    };
     return;
   }
 
@@ -1997,23 +2031,37 @@ function openServerPanel() {
 
 /* ------------------------------------------------------------ 操作 */
 
+let refreshGen = 0;
+
 async function refresh() {
-  if (state.view === 'settings' || state.view === 'mystats' ||
-      state.view === 'dashboard' || state.view === 'tokens') {
+  const gen = ++refreshGen;
+  const view = state.view;
+  // 计数和视图无关，先单独取，不能等条目回来才算侧栏数字
+  const counted = await api.counts().then((r) => r.counts).catch(() => null);
+  if (gen !== refreshGen) return;
+  if (counted) {
+    state.counts = counted;
+    renderSidebar();
+  }
+
+  if (view === 'settings' || view === 'mystats' || view === 'dashboard' || view === 'tokens') {
     renderAll();
     return;
   }
   try {
-    if (state.view === 'dismissed') {
+    if (view === 'dismissed') {
       const [d, devs] = await Promise.all([api.dismissed(), api.devices()]);
+      if (gen !== refreshGen || state.view !== view) return;
       state.dismissals = d.dismissals;
       state.devices = devs.devices;
-    } else if (state.view === 'neglected') {
+    } else if (view === 'neglected') {
       const [n, devs] = await Promise.all([api.neglected(), api.devices()]);
+      if (gen !== refreshGen || state.view !== view) return;
       state.entries = n.entries;
       state.devices = devs.devices;
     } else {
-      const [e, d] = await Promise.all([api.entries(state.view), api.devices()]);
+      const [e, d] = await Promise.all([api.entries(view), api.devices()]);
+      if (gen !== refreshGen || state.view !== view) return;
       state.entries = e.entries;
       state.devices = d.devices;
     }
@@ -2051,12 +2099,26 @@ async function submitCapture(raw: string) {
   }
 }
 
+/** 已完成条目只读；复制成新条目进收集箱，内容/强度/重复规则都带过去 */
+async function copyEntry(e: Entry) {
+  try {
+    await api.create({
+      text: e.text, kind: e.kind, url: e.url, path: e.path, note: e.note,
+      remindAt: null, repeat: e.repeat, strength: e.strength,
+      bypassQuiet: e.bypassQuiet, devices: ['*'],
+    });
+    flash('已复制到收集箱');
+    state.selected = null;
+    setView('inbox');
+  } catch (err) { flash(msgOf(err)); }
+}
+
 async function toggleDone(id: string) {
   const e = state.entries.find((x) => x.id === id);
   if (!e) return;
   try {
     if (e.status === 'done') {
-      await api.update(id, { remindAt: e.remindAt, version: e.version });
+      await api.rearm(id);
     } else {
       // 走 WS 让所有设备同时停铃
       if (!(rt?.ack(id, 'done') ?? false)) await api.done(id);
@@ -2398,7 +2460,7 @@ function onRealtime(msg: ServerMessage) {
     case 'welcome': {
       // 上线补发。漏掉的强提示进响铃队列，弱提示进横幅
       for (const m of msg.missed) {
-        quiet('ping', {
+        ringPing({
           title: '补发提醒',
           body: `${Math.max(1, Math.round(m.lateByMs / 60_000))} 分钟前就该响：${m.entry.text}`,
         });

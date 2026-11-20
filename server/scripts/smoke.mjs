@@ -252,6 +252,12 @@ try {
   const afterDelete = await api('/admin/users', { token: adminToken });
   ok('删除后列表不再有该用户', !afterDelete.json.users?.some((u) => u.id === newUid));
 
+  const counts = await api('/entries/counts', { token: adminToken });
+  ok('侧栏计数接口字段齐全',
+    ['today', 'up', 'inbox', 'all', 'done', 'missed', 'dismissed']
+      .every((k) => typeof counts.json.counts?.[k] === 'number'),
+    JSON.stringify(counts.json.counts));
+
   /* ---------------------------------------------------------- 鉴权 */
   console.log('\n鉴权');
   const bad = await api('/auth/login', { method: 'POST', body: { username: 'admin', password: 'wrong', deviceName: 'x', platform: 'windows' } });
@@ -398,6 +404,15 @@ try {
     [soonId, dbt]);
   ok('投递状态变 acked', ackRow.rows[0]?.state === 'acked');
   ok('确认动作被记录', ackRow.rows[0]?.ack_action === 'done');
+  const doneEdit = await api(`/entries/${soonId}`, {
+    method: 'PATCH', token: ta,
+    body: { text: '已完成不该还能改', version: doneEntry.json.entry.version },
+  });
+  ok('已完成条目不能修改 409', doneEdit.status === 409 && doneEdit.json.error === 'DONE_READONLY',
+    `status=${doneEdit.status} ${doneEdit.json.error}`);
+  const reopened = await api(`/entries/${soonId}/rearm`, { method: 'POST', token: ta });
+  ok('rearm 会真正重新打开条目', reopened.json.entry?.status !== 'done',
+    String(reopened.json.entry?.status));
 
   /* ------------------------------------------------ 强提示 / 弱提示 */
   console.log('\n强弱提示');

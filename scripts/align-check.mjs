@@ -59,7 +59,7 @@ ok('失败不抛异常而是记 last_error', /last_error/.test(src.deliveries));
 console.log('\n确认与忽略分开记');
 ok('有独立的 dismiss 表', /CREATE TABLE IF NOT EXISTS dismissals/.test(src.sql));
 ok('dismiss 要求 reason', /dismissEntry/.test(src.entries));
-ok('2 次降级规则存在', /dismissCount\s*>=\s*2|>= 2/.test(src.entries));
+ok('降级与提示删除阈值可配置', /autoDowngradeAfter/.test(src.entries) && /neglectedAfter/.test(src.entries));
 ok('done 不复用 dismiss 表', !/dismissals[^;]*status\s*=\s*'done'/.test(src.sql));
 
 console.log('\n提醒强度默认值');
@@ -106,7 +106,7 @@ ok('登录页有测试连接按钮', /id="test"/.test(src.main));
 ok('登录后有切换入口', /id="btn-server"/.test(src.main) && /openServerPanel/.test(src.main));
 ok('换地址会清会话', /switchServer/.test(src.api) && /token: ''/.test(src.api));
 ok('带 scheme 的不补协议（防注入）', /\[a-z\]\[a-z0-9\+\.\-\]\*:/.test(src.api) || /\^\[a-z\]/.test(src.api));
-ok('登录时先落盘再请求', /switchServer\(norm\);[\s\S]{0,200}api\.login/.test(src.main));
+ok('登录时先落盘再请求', /switchServer\(norm\);[\s\S]{0,500}api\.login/.test(src.main));
 
 console.log('\n暗色主题可读性');
 ok('输入框用 --line-input（不是 --line）', /\.input \{[\s\S]{0,200}?--line-input/.test(src.styles));

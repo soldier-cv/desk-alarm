@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.3.5] - 2026-11-20
+
+### Added
+- 服务端统一计数接口 `/entries/counts`，侧栏数字不再来自当前视图的局部数据。
+- 已完成条目改为只读，提供「复制为新条目」快速复用，以及「重新提醒」。
+
+### Fixed
+- 切换视图时侧栏数字不再闪成 0；并发刷新加代次校验，旧响应不会再盖到新视图上。
+- 编辑框聚焦时不会被后台刷新重绘，光标和未提交内容不再丢。
+- 取消完成状态改走 rearm，不再被 DONE_READONLY 拦截；rearm 会真正清掉 done_at。
+- 静音设置真正生效；忽略降级/提示删除次数改为读取用户配置，不再写死 2/3。
+- 只对当前设备显示试响；登录平台按真实系统上报（macOS 用 mac）。
+- 日期选择器切换日期/月份不再丢失已选时间，点日期也不会误判成外部点击而关闭。
+- 条目创建/修改校验 kind、repeat、strength、bypassQuiet、devices，非法枚举不再入库。
+- 设置页数据不再重复加载。
+
 ## [v0.3.4] - 2026-11-20
 
 ### Added

@@ -157,6 +157,16 @@ export interface LoginResponse {
 }
 
 /** 我的看板：按单用户数据算，admin 看板另走 /admin/overview */
+export interface EntryCounts {
+  today: number;
+  up: number;
+  inbox: number;
+  all: number;
+  done: number;
+  missed: number;
+  dismissed: number;
+}
+
 export interface MyStats {
   streakDays: number;
   today: { due: number; done: number; missed: number };

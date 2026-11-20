@@ -549,6 +549,11 @@ select.input:focus-visible { outline: 2px solid var(--flare-line); outline-offse
 }
 .eye:hover { color: var(--text); border-color: var(--flare); }
 
+/* 已完成条目只读 */
+.done-view { display: flex; flex-direction: column; gap: 10px; }
+.done-text { font-size: 15px; line-height: 1.5; word-break: break-word; }
+.done-note { font-size: 12.5px; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+
 /* ---------- 日期时间：自绘选择器，不用各平台长得不一样的原生控件 ---------- */
 .when-row { margin-top: 8px; }
 .when-btn { width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: space-between;
