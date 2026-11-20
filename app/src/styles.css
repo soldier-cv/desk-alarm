@@ -280,6 +280,9 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 }
 #btn-hotkey:hover kbd { color: var(--text); border-color: var(--line-ctrl); }
 
+/* 有可用更新时把顶栏按钮标出来，但仍必须去设置里点「安装」 */
+#btn-update.has-update { border-color: var(--flare); color: var(--flare-text); }
+
 /* 主题切换：圆点直接示意切换后的强调色 */
 #btn-theme {
   display: inline-flex; align-items: center; gap: 6px;

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.3.4] - 2026-11-20
+
+### Added
+- 自动检查更新改为用户主动开启（默认关闭）：开启后启动时与每小时各检查一次，24 小时内不重复请求。
+- 设置页显示上次检查结果；发现新版本时顶栏「更新」按钮高亮并显示版本号。
+
+### Changed
+- 检查与安装彻底分开：检查只提示，下载安装必须再点一次「安装 vX」按钮，绝不自动安装或自动重启。
+
 ## [v0.3.3] - 2026-11-20
 
 ### Added

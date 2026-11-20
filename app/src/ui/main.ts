@@ -534,53 +534,102 @@ async function weakDismiss(id: string, reason?: string) {
   void refresh();
 }
 
-// 版本比较与「镜像落后就改用 GitHub」在 Rust 侧做（update.rs），这里只管交互
-/** 启动时后台查一次，一天最多一次。有新版本只提示，不自动安装 */
-function autoCheckUpdate() {
-  if (localStorage.getItem(AUTO_UPDATE_KEY) === 'off') return;
-  const KEY = 'deskalarm.lastUpdateCheck';
-  const last = Number(localStorage.getItem(KEY) ?? 0);
-  if (Date.now() - last < 24 * 3600_000) return;
-  localStorage.setItem(KEY, String(Date.now()));
+// 版本比较与「镜像落后就改用 GitHub」在 Rust 侧做（update.rs），这里只管交互。
+// 自动检查是可选功能（默认关）；无论自动还是手动，都只检查、只提示，安装必须用户再点一次。
+const UPDATE_RESULT_KEY = 'deskalarm.updateResult';
+const CHECK_INTERVAL_MS = 24 * 3600_000;
+
+interface UpdateResult { at: number; available: boolean; version: string; message: string }
+
+function lastUpdateResult(): UpdateResult | null {
+  try {
+    return JSON.parse(localStorage.getItem(UPDATE_RESULT_KEY) ?? 'null') as UpdateResult | null;
+  } catch { return null; }
+}
+
+function renderUpdateStatus() {
+  const r = lastUpdateResult();
+  const status = $<HTMLElement>('#update-status');
+  if (status) {
+    status.textContent = !r ? '尚未检查'
+      : r.available ? `发现 v${r.version}，可在下方安装`
+      : `上次检查 ${new Date(r.at).toLocaleString('zh-CN')}：${r.message || '已是最新'}`;
+  }
+  const install = $<HTMLButtonElement>('#set-install');
+  if (install) {
+    install.hidden = !r?.available;
+    const ver = $<HTMLElement>('#set-install-ver');
+    if (ver) ver.textContent = r?.available ? r.version : '';
+  }
+  const btn = $<HTMLButtonElement>('#btn-update');
+  if (btn) {
+    btn.textContent = r?.available ? `有更新 v${r.version}` : '更新';
+    btn.classList.toggle('has-update', !!r?.available);
+  }
+}
+
+function rememberResult(info: UpdateInfo) {
+  const r: UpdateResult = {
+    at: Date.now(), available: info.available,
+    version: info.latestVersion, message: info.message,
+  };
+  localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify(r));
+  renderUpdateStatus();
+  return r;
+}
+
+/** 自动检查：用户开启才跑，启动时和每小时各一次，24 小时内不重复请求 */
+function autoCheckUpdate(force = false) {
+  if (!force && localStorage.getItem(AUTO_UPDATE_KEY) !== 'on') return;
+  if (!force && Date.now() - Number(localStorage.getItem('deskalarm.lastUpdateCheck') ?? 0) < CHECK_INTERVAL_MS) return;
+  localStorage.setItem('deskalarm.lastUpdateCheck', String(Date.now()));
   if (!hasTauri()) return;
   void invoke<UpdateInfo>('check_update')
     .then((info) => {
-      if (info?.available) flash(`发现新版本 v${info.latestVersion}，点顶栏「更新」安装`);
+      if (!info) return;
+      const r = rememberResult(info);
+      if (r.available) flash(`发现新版本 v${r.version}，到设置里点「安装」`);
     })
     .catch(() => { /* 后台检查失败不该打扰用户 */ });
 }
 
+/** 手动检查：只探测，不下载、不安装 */
 async function checkUpdate() {
   const btn = $<HTMLButtonElement>('#btn-update');
-  if (!btn) return;
-  if (!hasTauri()) {
-    flash('检查更新只在客户端里能用');
-    return;
-  }
-
-  const label = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '检查中…';
+  const setBtn = $<HTMLButtonElement>('#set-update');
+  if (!hasTauri()) { flash('检查更新只在客户端里能用'); return; }
+  const oldSet = setBtn?.textContent ?? '';
+  if (btn) { btn.disabled = true; btn.textContent = '检查中…'; }
+  if (setBtn) { setBtn.disabled = true; setBtn.textContent = '检查中…'; }
   try {
     const info = await invoke<UpdateInfo>('check_update');
     if (!info) return;
-
-    if (!info.available) {
-      flash(info.message || '当前已是最新版本');
-      return;
-    }
-
-    btn.textContent = '下载中…';
-    flash(info.message);
-    const done = await invoke<string>('install_update');
-    // install 成功意味着新版已就位，重启才生效；失败时 Rust 那边已经给了原因
-    flash(done || '更新已安装');
-    await relaunch();
+    const r = rememberResult(info);
+    flash(r.available ? `发现新版本 v${r.version}，到设置里点「安装」` : (info.message || '当前已是最新版本'));
   } catch (err) {
     flash('检查更新失败：' + (err instanceof Error ? err.message : String(err)));
   } finally {
+    if (btn) { btn.disabled = false; }
+    if (setBtn) { setBtn.disabled = false; setBtn.textContent = oldSet || '检查更新'; }
+    renderUpdateStatus();
+  }
+}
+
+/** 安装只能由用户点「安装」触发，且只装清单里的最新版 */
+async function installUpdate() {
+  const btn = $<HTMLButtonElement>('#set-install');
+  if (!hasTauri() || !btn) return;
+  btn.disabled = true;
+  btn.textContent = '下载安装中…';
+  try {
+    const done = await invoke<string>('install_update');
+    flash(done || '更新已安装，重启后生效');
+    await relaunch();
+  } catch (err) {
+    flash('安装失败：' + (err instanceof Error ? err.message : String(err)));
+  } finally {
     btn.disabled = false;
-    btn.textContent = label ?? '更新';
+    renderUpdateStatus();
   }
 }
 
@@ -748,10 +797,13 @@ function renderSettingsView(box: HTMLElement) {
         </select></div>
       ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随 Windows 登录，静默进托盘</small></div>
         <input type="checkbox" class="switch" id="set-auto"></div>` : ''}
-      <div class="set-row"><div><b>自动检查更新</b><small>启动时每天检查一次，不自动安装</small></div>
+      <div class="set-row"><div><b>自动检查更新</b><small>可选。开启后每天后台检查一次，只提示不安装</small></div>
         <input type="checkbox" class="switch" id="set-auto-update"></div>
-      <div class="set-row"><div><b>检查更新</b><small>装最新版本的签名安装包</small></div>
-        <button class="btn sm" id="set-update">立即检查</button></div>
+      <div class="set-row"><div><b>更新</b><small id="update-status">尚未检查</small></div>
+        <div class="set-actions">
+          <button class="btn sm" id="set-update">检查更新</button>
+          <button class="btn solid sm" id="set-install" hidden>安装 v<span id="set-install-ver"></span></button>
+        </div></div>
     </section>
 
     <section class="set-card" id="set-remind">
@@ -843,8 +895,12 @@ function renderSettingsView(box: HTMLElement) {
     void native('set_close_behavior', { behavior: v });
   };
   const autoUpdate = $<HTMLInputElement>('#set-auto-update')!;
-  autoUpdate.checked = localStorage.getItem(AUTO_UPDATE_KEY) !== 'off';
-  autoUpdate.onchange = () => localStorage.setItem(AUTO_UPDATE_KEY, autoUpdate.checked ? 'on' : 'off');
+  autoUpdate.checked = localStorage.getItem(AUTO_UPDATE_KEY) === 'on';
+  autoUpdate.onchange = () => {
+    localStorage.setItem(AUTO_UPDATE_KEY, autoUpdate.checked ? 'on' : 'off');
+    if (autoUpdate.checked) autoCheckUpdate(true);
+  };
+  renderUpdateStatus();
   box.querySelector<HTMLElement>('.settings')!.addEventListener('click', (ev) => {
     const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-eye]');
     if (!b) return;
@@ -860,6 +916,7 @@ function renderSettingsView(box: HTMLElement) {
     auto.onchange = () => void native('set_autostart', { enable: auto.checked });
   }
   $<HTMLButtonElement>('#set-update')!.onclick = () => void checkUpdate();
+  $<HTMLButtonElement>('#set-install')!.onclick = () => void installUpdate();
   const ping = $<HTMLButtonElement>('#set-ping');
   if (ping) ping.onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
   const lock = $<HTMLButtonElement>('#set-lock');
@@ -2324,7 +2381,12 @@ function boot() {
     window.setInterval(() => void refresh(), 10_000);
   }
 
+  renderUpdateStatus();
   autoCheckUpdate();
+  // 开着应用好几天也要能发现新版；24 小时节流在 autoCheckUpdate 内部
+  if (localStorage.getItem(AUTO_UPDATE_KEY) === 'on') {
+    window.setInterval(() => autoCheckUpdate(), 3600_000);
+  }
 
   // 临近梯度随时间自己往前走，事件刷新不会推进它
   tickUrgency();
