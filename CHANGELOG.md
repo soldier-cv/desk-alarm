@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.3.2] - 2026-11-20
+
+### Fixed
+- 修复更新检查：Gitee 的 `/releases/latest/download/latest.json` 实测 404，改为从 Gitee API 取最新 Release 的 `latest.json` 地址；安装时使用该地址而非按来源字符串猜测，避免实际走 GitHub 降级。
+
 ## [v0.3.1] - 2026-11-20
 
 ### Fixed

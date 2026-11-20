@@ -22,6 +22,12 @@
 所以这里自己拉两份 `latest.json`，做完版本比较与落后复核后，
 再把确定的那一条 endpoint 交给插件去下载安装。
 
+Gitee 的 `/releases/latest/download/latest.json` 在本仓库实测返回 404，
+所以 Gitee 清单地址改为调 API `/api/v5/repos/huaxudong/desk-alarm/releases/latest`，
+从 `assets` 里找名为 `latest.json` 的 `browser_download_url`。
+这个地址会校验域名前缀，防止远端清单把更新器指向别的机器；
+真正下载安装用的是 `resolve()` 拿到的那条 URL，不再按 `source` 字符串猜。
+
 两条通道的判定规则（两个方向都不能搞错）：
 
 - 探测到 GitHub 更新 ⇒ **用**它（镜像在骗人，用户必须能更新）

@@ -22,6 +22,7 @@ interface UpdateInfo {
   currentVersion: string;
   latestVersion: string;
   source: string;
+  sourceUrl: string;
   mirrorStale: boolean;
   message: string;
   releasePage: string;

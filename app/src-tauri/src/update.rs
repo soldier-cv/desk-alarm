@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 
-/// Gitee 上的 latest.json。由 build.yml 生成并上传到 Release。
-const GITEE_MANIFEST: &str = "https://gitee.com/huaxudong/desk-alarm/releases/latest/download/latest.json";
+/// Gitee 的 /releases/latest/download/* 会 404，只能从 API 拿最新 Release 的资产地址
+const GITEE_RELEASES_API: &str = "https://gitee.com/api/v5/repos/huaxudong/desk-alarm/releases/latest";
+const GITEE_DOWNLOAD_PREFIX: &str = "https://gitee.com/huaxudong/desk-alarm/releases/download/";
 const GITHUB_MANIFEST: &str =
     "https://github.com/soldier-cv/desk-alarm/releases/latest/download/latest.json";
 const RELEASES_PAGE: &str = "https://gitee.com/huaxudong/desk-alarm/releases";
@@ -34,6 +35,8 @@ pub struct UpdateInfo {
     pub latest_version: String,
     /// 最终决定使用的清单地址，供日志与排障
     pub source: String,
+    /// 实际拿到清单的 URL，安装时直接用它，不再猜一条
+    pub source_url: String,
     /// 是否命中"镜像落后、已改用 GitHub"
     pub mirror_stale: bool,
     /// 给用户看的一句话
@@ -118,6 +121,39 @@ fn is_newer(a: &str, b: &str) -> bool {
     false
 }
 
+/// 从 Gitee API 取最新 Release 里名为 latest.json 的下载地址
+async fn gitee_manifest_url() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(REQUEST_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+    let release: serde_json::Value = client
+        .get(GITEE_RELEASES_API)
+        .send()
+        .await
+        .map_err(|e| format!("请求 Gitee 发行版失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("解析 Gitee 发行版失败: {e}"))?;
+
+    gitee_latest_json_url(&release)
+}
+
+fn gitee_latest_json_url(release: &serde_json::Value) -> Result<String, String> {
+    let url = release.get("assets")
+        .and_then(|a| a.as_array())
+        .and_then(|assets| assets.iter().find(|a| a.get("name").and_then(|n| n.as_str()) == Some("latest.json")))
+        .and_then(|a| a.get("browser_download_url"))
+        .and_then(|u| u.as_str())
+        .ok_or_else(|| "Gitee 最新发行版里没有 latest.json".to_string())?;
+    // 地址来自远端，不能让清单把 HTTP 客户端指向任意机器
+    if !url.starts_with(GITEE_DOWNLOAD_PREFIX) || !url.ends_with("/latest.json") {
+        return Err(format!("Gitee 清单地址不受信任: {url}"));
+    }
+    Ok(url.to_string())
+}
+
 async fn fetch_manifest(url: &str) -> Result<Manifest, String> {
     let resp = reqwest::Client::builder()
         .connect_timeout(REQUEST_TIMEOUT)
@@ -168,12 +204,23 @@ async fn resolve() -> Result<UpdateInfo, String> {
         current_version: current.clone(),
         latest_version: String::new(),
         source: String::new(),
+        source_url: String::new(),
         mirror_stale: false,
         message: String::new(),
         release_page: RELEASES_PAGE.to_string(),
     };
 
-    let gitee = fetch_manifest(GITEE_MANIFEST).await;
+    let gitee_url = match gitee_manifest_url().await {
+        Ok(url) => Some(url),
+        Err(e) => {
+            log::warn!("拿不到 Gitee 清单地址（{e}），降级 GitHub");
+            None
+        }
+    };
+    let gitee = match &gitee_url {
+        Some(url) => fetch_manifest(url).await,
+        None => Err("Gitee 清单地址不可用".to_string()),
+    };
 
     let mut info = base();
     match &gitee {
@@ -182,12 +229,14 @@ async fn resolve() -> Result<UpdateInfo, String> {
                 info.available = true;
                 info.latest_version = v;
                 info.source = "Gitee".into();
+                info.source_url = gitee_url.clone().unwrap_or_default();
                 info.message = format!("发现新版本 v{}", info.latest_version);
                 return Ok(info);
             }
             Ok(None) => {
                 // 镜像说已是最新，去 GitHub 复核
                 info.source = "Gitee".into();
+                info.source_url = gitee_url.clone().unwrap_or_default();
                 info.latest_version = m.version.clone();
             }
             Err(e) => return Err(format!("Gitee 清单不可用: {e}")),
@@ -204,6 +253,7 @@ async fn resolve() -> Result<UpdateInfo, String> {
                 let stale = gitee.is_ok();
                 info.available = true;
                 info.latest_version = v;
+                info.source_url = GITHUB_MANIFEST.into();
                 info.source = if stale { "GitHub（镜像落后）" } else { "GitHub" }.into();
                 info.mirror_stale = stale;
                 info.message = if stale {
@@ -259,15 +309,8 @@ pub async fn install_update(app: AppHandle) -> Result<String, String> {
         return Ok("当前已是最新版本".into());
     }
 
-    // 用 resolve() 选中的那条通道：既避免重复探测，也保证
-    // 「镜像落后时改用 GitHub」这个结论真的被采纳
-    let endpoint = if info.mirror_stale || info.source.starts_with("GitHub") {
-        GITHUB_MANIFEST
-    } else {
-        GITEE_MANIFEST
-    };
-
-    let url = endpoint
+    // 安装必须用 resolve() 真正拿到清单的那条地址，不能按 source 字符串猜
+    let url = info.source_url
         .parse::<url::Url>()
         .map_err(|e| format!("更新源地址无效: {e}"))?;
 
@@ -327,6 +370,26 @@ mod tests {
         ] {
             assert!(!is_trusted_download_url(bad), "应拒绝: {bad}");
         }
+    }
+
+    #[test]
+    fn gitee_manifest_url_from_release_api() {
+        let release: serde_json::Value = serde_json::json!({
+            "tag_name": "v0.3.1",
+            "assets": [
+                { "name": "desk-alarm_0.3.1_x64-setup.exe", "browser_download_url": "https://gitee.com/huaxudong/desk-alarm/releases/download/v0.3.1/desk-alarm_0.3.1_x64-setup.exe" },
+                { "name": "latest.json", "browser_download_url": "https://gitee.com/huaxudong/desk-alarm/releases/download/v0.3.1/latest.json" }
+            ]
+        });
+        assert_eq!(
+            gitee_latest_json_url(&release).unwrap(),
+            "https://gitee.com/huaxudong/desk-alarm/releases/download/v0.3.1/latest.json"
+        );
+
+        let evil: serde_json::Value = serde_json::json!({
+            "assets": [{ "name": "latest.json", "browser_download_url": "https://evil.example/latest.json" }]
+        });
+        assert!(gitee_latest_json_url(&evil).is_err());
     }
 
     #[test]
