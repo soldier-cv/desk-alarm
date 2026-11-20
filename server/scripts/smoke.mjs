@@ -298,8 +298,16 @@ try {
   ok('收到 welcome', !!welcome);
   ok('welcome 带服务端权威时间', typeof welcome?.serverTs === 'number');
   ok('welcome 带全局设置', typeof welcome?.settings?.escalateAfterSec === 'number');
+  const seenDb = await db();
+  const seenBefore = await seenDb.query('SELECT last_seen_at FROM devices WHERE id = $1', [da]);
+  await sleep(1100);
   ca.send({ t: 'ping', at: Date.now() });
   ok('ping 有 pong', !!(await ca.waitFor('pong')));
+  await waitUntil(async () => {
+    const r = await seenDb.query('SELECT last_seen_at FROM devices WHERE id = $1', [da]);
+    return new Date(r.rows[0].last_seen_at).getTime() > new Date(seenBefore.rows[0].last_seen_at).getTime();
+  }, '心跳刷新 last_seen_at（在线不会被误判离线）');
+  await seenDb.end();
 
   const badSock = new WebSocket(`ws://127.0.0.1:${PORT}/api/v1/stream?token=garbage`);
   const closed = await new Promise((r) => {

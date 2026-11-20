@@ -5,7 +5,7 @@ import { hub } from '../hub.js';
 import { log } from '../log.js';
 import { findMissed, markAcked } from '../repo/deliveries.js';
 import { ackEntry, dismissEntry, getEntry } from '../repo/entries.js';
-import { listDevices, markOfflineHint, markOnline } from '../repo/devices.js';
+import { listDevices, markOfflineHint, markOnline, touch } from '../repo/devices.js';
 import { getSettings } from '../repo/settings.js';
 
 export async function streamRoutes(app: FastifyInstance) {
@@ -56,6 +56,8 @@ export async function streamRoutes(app: FastifyInstance) {
       async function handle(msg: ClientMessage) {
         switch (msg.t) {
           case 'ping':
+            // 心跳必须刷新 last_seen_at，否则 sweepOffline 会把在线设备误判成离线
+            await touch(device.id);
             hub.send(client, { t: 'pong', at: msg.at });
             break;
           case 'entry.ack':
@@ -121,7 +123,8 @@ export async function streamRoutes(app: FastifyInstance) {
 
       socket.on('close', () => {
         hub.remove(client);
-        void markOfflineHint(device.id);
+        // 同一设备还留着别的连接时不能标离线
+        if (!hub.isOnline(device.id)) void markOfflineHint(device.id);
         void (async () => {
           hub.broadcastToUser(userId, { t: 'devices.changed', devices: await listDevices(userId) });
         })();

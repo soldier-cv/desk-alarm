@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.3.7] - 2026-11-20
+
+### Fixed
+- WebSocket 心跳现在会刷新 `last_seen_at`，修复设备明明连着却被 `sweepOffline` 误判为离线。
+- 同一设备还有其它连接时，断开一条不再立刻标离线。
+- 侧栏「本机」状态改为读取服务端真实在线/锁定状态，不再固定显示绿点。
+
 ## [v0.3.6] - 2026-11-20
 
 ### Changed

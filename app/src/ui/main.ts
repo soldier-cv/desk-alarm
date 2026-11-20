@@ -717,7 +717,7 @@ function renderSidebar() {
     ['all', '全部条目', c.all],
     ['done', '已完成', c.done],
   ];
-  const me = loadConfig().device;
+  const me = state.devices.find((d) => d.id === loadConfig().device?.id) ?? loadConfig().device;
   const others = state.devices.filter((d) => d.id !== me?.id);
   const bad = c.missed;
   const devLabel = (d: Device) => d.locked ? '已锁定' : d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送';
@@ -741,7 +741,7 @@ function renderSidebar() {
     <div class="nav-head">推送设备</div>
     <div class="dev-list">
       <div class="nav static">
-        <span class="sdot ${me?.locked ? 'warn' : ''}"></span>${esc(me?.name ?? '本机')}<span class="count">${me?.locked ? '已锁定' : '本机'}</span>
+        <span class="sdot ${me ? devDot(me) : 'off'}"></span>${esc(me?.name ?? '本机')}<span class="count">${me ? devLabel(me) : '本机'}</span>
       </div>
       ${others.map((d) => `
         <div class="nav static" title="${esc(d.platform)} · ${esc(d.transport.toUpperCase())} · ${esc(d.lastIp ?? '无 IP 记录')}">
@@ -785,8 +785,8 @@ function toggleTheme() {
 function renderDeviceStatus() {
   const el = $<HTMLElement>('#s-lock');
   if (!el) return;
-  const me = loadConfig().device;
-  el.textContent = me?.locked ? '设备 已锁定' : '设备 在线';
+  const me = state.devices.find((d) => d.id === loadConfig().device?.id) ?? loadConfig().device;
+  el.textContent = me?.locked ? '设备 已锁定' : me?.online === false ? '设备 离线' : '设备 在线';
 }
 
 function renderSettingsView(box: HTMLElement) {
