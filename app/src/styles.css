@@ -548,6 +548,9 @@ select.input:focus-visible { outline: 2px solid var(--flare-line); outline-offse
   background: var(--raised); color: var(--muted); font-size: 11px; cursor: pointer;
 }
 .eye:hover { color: var(--text); border-color: var(--flare); }
+.eye .ico-off { display: none; }
+.eye.off .ico-on { display: none; }
+.eye.off .ico-off { display: block; }
 
 /* 已完成条目只读 */
 .done-view { display: flex; flex-direction: column; gap: 10px; }

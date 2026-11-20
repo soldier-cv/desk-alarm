@@ -60,6 +60,8 @@ pub fn run() {
             let handle = app.handle().clone();
 
             logging::prune_on_startup(&handle);
+            // 上次安装被中断留下的包，启动后清掉
+            update::cleanup_installers(&handle);
             session::start(handle.clone());
 
             #[cfg(desktop)]

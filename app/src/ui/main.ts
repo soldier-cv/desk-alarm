@@ -412,7 +412,7 @@ function renderShell() {
 
   if (isDesktop()) {
     $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
-    $<HTMLButtonElement>('#btn-update')!.onclick = () => void checkUpdate();
+    $<HTMLButtonElement>('#btn-update')!.onclick = () => onTopUpdateClick();
   }
   const lock = $<HTMLButtonElement>('#btn-lock');
   if (lock) lock.onclick = () => void lockDevice('manual');
@@ -545,7 +545,7 @@ async function weakDismiss(id: string, reason?: string) {
 // 版本比较与「镜像落后就改用 GitHub」在 Rust 侧做（update.rs），这里只管交互。
 // 自动检查是可选功能（默认关）；无论自动还是手动，都只检查、只提示，安装必须用户再点一次。
 const UPDATE_RESULT_KEY = 'deskalarm.updateResult';
-const CHECK_INTERVAL_MS = 24 * 3600_000;
+const AUTO_INTERVAL_MS = 30 * 60_000;
 
 interface UpdateResult { at: number; available: boolean; version: string; message: string }
 
@@ -560,7 +560,7 @@ function renderUpdateStatus() {
   const status = $<HTMLElement>('#update-status');
   if (status) {
     status.textContent = !r ? '尚未检查'
-      : r.available ? `发现 v${r.version}，可在下方安装`
+      : r.available ? `发现 v${r.version}，点右上角「有更新」安装`
       : `上次检查 ${new Date(r.at).toLocaleString('zh-CN')}：${r.message || '已是最新'}`;
   }
   const install = $<HTMLButtonElement>('#set-install');
@@ -586,17 +586,15 @@ function rememberResult(info: UpdateInfo) {
   return r;
 }
 
-/** 自动检查：用户开启才跑，启动时和每小时各一次，24 小时内不重复请求 */
+/** 自动检查：用户开启才跑，启动时必查一次，之后每 30 分钟一次 */
 function autoCheckUpdate(force = false) {
   if (!force && localStorage.getItem(AUTO_UPDATE_KEY) !== 'on') return;
-  if (!force && Date.now() - Number(localStorage.getItem('deskalarm.lastUpdateCheck') ?? 0) < CHECK_INTERVAL_MS) return;
-  localStorage.setItem('deskalarm.lastUpdateCheck', String(Date.now()));
   if (!hasTauri()) return;
   void invoke<UpdateInfo>('check_update')
     .then((info) => {
       if (!info) return;
       const r = rememberResult(info);
-      if (r.available) flash(`发现新版本 v${r.version}，到设置里点「安装」`);
+      if (r.available) flash(`发现新版本 v${r.version}，点右上角「有更新」安装`);
     })
     .catch(() => { /* 后台检查失败不该打扰用户 */ });
 }
@@ -613,7 +611,7 @@ async function checkUpdate() {
     const info = await invoke<UpdateInfo>('check_update');
     if (!info) return;
     const r = rememberResult(info);
-    flash(r.available ? `发现新版本 v${r.version}，到设置里点「安装」` : (info.message || '当前已是最新版本'));
+    flash(r.available ? `发现新版本 v${r.version}，点右上角「有更新」安装` : (info.message || '当前已是最新版本'));
   } catch (err) {
     flash('检查更新失败：' + (err instanceof Error ? err.message : String(err)));
   } finally {
@@ -623,12 +621,16 @@ async function checkUpdate() {
   }
 }
 
-/** 安装只能由用户点「安装」触发，且只装清单里的最新版 */
+/**
+ * 安装由用户点击触发：右上角「有更新 vX」或设置页「安装 vX」都算明确授权。
+ * 只装清单里的最新版，成功后 Rust 会清掉下载的安装包。
+ */
 async function installUpdate() {
-  const btn = $<HTMLButtonElement>('#set-install');
-  if (!hasTauri() || !btn) return;
-  btn.disabled = true;
-  btn.textContent = '下载安装中…';
+  if (!hasTauri()) return;
+  const top = $<HTMLButtonElement>('#btn-update');
+  const set = $<HTMLButtonElement>('#set-install');
+  if (top) top.disabled = true;
+  if (set) { set.disabled = true; set.textContent = '下载安装中…'; }
   try {
     const done = await invoke<string>('install_update');
     flash(done || '更新已安装，重启后生效');
@@ -636,9 +638,16 @@ async function installUpdate() {
   } catch (err) {
     flash('安装失败：' + (err instanceof Error ? err.message : String(err)));
   } finally {
-    btn.disabled = false;
+    if (top) top.disabled = false;
+    if (set) set.disabled = false;
     renderUpdateStatus();
   }
+}
+
+/** 右上角按钮：已是新版就检查，有新版就直接下载安装 */
+function onTopUpdateClick() {
+  if (lastUpdateResult()?.available) void installUpdate();
+  else void checkUpdate();
 }
 
 /** 一次性的提示条 */
@@ -795,7 +804,7 @@ function renderSettingsView(box: HTMLElement) {
         </select></div>
       ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随 Windows 登录，静默进托盘</small></div>
         <input type="checkbox" class="switch" id="set-auto"></div>` : ''}
-      <div class="set-row"><div><b>自动检查更新</b><small>可选。开启后每天后台检查一次，只提示不安装</small></div>
+      <div class="set-row"><div><b>自动检查更新</b><small>可选。开启后启动时和每 30 分钟检查一次，只提示不安装</small></div>
         <input type="checkbox" class="switch" id="set-auto-update"></div>
       <div class="set-row"><div><b>更新</b><small id="update-status">尚未检查</small></div>
         <div class="set-actions">
@@ -827,13 +836,13 @@ function renderSettingsView(box: HTMLElement) {
       <div class="set-grid">
         <label>PIN（6 位数字）
           <span class="pwd-field"><input class="input" id="pin-new" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
-          <button type="button" class="eye" data-eye="pin-new" aria-label="显示 PIN">显</button></span></label>
+          <button type="button" class="eye" data-eye="pin-new" aria-label="显示 PIN"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
         <label>确认 PIN
           <span class="pwd-field"><input class="input" id="pin-confirm" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
-          <button type="button" class="eye" data-eye="pin-confirm" aria-label="显示 PIN">显</button></span></label>
+          <button type="button" class="eye" data-eye="pin-confirm" aria-label="显示 PIN"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
         <label>账号密码（设置、修改或移除 PIN 都需要）
           <span class="pwd-field"><input class="input" id="pin-pass" type="password" autocomplete="current-password">
-          <button type="button" class="eye" data-eye="pin-pass" aria-label="显示密码">显</button></span></label>
+          <button type="button" class="eye" data-eye="pin-pass" aria-label="显示密码"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
       </div>
       <div class="set-actions">
         <button class="btn solid sm" id="pin-save">设置 PIN</button>
@@ -853,10 +862,10 @@ function renderSettingsView(box: HTMLElement) {
         <label>用户名<input class="input" id="usr-name" autocomplete="off"></label>
         <label>密码（至少 8 位）
           <span class="pwd-field"><input class="input" id="usr-pass" type="password" autocomplete="new-password">
-          <button type="button" class="eye" data-eye="usr-pass" aria-label="显示密码">显</button></span></label>
+          <button type="button" class="eye" data-eye="usr-pass" aria-label="显示密码"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
         <label>确认密码
           <span class="pwd-field"><input class="input" id="usr-pass2" type="password" autocomplete="new-password">
-          <button type="button" class="eye" data-eye="usr-pass2" aria-label="显示密码">显</button></span></label>
+          <button type="button" class="eye" data-eye="usr-pass2" aria-label="显示密码"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
       </div>
       <div class="set-actions"><button class="btn solid sm" id="usr-add">创建用户</button><span id="usr-msg" class="hint"></span></div>
       <div id="set-users" class="user-table"></div>
@@ -906,7 +915,8 @@ function renderSettingsView(box: HTMLElement) {
     if (!input) return;
     const show = input.type === 'password';
     input.type = show ? 'text' : 'password';
-    b.textContent = show ? '隐' : '显';
+    b.classList.toggle('off', show);
+    b.setAttribute('aria-pressed', show ? 'true' : 'false');
   });
   const auto = $<HTMLInputElement>('#set-auto');
   if (auto) {
@@ -2447,7 +2457,7 @@ function boot() {
   autoCheckUpdate();
   // 开着应用好几天也要能发现新版；24 小时节流在 autoCheckUpdate 内部
   if (localStorage.getItem(AUTO_UPDATE_KEY) === 'on') {
-    window.setInterval(() => autoCheckUpdate(), 3600_000);
+    window.setInterval(() => autoCheckUpdate(), AUTO_INTERVAL_MS);
   }
 
   // 临近梯度随时间自己往前走，事件刷新不会推进它

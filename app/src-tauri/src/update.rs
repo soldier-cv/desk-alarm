@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
 /// Gitee 的 /releases/latest/download/* 会 404，只能从 API 拿最新 Release 的资产地址
@@ -295,6 +295,25 @@ pub async fn check_update() -> Result<UpdateInfo, String> {
     }
 }
 
+/// 删掉上次更新留下的安装包。插件自己也会清理，但异常退出会留残留；
+/// 下一次启动再扫一遍，正在被安装器占用的文件删不掉就忽略。
+pub fn cleanup_installers(app: &AppHandle) {
+    let mut dirs = Vec::new();
+    if let Ok(p) = app.path().app_cache_dir() { dirs.push(p); }
+    if let Ok(p) = app.path().app_data_dir() { dirs.push(p); }
+    dirs.push(std::env::temp_dir());
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("deskalarm_") && name.contains("setup") &&
+               (name.ends_with(".exe") || name.ends_with(".sig")) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 /// 前端调用：下载并安装。走插件的 download_and_install，
 /// 签名校验与静默安装都由它负责。
 #[tauri::command]
@@ -346,6 +365,8 @@ pub async fn install_update(app: AppHandle) -> Result<String, String> {
     update
         .install(bytes)
         .map_err(|e| format!("安装更新失败: {e}"))?;
+
+    cleanup_installers(&app);
 
     Ok(format!("已安装 v{version}，重启后生效"))
 }
