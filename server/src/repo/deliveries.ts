@@ -35,11 +35,13 @@ export function enqueueDelivery(
 }
 
 export function takePending(limit = 200): Promise<PendingRow[]> {
+  // 锁定设备照样入 outbox，只是不取出来投递；解锁后 pending 留给 findMissed 补发
   return rows<PendingRow>(
-    `SELECT id, user_id, entry_id, device_id, fire_key, transport, attempts
-       FROM deliveries
-      WHERE state = 'pending'
-      ORDER BY fired_at ASC, id ASC
+    `SELECT d.id, d.user_id, d.entry_id, d.device_id, d.fire_key, d.transport, d.attempts
+       FROM deliveries d
+       JOIN devices dv ON dv.id = d.device_id
+      WHERE d.state = 'pending' AND dv.locked = false
+      ORDER BY d.fired_at ASC, d.id ASC
       LIMIT $1`,
     [limit],
   );

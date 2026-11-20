@@ -6,8 +6,9 @@ import { hub } from '../hub.js';
 import { log } from '../log.js';
 import { one } from '../db.js';
 import {
-  deleteDevice, getDeviceOwned, listDevices, renameDevice, setPushEnabled,
+  deleteDevice, getDeviceOwned, listDevices, renameDevice, setLocked, setPushEnabled,
 } from '../repo/devices.js';
+import { getUserSecrets, verifyPin } from '../repo/users.js';
 
 export async function deviceRoutes(app: FastifyInstance) {
   app.post('/auth/login', async (req, reply) => {
@@ -43,6 +44,51 @@ export async function deviceRoutes(app: FastifyInstance) {
   app.get('/devices', { preHandler: requireHuman }, async (req) => ({
     devices: await listDevices(req.session!.user.id),
   }));
+
+  // 只动当前会话自己的设备：锁的是「这一台」，不是把账号下所有设备一起锁掉
+  app.post('/devices/lock', { preHandler: requireHuman }, async (req, reply) => {
+    const session = req.session!;
+    const dev = session.device;
+    if (!dev) {
+      return reply.code(404).send({ error: 'NO_DEVICE', message: '当前会话没有关联设备' });
+    }
+
+    const body = req.body as { locked?: boolean; pin?: string; reason?: 'manual' | 'system' };
+    if (typeof body.locked !== 'boolean') {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'locked 必须是布尔值' });
+    }
+    if (body.reason !== undefined && body.reason !== 'manual' && body.reason !== 'system') {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'reason 只能是 manual 或 system' });
+    }
+
+    const userId = session.user.id;
+    if (body.locked) {
+      if (!session.user.hasPin) {
+        return reply.code(409).send({ error: 'PIN_REQUIRED', message: '先设置 PIN 才能锁定设备' });
+      }
+      await setLocked(dev.id, true, body.reason ?? 'manual');
+    } else {
+      // 系统锁屏已经验过身份，自动解锁不该再要一次 PIN
+      if (dev.lockReason === 'system') {
+        await setLocked(dev.id, false);
+      } else {
+        const hash = (await getUserSecrets(userId))?.pinHash;
+        if (!hash) {
+          return reply.code(409).send({ error: 'PIN_REQUIRED', message: '需要 PIN 才能解锁设备' });
+        }
+        if (!body.pin || !verifyPin(body.pin, hash)) {
+          return reply.code(401).send({ error: 'BAD_PIN', message: 'PIN 不对' });
+        }
+        await setLocked(dev.id, false);
+      }
+    }
+
+    const devices = await listDevices(userId);
+    hub.broadcastToUser(userId, { t: 'devices.changed', devices });
+    const updated = devices.find((d) => d.id === dev.id)!;
+    session.device = updated;
+    return { device: updated };
+  });
 
   app.patch('/devices/:id', { preHandler: requireHuman }, async (req, reply) => {
     const id = (req.params as { id: string }).id;

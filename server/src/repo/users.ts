@@ -10,6 +10,7 @@ interface Row {
   id: string;
   username: string;
   password_hash: string;
+  pin_hash: string | null;
   role: string;
   disabled: boolean;
   created_at: Date;
@@ -21,6 +22,7 @@ function toUser(r: Row): User {
     username: r.username,
     role: r.role as Role,
     disabled: !!r.disabled,
+    hasPin: !!r.pin_hash,
     createdAt: new Date(r.created_at).getTime(),
   };
 }
@@ -86,4 +88,30 @@ export async function setDisabled(id: string, disabled: boolean) {
 
 export async function deleteUser(id: string) {
   await run('DELETE FROM users WHERE id = $1', [id]);
+}
+
+/** PIN 用账号密码同款 scrypt：随机盐 + 定长比较，明文不落库 */
+export function hashPin(pin: string): string {
+  return hashPassword(pin);
+}
+
+export function verifyPin(pin: string, stored: string): boolean {
+  return verifyPassword(pin, stored);
+}
+
+export async function getUserSecrets(id: string): Promise<{
+  passwordHash: string; pinHash: string | null;
+} | undefined> {
+  const r = await one<{ password_hash: string; pin_hash: string | null }>(
+    'SELECT password_hash, pin_hash FROM users WHERE id = $1', [id],
+  );
+  return r ? { passwordHash: r.password_hash, pinHash: r.pin_hash } : undefined;
+}
+
+export async function setPin(id: string, pin: string) {
+  await run('UPDATE users SET pin_hash = $2 WHERE id = $1', [id, hashPin(pin)]);
+}
+
+export async function clearPin(id: string) {
+  await run('UPDATE users SET pin_hash = NULL WHERE id = $1', [id]);
 }

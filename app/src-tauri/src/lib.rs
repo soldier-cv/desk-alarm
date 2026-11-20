@@ -1,4 +1,6 @@
 mod commands;
+mod logging;
+mod session;
 mod update;
 mod windows;
 
@@ -57,6 +59,9 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            logging::prune_on_startup(&handle);
+            session::start(handle.clone());
+
             #[cfg(desktop)]
             {
                 tray::build(&handle)?;
@@ -87,6 +92,13 @@ pub fn run() {
                                 api.prevent_close();
                                 windows::hide_capture(&h);
                                 return;
+                            }
+                            if label == "main" {
+                                // 另两个窗口只是隐藏还活着，光关 main 不会触发进程退出
+                                if commands::close_behavior(&h) == "quit" {
+                                    h.exit(0);
+                                    return;
+                                }
                             }
                             api.prevent_close();
                             let _ = target.hide();
@@ -120,20 +132,27 @@ pub fn run() {
             commands::set_autostart,
             #[cfg(desktop)]
             commands::is_autostart_enabled,
+            #[cfg(desktop)]
+            commands::set_close_behavior,
+            #[cfg(desktop)]
+            commands::get_close_behavior,
+            logging::log_event,
+            logging::get_log_policy,
+            logging::set_log_policy,
             update::check_update,
             update::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("DeskAlarm 构建失败")
-        .run(|_app, event| {
-            // 最后一个窗口关掉时不要退出，托盘常驻（桌面行为）
+        .run(|app, event| {
+            // 最后一个窗口关掉时不要退出，托盘常驻；退出模式下放过
             #[cfg(desktop)]
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                if code.is_none() {
+                if code.is_none() && commands::close_behavior(app) != "quit" {
                     api.prevent_exit();
                 }
             }
             #[cfg(not(desktop))]
-            let _ = event;
+            let _ = (app, event);
         });
 }

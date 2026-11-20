@@ -12,7 +12,7 @@
  *       "command": "node",
  *       "args": ["/path/to/server/dist/server/src/mcp/stdio.js"],
  *       "env": {
- *         "DESKALARM_API": "http://127.0.0.1:8787",
+ *         "DESKALARM_API": "http://127.0.0.1:8091",
  *         "DESKALARM_TOKEN": "在客户端「服务端与本机设备」里签发的 Agent 令牌"
  *       }
  *     }
@@ -24,7 +24,8 @@
  */
 import { createInterface } from 'node:readline';
 
-const API = process.env.DESKALARM_API ?? 'http://127.0.0.1:8787';
+// 端口是宿主对外端口：容器内 8787，docker 只发布 8091
+const API = process.env.DESKALARM_API ?? 'http://127.0.0.1:8091';
 const TOKEN = process.env.DESKALARM_TOKEN ?? '';
 const PROTOCOL = '2025-06-18';
 

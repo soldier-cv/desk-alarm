@@ -7,11 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-11-20
+
+### Added
+- 设置页：提醒参数、主题、开机自启、关闭 X 行为、试响、用户管理、本地日志策略集中配置。
+- 设备锁定：设置 PIN 后可手动锁定；Windows 锁屏自动锁定/解锁，Android 切后台自动锁定。锁定设备按离线处理，解锁后补发提醒。
+- 我的看板：连续守约天数、近 7 天准时率、今日状态与每日柱状图，只统计本人数据。
+- 设备列表显示上次登录 IP 与锁定状态。
+- 本地日志：按级别写文件，按天分文件，可配保留天数。
+
+### Changed
+- 系统看板重新设计排版与数字层级；开发看板更名为系统看板。
+- 主题按钮显示当前主题而不是下一个主题。
+- 顶栏移除「缩到托盘」与「试响」按钮，统一收进设置页；点 X 默认退出程序，可在设置页改回隐藏到托盘。
+
 ### Security
-- 升级 Node 基础镜像与 GitHub Actions CI 环境至 `node:22.23.4`，废弃已 EOL 的 Node 20（修复 2026-10 安全批次漏洞）。
-- 升级服务端 Nginx 反代网关基础镜像至 `nginx:1.31.8-alpine`。
+- 服务端补 CORS 白名单，放行桌面客户端源；只回显指定 Origin，预检请求返回 204。
+- PIN 在服务端以 scrypt 哈希保存，解锁与修改都要校验。
 
 ### Fixed
+- 服务端默认端口从容器内 8787 改为对外 8091（MCP、e2e、输入框占位符同步）。
+- 客户端设置项原本只在 WS welcome 里下发，现在设置页会主动读取服务端配置。
+- 升级 Node 基础镜像与 GitHub Actions CI 环境至 `node:22.23.4`，废弃已 EOL 的 Node 20（修复 2026-10 安全批次漏洞）。
+- 升级服务端 Nginx 反代网关基础镜像至 `nginx:1.31.8-alpine`。
 - CI: 修复 `latest-json` job 缺失 checkout 导致 gh cli 无法推断当前仓库的问题，补齐 `contents: write` 权限。
 - CI: 修复 macOS updater 签名打包路径取错目录问题，统一改为 `.app.tar.gz` 格式并同步 `latest.json`。
 - CI: 客户端打包前增加私钥格式预检步骤，避免编译完成后在签名阶段因格式错误中断。

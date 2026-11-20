@@ -4,6 +4,8 @@
 use serde_json::Value;
 use tauri::AppHandle;
 #[cfg(desktop)]
+use tauri::Manager;
+#[cfg(desktop)]
 use tauri_plugin_autostart::ManagerExt;
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -11,6 +13,44 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::windows;
+
+#[cfg(desktop)]
+fn close_behavior_file(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|p| p.join("close-behavior.txt"))
+}
+
+/// 前端没保存过设置前保持 tray，别让老用户升级后按钮行为突然变了
+#[cfg(desktop)]
+pub fn close_behavior(app: &AppHandle) -> String {
+    let Some(path) = close_behavior_file(app) else {
+        return "tray".into();
+    };
+    match std::fs::read_to_string(path) {
+        Ok(s) if s.trim() == "quit" => "quit".into(),
+        _ => "tray".into(),
+    }
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn get_close_behavior(app: AppHandle) -> String {
+    close_behavior(&app)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn set_close_behavior(app: AppHandle, behavior: String) -> Result<(), String> {
+    if behavior != "quit" && behavior != "tray" {
+        return Err(format!("无效的关闭行为: {behavior}"));
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("close-behavior.txt"), behavior.as_bytes())
+        .map_err(|e| e.to_string())
+}
 
 #[tauri::command]
 pub fn show_main(app: AppHandle) {

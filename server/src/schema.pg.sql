@@ -176,3 +176,14 @@ CREATE TABLE IF NOT EXISTS settings (
   value   text NOT NULL,
   PRIMARY KEY (user_id, key)
 );
+
+-- =============================================================
+-- v0.3.0 增量列。migrate() 每次开机都会跑这段，必须幂等。
+--   设备锁定：locked 只影响投递层（takePending），WS 不断。
+--   lock_reason：system 锁定由系统锁屏触发，解锁无需 PIN。
+--   账号 PIN：只存 scrypt 哈希，明文不落库。
+-- =============================================================
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS locked boolean NOT NULL DEFAULT false;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS lock_reason text;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_ip text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pin_hash text;

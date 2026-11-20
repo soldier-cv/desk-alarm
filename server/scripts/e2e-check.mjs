@@ -2,7 +2,7 @@
  * 真机联调自检。连本机 Docker 里的服务端 + 88 的真库，跑一遍关键链路。
  * 用法：node scripts/e2e-check.mjs
  */
-const BASE = process.env.BASE ?? 'http://127.0.0.1:8787';
+const BASE = process.env.BASE ?? 'http://127.0.0.1:8091';
 const USER = 'admin';
 const PASSCODE = process.env.ADMIN_PASSWORD ?? 'admin123456';
 

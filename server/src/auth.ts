@@ -16,6 +16,7 @@ interface SessionRow {
   username: string;
   role: string;
   disabled: boolean;
+  pin_hash: string | null;
   expires_at: Date;
 }
 
@@ -89,6 +90,7 @@ export async function login(
       platform: req.platform,
       transport: req.transport,
       pushToken: req.pushToken ?? null,
+      ip,
     });
     // 设备随用户走：同机换人登录，旧用户的会话立即失效
     await run(
@@ -108,7 +110,10 @@ export async function login(
 
   return {
     token: tok,
-    user: { id: user.id, username: user.username, role: user.role, disabled: user.disabled, createdAt: user.createdAt },
+    user: {
+      id: user.id, username: user.username, role: user.role,
+      disabled: user.disabled, hasPin: user.hasPin, createdAt: user.createdAt,
+    },
     device,
   };
 }
@@ -126,7 +131,7 @@ export async function resolveSession(req: FastifyRequest): Promise<Session | nul
 
   const row = await one<SessionRow>(
     `SELECT s.token, s.user_id, s.device_id, s.kind, s.expires_at,
-            u.username, u.role, u.disabled
+            u.username, u.role, u.disabled, u.pin_hash
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token = $1`,
     [tok],
@@ -142,7 +147,7 @@ export async function resolveSession(req: FastifyRequest): Promise<Session | nul
       token: tok,
       user: {
         id: row.user_id, username: row.username, role: row.role as Role,
-        disabled: !!row.disabled, createdAt: 0,
+        disabled: !!row.disabled, hasPin: !!row.pin_hash, createdAt: 0,
       },
       device,
       kind: row.kind as Session['kind'],

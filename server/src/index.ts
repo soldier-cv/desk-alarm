@@ -14,6 +14,9 @@ import { mcpRoutes } from './routes/mcp.js';
 import { adminRoutes } from './routes/admin.js';
 import { agentTokenRoutes } from './routes/agent-tokens.js';
 import { agentApiRoutes } from './routes/agent-api.js';
+import { pinRoutes } from './routes/pin.js';
+import { statsRoutes } from './routes/stats.js';
+import { allowAppOrigins } from './cors.js';
 
 const app = Fastify({
   logger: false,
@@ -66,6 +69,9 @@ app.setErrorHandler((err, _req, reply) => {
 
 await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
 
+// 必须在路由前：预检的 OPTIONS 没有路由，晚了就被 404 掉
+allowAppOrigins(app);
+
 /* ------------------------------------------------------------ 健康检查 */
 
 app.get('/healthz', async (_req, reply) => {
@@ -93,6 +99,16 @@ await app.register(
 // entryRoutes 内部用了 app 级 preHandler，共用实例的话钩子会泄漏到 /auth/login
 await app.register(
   async (api) => { await deviceRoutes(api); },
+  { prefix: '/api/v1' },
+);
+
+await app.register(
+  async (api) => { await pinRoutes(api); },
+  { prefix: '/api/v1' },
+);
+
+await app.register(
+  async (api) => { await statsRoutes(api); },
   { prefix: '/api/v1' },
 );
 

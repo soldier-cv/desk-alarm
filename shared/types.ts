@@ -29,6 +29,7 @@ export interface User {
   username: string;
   role: Role;
   disabled: boolean;
+  hasPin: boolean;
   createdAt: number;
 }
 
@@ -112,6 +113,10 @@ export interface Device {
   online: boolean;
   /** 有没有配好推送凭据。Android 上没配 token 就等于收不到 */
   pushReady: boolean;
+  locked: boolean;
+  lockReason: 'manual' | 'system' | null;
+  /** 最近一次登录的 IP，只在本人设备列表展示 */
+  lastIp: string | null;
   lastSeenAt: number;
   createdAt: number;
 }
@@ -149,6 +154,15 @@ export interface LoginResponse {
   token: string;
   user: User;
   device: Device | null;
+}
+
+/** 我的看板：按单用户数据算，admin 看板另走 /admin/overview */
+export interface MyStats {
+  streakDays: number;
+  today: { due: number; done: number; missed: number };
+  week: { due: number; onTime: number; rate: number };
+  dismissed: number;
+  days: Array<{ day: string; due: number; done: number; missed: number }>;
 }
 
 export interface CreateEntryRequest {

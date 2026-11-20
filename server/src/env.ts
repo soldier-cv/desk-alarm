@@ -55,6 +55,9 @@ export const env = {
   FCM_PRIVATE_KEY: str('FCM_PRIVATE_KEY', ''),
 
   LOG_LEVEL: str('LOG_LEVEL', 'info'),
+
+  /** 额外的 CORS 源，逗号分隔。桌面端自带的那些在 cors.ts 里写死 */
+  CORS_ORIGINS: str('CORS_ORIGINS', ''),
 };
 
 export const token = (bytes = 32) => randomBytes(bytes).toString('base64url');

@@ -8,7 +8,8 @@ import {
   ApiError, Realtime, api, clearToken, dayLabel, getMachineId, getPlatform, hhmm, hostOf,
   lateBy, loadConfig, normalizeBaseUrl, parseInput, probeServer, saveConfig,
   serverNow, switchServer, urgencyOf,
-  type AckAction, type AgentScope, type Device, type Dismissal, type Entry, type Overview, type ServerMessage,
+  type AckAction, type AgentScope, type Device, type Dismissal, type Entry, type MyStats, type Overview,
+  type ServerMessage, type Settings,
 } from '../api';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
@@ -69,7 +70,7 @@ function on<T>(name: string, fn: (payload: T) => void) {
 
 /* ------------------------------------------------------------ 状态 */
 
-type View = 'today' | 'upcoming' | 'inbox' | 'all' | 'done' | 'dismissed' | 'neglected' | 'dashboard' | 'tokens';
+type View = 'today' | 'upcoming' | 'inbox' | 'all' | 'done' | 'dismissed' | 'neglected' | 'mystats' | 'dashboard' | 'tokens' | 'settings';
 
 const VIEWS: Record<View, { title: string; sub: string }> = {
   today: { title: '今天', sub: '' },
@@ -79,8 +80,10 @@ const VIEWS: Record<View, { title: string; sub: string }> = {
   done: { title: '已完成', sub: '保留 7 天后自动清理' },
   dismissed: { title: '已忽略', sub: '弱提示里点了「忽略」的记录，连带你写的理由' },
   neglected: { title: '老是被忽略', sub: '这些提醒可能该删了，或者降成弱提示' },
-  dashboard: { title: '开发看板', sub: '服务端总览，仅管理员可见，每 5 秒刷新' },
+  mystats: { title: '我的看板', sub: '只看你自己的提醒执行情况' },
+  dashboard: { title: '系统看板', sub: '服务端总览，仅管理员可见，每 5 秒刷新' },
   tokens: { title: 'Agent 令牌', sub: '给 MCP / Agent 用的访问令牌，每个用户都能签发自己的' },
+  settings: { title: '设置', sub: '提醒参数、设备安全、用户与日志' },
 };
 
 const state = {
@@ -149,7 +152,7 @@ function renderLogin() {
       <form id="form">
         <div>
           <label for="base">服务端地址</label>
-          <input class="input" id="base" placeholder="http://192.168.1.10:8787" value="${esc(baseValue)}" spellcheck="false" autocomplete="off">
+          <input class="input" id="base" placeholder="http://192.168.1.10:8091" value="${esc(baseValue)}" spellcheck="false" autocomplete="off">
           <div class="login-row">
             <span class="login-hint" id="probe">端口只填对外服务的那一个</span>
             <button type="button" class="btn sm" id="test">测试连接</button>
@@ -246,7 +249,7 @@ function renderSetup() {
       <form id="form">
         <div>
           <label for="base">服务端地址</label>
-          <input class="input" id="base" placeholder="http://192.168.1.10:8787" value="${esc(baseValue)}" spellcheck="false" autocomplete="off">
+          <input class="input" id="base" placeholder="http://192.168.1.10:8091" value="${esc(baseValue)}" spellcheck="false" autocomplete="off">
           <div class="login-row">
             <span class="login-hint" id="probe">端口只填对外服务的那一个</span>
             <button type="button" class="btn sm" id="test">测试连接</button>
@@ -338,7 +341,7 @@ function renderThemeButton() {
   const cur = loadTheme();
   const next = THEMES.find((t) => t.id !== cur)!;
   const now = THEMES.find((t) => t.id === cur)!;
-  btn.textContent = next.label;
+  btn.textContent = now.label;
   btn.title = `当前：${now.label}（${now.hint}）。点击切到${next.label}`;
 }
 
@@ -353,11 +356,10 @@ function renderShell() {
       <div class="sp"></div>
       <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
       <button class="btn sm no-drag" id="btn-theme" title="切换配色"></button>
+      <button class="btn sm no-drag" id="btn-lock" title="锁定本机">锁定</button>
       ${isDesktop() ? `
       <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>
-      <button class="btn sm no-drag" id="btn-test">试响</button>
-      <button class="btn sm no-drag" id="btn-update" title="检查更新">更新</button>
-      <button class="btn sm no-drag" id="btn-hide">缩到托盘</button>` : ''}
+      <button class="btn sm no-drag" id="btn-update" title="检查更新">更新</button>` : ''}
     </div>
 
     <div id="weak-host"></div>
@@ -393,29 +395,21 @@ function renderShell() {
       <span id="s-server">服务端 -</span>
       <span class="skew">时钟偏差 <span class="mono" id="s-skew">0 ms</span></span>
       <div class="sp"></div>
-      ${isDesktop() ? '<span>开机自启 <b id="s-auto">-</b></span>' : ''}
+      <span id="s-lock">设备 在线</span>
       <span>登录为 <b id="s-user">${esc(loadConfig().user?.username ?? '?')}</b></span>
       <button class="btn sm" id="btn-logout">退出登录</button>
     </div>
   </div>`;
 
   if (isDesktop()) {
-    $<HTMLButtonElement>('#btn-hide')!.onclick = () => void native('hide_main');
-    $<HTMLButtonElement>('#btn-test')!.onclick = () => {
-      void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
-    };
     $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
     $<HTMLButtonElement>('#btn-update')!.onclick = () => void checkUpdate();
   }
+  $<HTMLButtonElement>('#btn-lock')!.onclick = () => void lockDevice('manual');
   // 点连接状态就能换服务端地址，不用翻设置
   $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
   renderThemeButton();
-  $<HTMLButtonElement>('#btn-theme')!.onclick = () => {
-    saveTheme(loadTheme() === 'dark' ? 'morandi' : 'dark');
-    renderThemeButton();
-    // capture / takeover 是独立窗口，配置变化靠事件通知它们重读
-    send('theme:changed', { theme: loadTheme() });
-  };
+  $<HTMLButtonElement>('#btn-theme')!.onclick = () => toggleTheme();
   $<HTMLButtonElement>('#btn-logout')!.onclick = () => {
     rt?.close();
     clearToken();
@@ -463,12 +457,7 @@ function renderShell() {
   $<HTMLElement>('#editor')!.addEventListener('input', onEditorInput);
 
   onWeakChange(renderWeakBanner);
-  if (isDesktop()) {
-    void native<boolean>('is_autostart_enabled').then((on) => {
-      const el = $<HTMLElement>('#s-auto');
-      if (el) el.textContent = on === null ? '未知' : on ? '开' : '关';
-    });
-  }
+  renderDeviceStatus();
 }
 
 /* -------------------------------------------------------- 弱提示横幅 */
@@ -642,6 +631,7 @@ function setView(v: View) {
   } else {
     void refresh();
   }
+  if (v === 'mystats' || v === 'settings') void reloadPageData();
 }
 
 function counts() {
@@ -671,6 +661,8 @@ function renderSidebar() {
   const me = loadConfig().device;
   const others = state.devices.filter((d) => d.id !== me?.id);
   const bad = state.entries.filter((e) => e.status === 'missed').length;
+  const devLabel = (d: Device) => d.locked ? '已锁定' : d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送';
+  const devDot = (d: Device) => d.locked ? 'warn' : d.online ? '' : d.pushReady ? 'off' : 'alert';
 
   $<HTMLElement>('#sidebar')!.innerHTML = `
     ${nav.map(([v, label, n]) => `
@@ -681,57 +673,483 @@ function renderSidebar() {
     <div class="nav-head">弱提示</div>
     <button class="nav ${state.view === 'dismissed' ? 'on' : ''}" data-view="dismissed">已忽略<span class="count">${state.dismissals.length}</span></button>
     <button class="nav ${state.view === 'neglected' ? 'on' : ''}" data-view="neglected">老是被忽略</button>
+    <div class="nav-sep"></div>
+    <div class="nav-head">我的</div>
+    <button class="nav ${state.view === 'mystats' ? 'on' : ''}" data-view="mystats">我的看板</button>
     <button class="nav ${state.view === 'tokens' ? 'on' : ''}" data-view="tokens">Agent 令牌</button>
-    ${isDesktop() ? `
+    <button class="nav ${state.view === 'settings' ? 'on' : ''}" data-view="settings">设置</button>
     <div class="nav-sep"></div>
     <div class="nav-head">推送设备</div>
     <div class="dev-list">
       <div class="nav static">
-        <span class="sdot"></span>${esc(me?.name ?? '本机')}<span class="count">本机</span>
+        <span class="sdot ${me?.locked ? 'warn' : ''}"></span>${esc(me?.name ?? '本机')}<span class="count">${me?.locked ? '已锁定' : '本机'}</span>
       </div>
       ${others.map((d) => `
-        <div class="nav static" title="${esc(d.platform)} · ${esc(d.transport.toUpperCase())}">
-          <span class="sdot ${d.online ? '' : d.pushReady ? 'off' : 'alert'}"></span>${esc(d.name)}
-          <span class="count">${d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送'}</span>
+        <div class="nav static" title="${esc(d.platform)} · ${esc(d.transport.toUpperCase())} · ${esc(d.lastIp ?? '无 IP 记录')}">
+          <span class="sdot ${devDot(d)}"></span>${esc(d.name)}
+          <span class="count">${devLabel(d)}</span>
+          ${d.lastIp ? `<span class="dev-ip mono">${esc(d.lastIp)}</span>` : ''}
         </div>`).join('')}
-      ${others.length === 0 ? '<div class="nav-note">还没有别的设备登录。同一账号在多台设备登录后，这里会列出来。</div>' : ''}
-    </div>` : ''}
+      ${others.length === 0 ? '<div class="nav-note">同一账号在别的设备登录后，这里会列出来。</div>' : ''}
+    </div>
     <div class="sp"></div>
     ${loadConfig().user?.role === 'admin' ? `
-    <button class="nav ${state.view === 'dashboard' ? 'on' : ''}" data-view="dashboard">开发看板</button>
-    <div class="nav-sep"></div>` : ''}
-    ${isDesktop() ? `<button class="nav" id="btn-autostart"><span class="sdot ${loadConfig().settings.sound === 'none' ? 'off' : ''}"></span>开机自启<span class="count" id="auto-state">-</span></button>` : ''}`;
+    <button class="nav ${state.view === 'dashboard' ? 'on' : ''}" data-view="dashboard">系统看板</button>
+    <div class="nav-sep"></div>` : ''}`;
+}
 
-  const auto = document.querySelector<HTMLButtonElement>('#btn-autostart');
+/* ------------------------------------------------------------ 设置页 */
+
+const CLOSE_KEY = 'deskalarm.closeBehavior';
+const LOG_KEY = 'deskalarm.logPolicy';
+
+interface LogPolicy { level: 'debug' | 'info' | 'warn' | 'error'; enabled: boolean; retentionDays: number }
+const DEFAULT_LOG_POLICY: LogPolicy = { level: 'info', enabled: true, retentionDays: 7 };
+
+function closeBehavior(): 'quit' | 'tray' {
+  return localStorage.getItem(CLOSE_KEY) === 'quit' ? 'quit' : 'tray';
+}
+
+function localLogPolicy(): LogPolicy {
+  try {
+    return { ...DEFAULT_LOG_POLICY, ...(JSON.parse(localStorage.getItem(LOG_KEY) ?? '{}') as Partial<LogPolicy>) };
+  } catch { return { ...DEFAULT_LOG_POLICY }; }
+}
+
+function toggleTheme() {
+  saveTheme(loadTheme() === 'dark' ? 'morandi' : 'dark');
+  renderThemeButton();
+  send('theme:changed', { theme: loadTheme() });
+}
+
+function renderDeviceStatus() {
+  const el = $<HTMLElement>('#s-lock');
+  if (!el) return;
+  const me = loadConfig().device;
+  el.textContent = me?.locked ? '设备 已锁定' : '设备 在线';
+}
+
+function renderSettingsView(box: HTMLElement) {
+  if (box.querySelector('.settings')) return;
+  const admin = loadConfig().user?.role === 'admin';
+  box.innerHTML = `
+  <div class="settings">
+    <section class="set-card">
+      <h2>常规</h2>
+      <div class="set-row"><div><b>主题</b><small>当前 <span id="set-theme"></span></small></div>
+        <button class="btn sm" id="set-theme-btn"></button></div>
+      <div class="set-row"><div><b>关闭主窗口</b><small>点标题栏 X 时做什么</small></div>
+        <select class="input sm" id="set-close">
+          <option value="quit">退出程序</option><option value="tray">隐藏到托盘</option>
+        </select></div>
+      ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随 Windows 登录，静默进托盘</small></div>
+        <input type="checkbox" class="switch" id="set-auto"></div>` : ''}
+      <div class="set-row"><div><b>更新</b><small>检查并安装新版本</small></div>
+        <button class="btn sm" id="set-update">检查更新</button></div>
+    </section>
+
+    <section class="set-card" id="set-remind">
+      <h2>提醒</h2>
+      <div class="set-grid">
+        <label>弱提示升级秒数<input class="input" id="set-escalate" type="number" min="5" max="3600"></label>
+        <label>重复间隔（秒，0 为不重复）<input class="input" id="set-repeat" type="number" min="0" max="86400"></label>
+        <label>静音开始<input class="input" id="set-quiet-start" type="time"></label>
+        <label>静音结束<input class="input" id="set-quiet-end" type="time"></label>
+        <label>声音<select class="input" id="set-sound">
+          <option value="system">系统提示音</option><option value="custom">自定义</option><option value="none">静音</option>
+        </select></label>
+        <label>忽略几次后降级<input class="input" id="set-downgrade" type="number" min="1" max="20"></label>
+        <label>忽略几次后提示删除<input class="input" id="set-neglected" type="number" min="1" max="50"></label>
+      </div>
+      <div class="set-actions"><button class="btn solid sm" id="set-save">保存提醒设置</button><span id="set-msg" class="hint"></span></div>
+    </section>
+
+    <section class="set-card">
+      <h2>设备与安全</h2>
+      <div id="pin-state" class="hint"></div>
+      <div class="set-grid">
+        <label>PIN（4-12 位数字）<input class="input" id="pin-new" inputmode="numeric" autocomplete="off"></label>
+        <label>确认 PIN<input class="input" id="pin-confirm" inputmode="numeric" autocomplete="off"></label>
+        <label>账号密码（修改或移除 PIN 时需要）<input class="input" id="pin-pass" type="password" autocomplete="current-password"></label>
+      </div>
+      <div class="set-actions">
+        <button class="btn solid sm" id="pin-save">设置 PIN</button>
+        <button class="btn sm" id="pin-remove">移除 PIN</button>
+        <span id="pin-msg" class="hint"></span>
+      </div>
+      <div class="set-row"><div><b>本机</b><small id="lock-note">锁定后按离线处理，到点提醒等解锁后补发</small></div>
+        <button class="btn sm" id="set-lock">锁定</button></div>
+      ${isDesktop() ? `<div class="set-row"><div><b>试响</b><small>确认这台设备能出声</small></div>
+        <button class="btn sm" id="set-ping">试响</button></div>` : ''}
+      <div id="set-devices" class="dev-table"></div>
+    </section>
+
+    ${admin ? `<section class="set-card">
+      <h2>用户管理</h2>
+      <div class="set-grid">
+        <label>用户名<input class="input" id="usr-name" autocomplete="off"></label>
+        <label>密码（至少 8 位）<input class="input" id="usr-pass" type="password" autocomplete="new-password"></label>
+        <label>角色<select class="input" id="usr-role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+      </div>
+      <div class="set-actions"><button class="btn solid sm" id="usr-add">创建用户</button><span id="usr-msg" class="hint"></span></div>
+      <div id="set-users" class="user-table"></div>
+    </section>` : ''}
+
+    <section class="set-card">
+      <h2>本地日志</h2>
+      <div class="set-grid">
+        <label>级别<select class="input" id="log-level">
+          <option value="debug">debug</option><option value="info" selected>info</option>
+          <option value="warn">warn</option><option value="error">error</option>
+        </select></label>
+        <label>保留天数<input class="input" id="log-days" type="number" min="1" max="90"></label>
+      </div>
+      <div class="set-row"><div><b>写入本地文件</b><small>应用数据目录下的 logs 文件夹</small></div>
+        <input type="checkbox" class="switch" id="log-enabled"></div>
+      <div class="set-actions"><button class="btn sm" id="log-save">保存日志设置</button><span id="log-msg" class="hint"></span></div>
+    </section>
+  </div>`;
+
+  const now = THEMES.find((t) => t.id === loadTheme())!;
+  $<HTMLElement>('#set-theme')!.textContent = now.label;
+  $<HTMLButtonElement>('#set-theme-btn')!.textContent = `切换到${THEMES.find((t) => t.id !== loadTheme())!.label}`;
+  $<HTMLButtonElement>('#set-theme-btn')!.onclick = () => {
+    toggleTheme();
+    const t = THEMES.find((x) => x.id === loadTheme())!;
+    $<HTMLElement>('#set-theme')!.textContent = t.label;
+    $<HTMLButtonElement>('#set-theme-btn')!.textContent = `切换到${THEMES.find((x) => x.id !== loadTheme())!.label}`;
+  };
+  $<HTMLSelectElement>('#set-close')!.value = closeBehavior();
+  $<HTMLSelectElement>('#set-close')!.onchange = (ev) => {
+    const v = (ev.target as HTMLSelectElement).value as 'quit' | 'tray';
+    localStorage.setItem(CLOSE_KEY, v);
+    void native('set_close_behavior', { behavior: v });
+  };
+  const auto = $<HTMLInputElement>('#set-auto');
   if (auto) {
-    auto.onclick = async () => {
-      const el = $<HTMLSpanElement>('#auto-state')!;
-      const cur = el.dataset.on === '1';
-      const now = await native<boolean>('set_autostart', { enable: !cur });
-      if (now === null) { el.textContent = '失败'; return; }
-      el.dataset.on = now ? '1' : '0';
-      el.textContent = now ? '开' : '关';
-    };
-    void native<boolean>('is_autostart_enabled').then((on) => {
-      const el = $<HTMLSpanElement>('#auto-state');
-      if (!el) return;
-      // 读不到就别显示「关」，那是在说一个不确定的事
-      if (on === null) { el.textContent = '未知'; return; }
-      el.dataset.on = on ? '1' : '0';
-      el.textContent = on ? '开' : '关';
-    });
+    void native<boolean>('is_autostart_enabled').then((on) => { if (on !== null) auto.checked = on; });
+    auto.onchange = () => void native('set_autostart', { enable: auto.checked });
   }
+  $<HTMLButtonElement>('#set-update')!.onclick = () => void checkUpdate();
+  const ping = $<HTMLButtonElement>('#set-ping');
+  if (ping) ping.onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
+  $<HTMLButtonElement>('#set-lock')!.onclick = () => void lockDevice('manual');
+
+  $<HTMLButtonElement>('#set-save')!.onclick = () => void saveSettingsForm();
+  $<HTMLButtonElement>('#pin-save')!.onclick = () => void savePin();
+  $<HTMLButtonElement>('#pin-remove')!.onclick = () => void removePin();
+  $<HTMLButtonElement>('#log-save')!.onclick = () => void saveLogPolicy();
+
+  if (admin) {
+    $<HTMLButtonElement>('#usr-add')!.onclick = () => void addUser();
+    $<HTMLElement>('#set-users')!.addEventListener('click', (ev) => {
+      const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-user]');
+      if (!b) return;
+      const id = b.dataset.user!;
+      if (b.dataset.act === 'del' && !window.confirm('确定删除这个用户？他的数据会一起删掉。')) return;
+      void api.updateUser(id, { disabled: b.dataset.act !== 'disable' })
+        .then(reloadUsers).catch((e) => { $<HTMLElement>('#usr-msg')!.textContent = msgOf(e); });
+    });
+    void reloadUsers();
+  }
+  void reloadPageData();
+}
+
+async function saveSettingsForm() {
+  const msg = $<HTMLElement>('#set-msg')!;
+  const mins = (id: string) => {
+    const [h, m] = $<HTMLInputElement>(id)!.value.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const patch: Partial<Settings> = {
+    escalateAfterSec: Number($<HTMLInputElement>('#set-escalate')!.value),
+    repeatEverySec: Number($<HTMLInputElement>('#set-repeat')!.value),
+    quietStartMin: mins('#set-quiet-start'),
+    quietEndMin: mins('#set-quiet-end'),
+    sound: $<HTMLSelectElement>('#set-sound')!.value as Settings['sound'],
+    autoDowngradeAfter: Number($<HTMLInputElement>('#set-downgrade')!.value),
+    neglectedAfter: Number($<HTMLInputElement>('#set-neglected')!.value),
+  };
+  msg.textContent = '保存中…';
+  try {
+    const r = await api.patchSettings(patch);
+    saveConfig({ settings: r.settings });
+    msg.textContent = '已保存';
+  } catch (e) { msg.textContent = msgOf(e); }
+}
+
+async function loadSettingsForm() {
+  const el = $<HTMLElement>('#set-remind');
+  if (!el) return;
+  try {
+    const { settings: s } = await api.settings();
+    saveConfig({ settings: s });
+    const hhmmOf = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    $<HTMLInputElement>('#set-escalate')!.value = String(s.escalateAfterSec);
+    $<HTMLInputElement>('#set-repeat')!.value = String(s.repeatEverySec);
+    $<HTMLInputElement>('#set-quiet-start')!.value = hhmmOf(s.quietStartMin);
+    $<HTMLInputElement>('#set-quiet-end')!.value = hhmmOf(s.quietEndMin);
+    $<HTMLSelectElement>('#set-sound')!.value = s.sound;
+    $<HTMLInputElement>('#set-downgrade')!.value = String(s.autoDowngradeAfter);
+    $<HTMLInputElement>('#set-neglected')!.value = String(s.neglectedAfter);
+  } catch { /* 读不到就保留本地缓存，不覆盖用户正在填的内容 */ }
+}
+
+async function loadPinState() {
+  const el = $<HTMLElement>('#pin-state');
+  if (!el) return;
+  const has = !!loadConfig().user?.hasPin;
+  el.textContent = has ? '已设置 PIN。修改或移除需要账号密码。' : '尚未设置 PIN，设置后才能锁定本机。';
+  $<HTMLButtonElement>('#pin-save')!.textContent = has ? '修改 PIN' : '设置 PIN';
+  $<HTMLButtonElement>('#pin-remove')!.disabled = !has;
+  const note = $<HTMLElement>('#lock-note');
+  if (note) note.textContent = has
+    ? '锁定后按离线处理，到点提醒等解锁后补发'
+    : '请先设置 PIN，才能锁定本机';
+}
+
+async function savePin() {
+  const msg = $<HTMLElement>('#pin-msg')!;
+  const pin = $<HTMLInputElement>('#pin-new')!.value.trim();
+  if (!/^\d{4,12}$/.test(pin)) { msg.textContent = 'PIN 需要 4-12 位数字'; return; }
+  if (pin !== $<HTMLInputElement>('#pin-confirm')!.value.trim()) { msg.textContent = '两次输入不一致'; return; }
+  const pass = $<HTMLInputElement>('#pin-pass')!.value;
+  msg.textContent = '保存中…';
+  try {
+    await api.setPin(pin, pass || undefined);
+    const me = loadConfig().user;
+    if (me) saveConfig({ user: { ...me, hasPin: true } });
+    $<HTMLInputElement>('#pin-new')!.value = '';
+    $<HTMLInputElement>('#pin-confirm')!.value = '';
+    $<HTMLInputElement>('#pin-pass')!.value = '';
+    msg.textContent = 'PIN 已保存';
+    void loadPinState();
+  } catch (e) { msg.textContent = msgOf(e); }
+}
+
+async function removePin() {
+  const msg = $<HTMLElement>('#pin-msg')!;
+  const pass = $<HTMLInputElement>('#pin-pass')!.value;
+  if (!pass) { msg.textContent = '先填账号密码'; return; }
+  try {
+    await api.deletePin(pass);
+    const me = loadConfig().user;
+    if (me) saveConfig({ user: { ...me, hasPin: false } });
+    $<HTMLInputElement>('#pin-pass')!.value = '';
+    msg.textContent = 'PIN 已移除';
+    void loadPinState();
+  } catch (e) { msg.textContent = msgOf(e); }
+}
+
+function renderDeviceRows() {
+  const box = $<HTMLElement>('#set-devices');
+  if (!box) return;
+  box.innerHTML = state.devices.map((d) => `
+    <div class="dev-row">
+      <b>${esc(d.name)}</b>
+      <span class="mono">${esc(d.lastIp ?? '—')}</span>
+      <span>${d.locked ? '已锁定' : d.online ? '在线' : '离线'}</span>
+      <span class="hint">${esc(d.platform)}</span>
+    </div>`).join('');
+}
+
+async function reloadUsers() {
+  const box = $<HTMLElement>('#set-users');
+  if (!box) return;
+  try {
+    const { users } = await api.users();
+    const me = loadConfig().user?.id;
+    box.innerHTML = users.map((u) => `
+      <div class="dev-row">
+        <b>${esc(u.username)}</b><span>${u.role === 'admin' ? '管理员' : '普通用户'}</span>
+        <span>${u.disabled ? '已禁用' : '正常'}</span>
+        ${u.id === me ? '<span class="hint">自己</span>' : `
+          <button class="btn sm" data-user="${esc(u.id)}" data-act="${u.disabled ? 'disable' : 'enable'}">${u.disabled ? '启用' : '禁用'}</button>
+          <button class="btn sm danger" data-user="${esc(u.id)}" data-act="del">删除</button>`}
+      </div>`).join('');
+  } catch (e) { $<HTMLElement>('#usr-msg')!.textContent = msgOf(e); }
+}
+
+async function addUser() {
+  const msg = $<HTMLElement>('#usr-msg')!;
+  try {
+    await api.createUser({
+      username: $<HTMLInputElement>('#usr-name')!.value.trim(),
+      password: $<HTMLInputElement>('#usr-pass')!.value,
+      role: $<HTMLSelectElement>('#usr-role')!.value as 'admin' | 'user',
+    });
+    $<HTMLInputElement>('#usr-name')!.value = '';
+    $<HTMLInputElement>('#usr-pass')!.value = '';
+    msg.textContent = '已创建';
+    void reloadUsers();
+  } catch (e) { msg.textContent = msgOf(e); }
+}
+
+async function loadLogPolicy() {
+  const p = await native<LogPolicy>('get_log_policy');
+  if (!p) return;
+  $<HTMLSelectElement>('#log-level')!.value = p.level;
+  $<HTMLInputElement>('#log-days')!.value = String(p.retentionDays);
+  $<HTMLInputElement>('#log-enabled')!.checked = p.enabled;
+  localStorage.setItem(LOG_KEY, JSON.stringify(p));
+}
+
+async function saveLogPolicy() {
+  const msg = $<HTMLElement>('#log-msg')!;
+  const p: LogPolicy = {
+    level: $<HTMLSelectElement>('#log-level')!.value as LogPolicy['level'],
+    retentionDays: Number($<HTMLInputElement>('#log-days')!.value),
+    enabled: $<HTMLInputElement>('#log-enabled')!.checked,
+  };
+  const ok = await native('set_log_policy', {
+    level: p.level, enabled: p.enabled, retentionDays: p.retentionDays,
+  });
+  msg.textContent = ok === null ? '保存失败' : '已保存';
+  if (ok !== null) localStorage.setItem(LOG_KEY, JSON.stringify(p));
+}
+
+function msgOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/* ------------------------------------------------------------ 我的看板 */
+
+function renderStatsView(box: HTMLElement) {
+  if (box.querySelector('.stats')) return;
+  box.innerHTML = `
+    <div class="stats">
+      <div class="stat-hero" id="stat-hero">读取中…</div>
+      <div class="stat-grid" id="stat-grid"></div>
+      <h2 class="stat-title">最近 7 天</h2>
+      <div class="bars" id="stat-days"></div>
+    </div>`;
+  void loadStats();
+}
+
+async function loadStats() {
+  if (!$('#stat-hero')) return;
+  try {
+    const s: MyStats = await api.myStats();
+    const rate = Math.round((s.week.rate ?? 0) * 100);
+    $<HTMLElement>('#stat-hero')!.innerHTML = `
+      <div><span class="big">${s.streakDays}</span><span class="unit">天连续守约</span></div>
+      <div><span class="big">${rate}%</span><span class="unit">近 7 天准时率</span></div>`;
+    const items: Array<[string, number, string]> = [
+      ['今日待办', s.today.due, ''], ['今日已完成', s.today.done, 'ok'],
+      ['今日逾期', s.today.missed, 'warn'], ['被忽略', s.dismissed, ''],
+    ];
+    $<HTMLElement>('#stat-grid')!.innerHTML = items.map(([label, value, tone]) => `
+      <div class="stat-card ${tone}"><span>${label}</span><b>${value}</b></div>`).join('');
+    const max = Math.max(1, ...s.days.map((d) => d.due));
+    $<HTMLElement>('#stat-days')!.innerHTML = s.days.map((d) => `
+      <div class="bar-col" title="${esc(d.day)}：到期 ${d.due}，准时 ${d.done}，逾期 ${d.missed}">
+        <div class="bar-track">
+          <i class="bar-done" style="height:${Math.round(d.done / max * 100)}%"></i>
+          <i class="bar-miss" style="height:${Math.round(d.missed / max * 100)}%"></i>
+        </div>
+        <span>${esc(d.day.slice(5))}</span>
+      </div>`).join('');
+  } catch (e) {
+    $<HTMLElement>('#stat-hero')!.textContent = msgOf(e);
+  }
+}
+
+async function reloadPageData() {
+  await Promise.allSettled([loadSettingsForm(), loadPinState(), loadLogPolicy(), loadStats(), renderDeviceRows()]);
+}
+
+/* ------------------------------------------------------------ 设备锁定 */
+
+let lockReason: 'manual' | 'system' | null = null;
+let lockInput: HTMLInputElement | null = null;
+
+function setSelfLocked(locked: boolean) {
+  const me = loadConfig().device;
+  if (me) saveConfig({ device: { ...me, locked } });
+  for (const d of state.devices) if (d.id === me?.id) d.locked = locked;
+}
+
+function renderLockScreen() {
+  if ($('#lock-screen')) return;
+  const host = document.createElement('div');
+  host.id = 'lock-screen';
+  host.className = 'lock-screen';
+  host.innerHTML = `
+    <div class="lock-card">
+      <span class="logo lg"><i></i></span>
+      <h1>DeskAlarm 已锁定</h1>
+      <p>这台设备当前按离线处理，提醒会在解锁后补发。</p>
+      <input class="input" id="lock-pin" type="password" inputmode="numeric" placeholder="输入 PIN 解锁" autocomplete="off">
+      <button class="btn solid" id="lock-go">解锁</button>
+      <div class="login-err" id="lock-err"></div>
+    </div>`;
+  document.body.appendChild(host);
+  lockInput = $<HTMLInputElement>('#lock-pin');
+  const go = () => void unlockDevice(lockInput!.value.trim());
+  $<HTMLButtonElement>('#lock-go')!.onclick = go;
+  lockInput!.onkeydown = (ev) => { if (ev.key === 'Enter') go(); };
+  lockInput!.focus();
+}
+
+async function lockDevice(reason: 'manual' | 'system') {
+  if (lockReason) return;
+  if (!loadConfig().user?.hasPin) {
+    flash('请先在设置里设置 PIN');
+    if (state.view !== 'settings') setView('settings');
+    return;
+  }
+  try {
+    await api.lockDevice(true, undefined, reason);
+  } catch (e) { flash(msgOf(e)); return; }
+  lockReason = reason;
+  setSelfLocked(true);
+  renderLockScreen();
+  renderDeviceStatus();
+  renderSidebar();
+  renderDeviceRows();
+  void native('log_event', { level: 'info', message: `设备已锁定（${reason}）` });
+}
+
+async function unlockDevice(pin?: string) {
+  try {
+    await api.lockDevice(false, pin || undefined);
+  } catch (e) {
+    const el = $<HTMLElement>('#lock-err');
+    if (el) el.textContent = msgOf(e);
+    return;
+  }
+  lockReason = null;
+  setSelfLocked(false);
+  $('#lock-screen')?.remove();
+  lockInput = null;
+  renderDeviceStatus();
+  renderSidebar();
+  renderDeviceRows();
+  void native('log_event', { level: 'info', message: '设备已解锁' });
+  try {
+    const { missed } = await api.missed();
+    for (const m of missed) {
+      quiet('ping', { title: '补发提醒', body: `${Math.max(1, Math.round(m.lateByMs / 60_000))} 分钟前就该响：${m.entry.text}` });
+      if (!alarm.fire(m.entry)) pushWeak(m.entry);
+    }
+  } catch { /* 补发失败就让列表自己刷新出来 */ }
+  void refresh();
 }
 
 function renderDashboard(box: HTMLElement) {
   if (!box.querySelector('.dash')) {
     box.innerHTML = `
       <div class="dash">
+        <div class="dash-hero" id="dash-hero"></div>
+        <h2 class="dash-section">业务概况</h2>
+        <div class="dash-grid">
+          <section class="dash-card"><h3>条目状态</h3><div id="dash-entries" class="dash-body">读取中…</div></section>
+          <section class="dash-card"><h3>投递状态</h3><div id="dash-deliveries" class="dash-body">读取中…</div></section>
+        </div>
+        <h2 class="dash-section">运行环境</h2>
         <div class="dash-grid">
           <section class="dash-card"><h3>服务健康</h3><div id="dash-health" class="dash-body">读取中…</div></section>
           <section class="dash-card"><h3>调度器</h3><div id="dash-sched" class="dash-body">读取中…</div></section>
-          <section class="dash-card"><h3>条目状态</h3><div id="dash-entries" class="dash-body">读取中…</div></section>
-          <section class="dash-card"><h3>投递状态</h3><div id="dash-deliveries" class="dash-body">读取中…</div></section>
           <section class="dash-card"><h3>设备</h3><div id="dash-devices" class="dash-body">读取中…</div></section>
           <section class="dash-card"><h3>用户</h3><div id="dash-users" class="dash-body">读取中…</div></section>
         </div>
@@ -750,6 +1168,12 @@ function put(id: string, html: string) {
 async function loadOverview() {
   try {
     const o = await api.overview();
+    put('dash-hero', `
+      <div class="dash-kpi"><span>全部条目</span><b>${o.entries.total}</b></div>
+      <div class="dash-kpi warn"><span>待处理</span><b>${o.entries.pending}</b></div>
+      <div class="dash-kpi danger"><span>已逾期</span><b>${o.entries.missed}</b></div>
+      <div class="dash-kpi"><span>设备 / 在线</span><b>${o.devices.total}<small> / ${o.devices.online}</small></b></div>
+      <div class="dash-kpi"><span>用户</span><b>${o.users.total}</b></div>`);
     put('dash-health', `
       <div>数据库 <b class="${o.db.ok ? 'ok' : 'danger'}">${o.db.ok ? '正常' : '异常'}</b></div>
       <div>运行时长 ${Math.round(o.uptimeMs / 60000)} 分钟</div>
@@ -881,6 +1305,14 @@ function renderList() {
   }
   if (state.view === 'tokens') {
     renderTokens(box);
+    return;
+  }
+  if (state.view === 'settings') {
+    renderSettingsView(box);
+    return;
+  }
+  if (state.view === 'mystats') {
+    renderStatsView(box);
     return;
   }
 
@@ -1165,6 +1597,9 @@ function renderEditor() {
 
 function renderAll() {
   if (!$('#list')) return;
+  const wide = state.view === 'settings' || state.view === 'mystats' ||
+    state.view === 'dashboard' || state.view === 'tokens';
+  $<HTMLElement>('.body')!.classList.toggle('wide', wide);
   const c = counts();
   const v = VIEWS[state.view];
   $<HTMLElement>('#vtitle')!.textContent = v.title;
@@ -1174,7 +1609,8 @@ function renderAll() {
       : v.sub;
   renderSidebar();
   renderList();
-  if (state.view === 'dashboard' || state.view === 'tokens') $<HTMLElement>('#editor')!.innerHTML = '';
+  if (state.view === 'dashboard' || state.view === 'tokens' ||
+      state.view === 'settings' || state.view === 'mystats') $<HTMLElement>('#editor')!.innerHTML = '';
   else renderEditor();
   renderSkew();
 }
@@ -1245,23 +1681,6 @@ function openServerPanel() {
           </div>
           <div class="login-hint">签发 Agent 令牌时可选绑定这个 id，绑定后 agent 只能以本机身份调用 MCP。</div>
         </div>
-        ${loadConfig().user?.role === 'admin' ? `
-        <div class="mid-block">
-          <span class="mid-title">用户管理（管理员）</span>
-          <div class="mid-row">
-            <input class="input" id="sp-u-name" spellcheck="false" placeholder="用户名">
-            <input class="input" id="sp-u-pass" type="password" placeholder="密码（至少 8 位）">
-            <select class="input" id="sp-u-role">
-              <option value="user">普通用户</option>
-              <option value="admin">管理员</option>
-            </select>
-          </div>
-          <div class="login-row">
-            <span class="login-hint" id="sp-u-hint">不同用户之间的数据完全隔离</span>
-            <button type="button" class="btn sm" id="sp-u-add">创建用户</button>
-          </div>
-          <div id="sp-u-list" class="agent-list"></div>
-        </div>` : ''}
       </div>
     </div>`;
   document.body.appendChild(host);
@@ -1289,58 +1708,6 @@ function openServerPanel() {
     const ok = await copyText(id);
     setHint(ok ? '已复制 machine-id' : '复制失败，请手动选中', ok ? 'ok' : 'bad');
   };
-
-  const uList = host.querySelector<HTMLDivElement>('#sp-u-list');
-  if (uList) {
-    const uHint = q<HTMLSpanElement>('#sp-u-hint');
-    const me = loadConfig().user?.id;
-
-    async function loadUsers() {
-      try {
-        const { users } = await api.users();
-        uList!.innerHTML = users.map((u) => `
-          <div class="agent-item">
-            <span>${esc(u.username)} <span class="oc-muted">${u.role === 'admin' ? '管理员' : '用户'}${u.disabled ? ' · 已禁用' : ''}</span></span>
-            <span>
-              ${u.id === me ? '' : `<button type="button" class="btn sm" data-toggle="${esc(u.id)}" data-disabled="${u.disabled}">${u.disabled ? '启用' : '禁用'}</button>`}
-              ${u.id === me ? '' : `<button type="button" class="btn sm" data-del="${esc(u.id)}">删除</button>`}
-            </span>
-          </div>`).join('');
-        uList!.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach((b) => {
-          b.onclick = async () => {
-            await api.updateUser(b.dataset.toggle!, { disabled: b.dataset.disabled !== 'true' });
-            await loadUsers();
-          };
-        });
-        uList!.querySelectorAll<HTMLButtonElement>('[data-del]').forEach((b) => {
-          b.onclick = async () => {
-            if (!window.confirm('确认删除这个用户？他名下的提醒和设备会一起清掉。')) return;
-            await api.deleteUser(b.dataset.del!);
-            await loadUsers();
-          };
-        });
-      } catch (e) {
-        uHint.textContent = e instanceof Error ? e.message : '读取用户失败';
-      }
-    }
-    void loadUsers();
-
-    q<HTMLButtonElement>('#sp-u-add').onclick = async () => {
-      const username = q<HTMLInputElement>('#sp-u-name').value.trim();
-      const password = q<HTMLInputElement>('#sp-u-pass').value;
-      const role = q<HTMLSelectElement>('#sp-u-role').value as 'user' | 'admin';
-      if (!username || password.length < 8) { uHint.textContent = '用户名必填，密码至少 8 位'; return; }
-      try {
-        await api.createUser({ username, password, role });
-        q<HTMLInputElement>('#sp-u-name').value = '';
-        q<HTMLInputElement>('#sp-u-pass').value = '';
-        uHint.textContent = '已创建';
-        await loadUsers();
-      } catch (e) {
-        uHint.textContent = e instanceof Error ? e.message : '创建失败';
-      }
-    };
-  }
 
   q<HTMLButtonElement>('#sp-test').onclick = async (ev) => {
     const norm = normalizeBaseUrl(url.value);
@@ -1378,7 +1745,8 @@ function openServerPanel() {
 /* ------------------------------------------------------------ 操作 */
 
 async function refresh() {
-  if (state.view === 'dashboard' || state.view === 'tokens') {
+  if (state.view === 'settings' || state.view === 'mystats' ||
+      state.view === 'dashboard' || state.view === 'tokens') {
     renderAll();
     return;
   }
@@ -1737,6 +2105,17 @@ function boot() {
   renderShell();
   wireEvents();
   setLink('connecting');
+  if (hasTauri()) {
+    if (isDesktop()) void native('set_close_behavior', { behavior: closeBehavior() });
+    void native('log_event', { level: 'info', message: '客户端启动' });
+  }
+  on('session:locked', () => void lockDevice('system'));
+  on('session:unlocked', () => { if (lockReason === 'system') void unlockDevice(); });
+  if (platform === 'android') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && !lockReason) void lockDevice('manual');
+    });
+  }
   rt = new Realtime(onRealtime, setLink);
   rt.connect();
   void refresh();
@@ -1796,6 +2175,8 @@ function onRealtime(msg: ServerMessage) {
     case 'devices.changed':
       state.devices = msg.devices;
       renderAll();
+      renderDeviceStatus();
+      renderDeviceRows();
       break;
     case 'settings.changed':
       saveConfig({ settings: msg.settings });

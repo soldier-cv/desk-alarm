@@ -87,6 +87,12 @@ cd app && node scripts/contrast.mjs
 
 改 `DEFAULT_CONFIG.baseUrl` 时不用再动 CSP，但要知道两者的关系：这个地址必须在 CSP 允许范围内才连得上。
 
+## CORS：桌面端的请求靠服务端放行
+
+客户端的页面源是 `http://tauri.localhost`，跟服务端不同源，浏览器只认服务端回的 `Access-Control-Allow-Origin`。CSP 通过不代表能连上，两个都要对。
+
+`server/src/cors.ts` 里是硬编码的客户端源 + `CORS_ORIGINS`。删掉或收窄它，客户端会报「连不上」——而 curl 一切正常，这类故障先看响应头有没有 ACAO。
+
 ## 数据库
 
 - 全部表在 `PGSCHEMA` 指定的 schema（默认 `desk_alarm`），靠 `search_path` 隔离

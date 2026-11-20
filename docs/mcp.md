@@ -17,7 +17,7 @@ cd server && npm run build
       "command": "node",
       "args": ["D:\\project\\desk-alarm\\server\\dist\\server\\mcp\\stdio.js"],
       "env": {
-        "DESKALARM_API": "http://127.0.0.1:8787",
+        "DESKALARM_API": "http://127.0.0.1:8091",
         "DESKALARM_TOKEN": "在客户端签发并复制的 Agent 令牌"
       }
     }
