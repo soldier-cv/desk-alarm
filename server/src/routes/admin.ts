@@ -15,7 +15,8 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get('/admin/users', async () => ({ users: await listUsers() }));
 
   app.post('/admin/users', async (req, reply) => {
-    const body = req.body as { username?: string; password?: string; role?: Role };
+    // 新建账号一律普通用户；管理员身份只能由已有管理员另行调整，不在创建入口开放
+    const body = req.body as { username?: string; password?: string; confirmPassword?: string };
     const username = body.username?.trim() ?? '';
     const password = body.password ?? '';
     if (!username || password.length < 8) {
@@ -23,11 +24,11 @@ export async function adminRoutes(app: FastifyInstance) {
         error: 'BAD_REQUEST', message: '用户名不能为空，密码至少 8 位',
       });
     }
-    if (body.role && body.role !== 'admin' && body.role !== 'user') {
-      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'role 只能是 admin 或 user' });
+    if (body.confirmPassword !== password) {
+      return reply.code(400).send({ error: 'BAD_CONFIRM', message: '两次密码不一致' });
     }
     try {
-      const user = await createUser({ username, password, role: body.role ?? 'user' });
+      const user = await createUser({ username, password, role: 'user' });
       log.info('admin created user', { by: req.session!.user.username, user: username });
       return reply.code(201).send({ user });
     } catch {

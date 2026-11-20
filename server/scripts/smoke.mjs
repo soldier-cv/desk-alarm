@@ -233,6 +233,25 @@ try {
     username: 'admin2', password: 'test-pass-123', confirmPassword: 'test-pass-123',
   } })).status === 409);
 
+  /* -------------------------------------------------------- 用户管理 */
+  console.log('\n用户管理');
+  const adminToken = setup.json.token;
+  const makeUser = (confirmPassword) => api('/admin/users', {
+    method: 'POST', token: adminToken,
+    body: { username: 'qa_user', password: 'user-pass-123', confirmPassword },
+  });
+  const badConfirm = await makeUser('different-123');
+  ok('创建用户两次密码不一致被拒 400', badConfirm.status === 400, `status=${badConfirm.status}`);
+  const createdUser = await makeUser('user-pass-123');
+  ok('创建用户成功', createdUser.status === 201, `status=${createdUser.status}`);
+  ok('新建用户一律普通用户', createdUser.json.user?.role === 'user',
+    String(createdUser.json.user?.role));
+  const newUid = createdUser.json.user?.id;
+  const deletedUser = await api(`/admin/users/${newUid}`, { method: 'DELETE', token: adminToken });
+  ok('删除用户成功', deletedUser.status === 200, `status=${deletedUser.status}`);
+  const afterDelete = await api('/admin/users', { token: adminToken });
+  ok('删除后列表不再有该用户', !afterDelete.json.users?.some((u) => u.id === newUid));
+
   /* ---------------------------------------------------------- 鉴权 */
   console.log('\n鉴权');
   const bad = await api('/auth/login', { method: 'POST', body: { username: 'admin', password: 'wrong', deviceName: 'x', platform: 'windows' } });
@@ -729,9 +748,13 @@ try {
   const lockNoPin = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: true } });
   ok('没设 PIN 不许锁定 409', lockNoPin.status === 409, `status=${lockNoPin.status}`);
 
-  const badPinFormat = await api('/pin', { method: 'POST', token: tl, body: { pin: 'abc' } });
-  ok('非数字 PIN 被拒 400', badPinFormat.status === 400, `status=${badPinFormat.status}`);
-  const setPin = await api('/pin', { method: 'POST', token: tl, body: { pin: '4321' } });
+  const badPinFormat = await api('/pin', { method: 'POST', token: tl, body: { pin: '12345', currentPassword: 'test-pass-123' } });
+  ok('非 6 位 PIN 被拒 400', badPinFormat.status === 400, `status=${badPinFormat.status}`);
+  const setNoPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '432189' } });
+  ok('首次设 PIN 不带账号密码也被拒 401', setNoPw.status === 401, `status=${setNoPw.status}`);
+  const setBadPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '432189', currentPassword: 'wrong-pass-123' } });
+  ok('首次设 PIN 密码错误被拒 401', setBadPw.status === 401, `status=${setBadPw.status}`);
+  const setPin = await api('/pin', { method: 'POST', token: tl, body: { pin: '432189', currentPassword: 'test-pass-123' } });
   ok('首次设置 PIN 成功', setPin.status === 200 && setPin.json.ok === true,
     `status=${setPin.status} ${JSON.stringify(setPin.json)}`);
   ok('whoami 带 hasPin=true', (await api('/auth/whoami', { token: tl })).json.user?.hasPin === true);
@@ -742,11 +765,11 @@ try {
   ok('登录响应带 hasPin=true', relog.json.user?.hasPin === true,
     String(relog.json.user?.hasPin));
 
-  const changeNoPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '5678' } });
+  const changeNoPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '567890' } });
   ok('改 PIN 不带账号密码被拒 401', changeNoPw.status === 401, `status=${changeNoPw.status}`);
-  const changeBadPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '5678', currentPassword: 'nope' } });
+  const changeBadPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '567890', currentPassword: 'nope' } });
   ok('改 PIN 密码错误被拒 401', changeBadPw.status === 401, `status=${changeBadPw.status}`);
-  const changeOk = await api('/pin', { method: 'POST', token: tl, body: { pin: '5678', currentPassword: 'test-pass-123' } });
+  const changeOk = await api('/pin', { method: 'POST', token: tl, body: { pin: '567890', currentPassword: 'test-pass-123' } });
   ok('带对账号密码改 PIN 成功', changeOk.status === 200, `status=${changeOk.status}`);
 
   const lock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: true } });
@@ -780,14 +803,14 @@ try {
   ok('锁定设备的提醒判为 missed',
     (await api(`/entries/${lId}`, { token: tl })).json.entry?.status === 'missed');
 
-  const badUnlock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false, pin: '0000' } });
+  const badUnlock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false, pin: '000000' } });
   ok('错误 PIN 解锁被拒 401', badUnlock.status === 401, `status=${badUnlock.status}`);
   const noPinUnlock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false } });
   ok('manual 锁定无 PIN 解锁被拒 401', noPinUnlock.status === 401, `status=${noPinUnlock.status}`);
   ok('拒绝后设备仍是 locked',
     (await api('/auth/whoami', { token: tl })).json.device?.locked === true);
 
-  const unlock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false, pin: '5678' } });
+  const unlock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false, pin: '567890' } });
   ok('正确 PIN 解锁成功', unlock.status === 200 && unlock.json.device?.locked === false,
     `status=${unlock.status} ${JSON.stringify(unlock.json)}`);
   ok('解锁清掉 lockReason', unlock.json.device?.lockReason === null,

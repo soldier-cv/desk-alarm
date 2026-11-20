@@ -330,6 +330,13 @@ pub async fn install_update(app: AppHandle) -> Result<String, String> {
     };
 
     let version = update.version.clone();
+    // 插件可能返回旧的缓存包；只装清单里那一个最新版本，绝不降级
+    if is_newer(&info.latest_version, &version) || is_newer(&version, &info.latest_version) {
+        return Err(format!(
+            "清单版本 {} 与待安装版本 {} 不一致，已取消安装",
+            info.latest_version, version
+        ));
+    }
     // download 内部已做签名校验，验不过直接返回错误，不会走到 install
     let bytes = update
         .download(|_chunk, _total| {}, || {})

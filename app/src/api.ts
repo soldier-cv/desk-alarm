@@ -275,7 +275,7 @@ export const api = {
 
   users: () => req<{ users: User[] }>('/admin/users'),
 
-  createUser: (body: { username: string; password: string; role: Role }) =>
+  createUser: (body: { username: string; password: string; confirmPassword: string }) =>
     req<{ user: User }>('/admin/users', { method: 'POST', body: JSON.stringify(body) }),
 
   updateUser: (id: string, body: { role?: Role; disabled?: boolean; password?: string }) =>
@@ -403,12 +403,31 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
   if (/^(https?:\/\/|www\.)\S+/i.test(s)) { out.kind = 'link'; out.kindLabel = '链接'; }
   else if (/^[a-zA-Z]:\\|^\/\//.test(s)) { out.kind = 'path'; out.kindLabel = '目录路径'; }
 
+  // 明确日期优先：一行里可能同时出现多个日期，取第一个还没过去的
+  const explicit = /(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})\s*日?(?:\s*(\d{1,2})\s*[:：点时]\s*(\d{1,2})?\s*分?)?/g;
+  const shortDate = /(?:^|[^\d])(\d{1,2})[-/月.](\d{1,2})\s*日?(?:\s*(\d{1,2})\s*[:：点时]\s*(\d{1,2})?\s*分?)?/g;
+  const pickDate = (pattern: RegExp, withYear: boolean) => {
+    let past: Date | null = null;
+    for (const m of s.matchAll(pattern)) {
+      const y = withYear ? Number(m[1]) : new Date(now).getFullYear();
+      const d = new Date(y, Number(m[2]) - 1, Number(m[3]), Number(m[4] ?? 0), Number(m[5] ?? 0), 0, 0);
+      if (d.getTime() > now) return d;
+      if (!past || d.getTime() > past.getTime()) past = d;
+    }
+    // 全是过去的时间就取最近的一个，而不是文本里出现的第一个
+    return past;
+  };
+  const dated = pickDate(explicit, true) ?? pickDate(shortDate, false);
   const rel = s.match(/(\d+)\s*(分钟|分|小时|时)后/);
   const abs = s.match(/(今天|明天|后天|大后天|周[一二三四五六日天])[^\d]{0,4}(\d{1,2})\s*[:：点]\s*(\d{2})?/);
   const clock = s.match(/^\s*(\d{1,2})[:：](\d{2})\s*$/);
   const urgent = /(一定要|必须|别忘|不要忘|重要|紧急|马上|立刻)/.test(s);
 
-  if (rel) {
+  if (dated) {
+    const p = (n: number) => String(n).padStart(2, '0');
+    out.remindAt = dated.getTime();
+    out.timeLabel = `${dated.getFullYear()}-${p(dated.getMonth() + 1)}-${p(dated.getDate())} ${p(dated.getHours())}:${p(dated.getMinutes())}`;
+  } else if (rel) {
     const n = Number(rel[1]);
     const mins = /小时|时/.test(rel[2]) ? n * 60 : n;
     out.remindAt = now + mins * 60_000;

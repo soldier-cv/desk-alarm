@@ -537,6 +537,7 @@ async function weakDismiss(id: string, reason?: string) {
 // 版本比较与「镜像落后就改用 GitHub」在 Rust 侧做（update.rs），这里只管交互
 /** 启动时后台查一次，一天最多一次。有新版本只提示，不自动安装 */
 function autoCheckUpdate() {
+  if (localStorage.getItem(AUTO_UPDATE_KEY) === 'off') return;
   const KEY = 'deskalarm.lastUpdateCheck';
   const last = Number(localStorage.getItem(KEY) ?? 0);
   if (Date.now() - last < 24 * 3600_000) return;
@@ -704,6 +705,7 @@ function renderSidebar() {
 
 const CLOSE_KEY = 'deskalarm.closeBehavior';
 const LOG_KEY = 'deskalarm.logPolicy';
+const AUTO_UPDATE_KEY = 'deskalarm.autoUpdate';
 
 interface LogPolicy { level: 'debug' | 'info' | 'warn' | 'error'; enabled: boolean; retentionDays: number }
 const DEFAULT_LOG_POLICY: LogPolicy = { level: 'info', enabled: true, retentionDays: 7 };
@@ -746,8 +748,10 @@ function renderSettingsView(box: HTMLElement) {
         </select></div>
       ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随 Windows 登录，静默进托盘</small></div>
         <input type="checkbox" class="switch" id="set-auto"></div>` : ''}
-      <div class="set-row"><div><b>更新</b><small>检查并安装新版本</small></div>
-        <button class="btn sm" id="set-update">检查更新</button></div>
+      <div class="set-row"><div><b>自动检查更新</b><small>启动时每天检查一次，不自动安装</small></div>
+        <input type="checkbox" class="switch" id="set-auto-update"></div>
+      <div class="set-row"><div><b>检查更新</b><small>装最新版本的签名安装包</small></div>
+        <button class="btn sm" id="set-update">立即检查</button></div>
     </section>
 
     <section class="set-card" id="set-remind">
@@ -758,7 +762,7 @@ function renderSettingsView(box: HTMLElement) {
         <label>静音开始<input class="input" id="set-quiet-start" type="time"></label>
         <label>静音结束<input class="input" id="set-quiet-end" type="time"></label>
         <label>声音<select class="input" id="set-sound">
-          <option value="system">系统提示音</option><option value="custom">自定义</option><option value="none">静音</option>
+          <option value="system">系统提示音</option><option value="none">静音</option>
         </select></label>
         <label>忽略几次后降级<input class="input" id="set-downgrade" type="number" min="1" max="20"></label>
         <label>忽略几次后提示删除<input class="input" id="set-neglected" type="number" min="1" max="50"></label>
@@ -771,9 +775,15 @@ function renderSettingsView(box: HTMLElement) {
       ${isDesktop() ? `
       <div id="pin-state" class="hint"></div>
       <div class="set-grid">
-        <label>PIN（4-12 位数字）<input class="input" id="pin-new" inputmode="numeric" autocomplete="off"></label>
-        <label>确认 PIN<input class="input" id="pin-confirm" inputmode="numeric" autocomplete="off"></label>
-        <label>账号密码（修改或移除 PIN 时需要）<input class="input" id="pin-pass" type="password" autocomplete="current-password"></label>
+        <label>PIN（6 位数字）
+          <span class="pwd-field"><input class="input" id="pin-new" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
+          <button type="button" class="eye" data-eye="pin-new" aria-label="显示 PIN">显</button></span></label>
+        <label>确认 PIN
+          <span class="pwd-field"><input class="input" id="pin-confirm" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
+          <button type="button" class="eye" data-eye="pin-confirm" aria-label="显示 PIN">显</button></span></label>
+        <label>账号密码（设置、修改或移除 PIN 都需要）
+          <span class="pwd-field"><input class="input" id="pin-pass" type="password" autocomplete="current-password">
+          <button type="button" class="eye" data-eye="pin-pass" aria-label="显示密码">显</button></span></label>
       </div>
       <div class="set-actions">
         <button class="btn solid sm" id="pin-save">设置 PIN</button>
@@ -791,8 +801,12 @@ function renderSettingsView(box: HTMLElement) {
       <h2>用户管理</h2>
       <div class="set-grid">
         <label>用户名<input class="input" id="usr-name" autocomplete="off"></label>
-        <label>密码（至少 8 位）<input class="input" id="usr-pass" type="password" autocomplete="new-password"></label>
-        <label>角色<select class="input" id="usr-role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+        <label>密码（至少 8 位）
+          <span class="pwd-field"><input class="input" id="usr-pass" type="password" autocomplete="new-password">
+          <button type="button" class="eye" data-eye="usr-pass" aria-label="显示密码">显</button></span></label>
+        <label>确认密码
+          <span class="pwd-field"><input class="input" id="usr-pass2" type="password" autocomplete="new-password">
+          <button type="button" class="eye" data-eye="usr-pass2" aria-label="显示密码">显</button></span></label>
       </div>
       <div class="set-actions"><button class="btn solid sm" id="usr-add">创建用户</button><span id="usr-msg" class="hint"></span></div>
       <div id="set-users" class="user-table"></div>
@@ -828,6 +842,18 @@ function renderSettingsView(box: HTMLElement) {
     localStorage.setItem(CLOSE_KEY, v);
     void native('set_close_behavior', { behavior: v });
   };
+  const autoUpdate = $<HTMLInputElement>('#set-auto-update')!;
+  autoUpdate.checked = localStorage.getItem(AUTO_UPDATE_KEY) !== 'off';
+  autoUpdate.onchange = () => localStorage.setItem(AUTO_UPDATE_KEY, autoUpdate.checked ? 'on' : 'off');
+  box.querySelector<HTMLElement>('.settings')!.addEventListener('click', (ev) => {
+    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-eye]');
+    if (!b) return;
+    const input = document.getElementById(b.dataset.eye!) as HTMLInputElement | null;
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    b.textContent = show ? '隐' : '显';
+  });
   const auto = $<HTMLInputElement>('#set-auto');
   if (auto) {
     void native<boolean>('is_autostart_enabled').then((on) => { if (on !== null) auto.checked = on; });
@@ -852,9 +878,13 @@ function renderSettingsView(box: HTMLElement) {
       const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-user]');
       if (!b) return;
       const id = b.dataset.user!;
-      if (b.dataset.act === 'del' && !window.confirm('确定删除这个用户？他的数据会一起删掉。')) return;
-      void api.updateUser(id, { disabled: b.dataset.act !== 'disable' })
-        .then(reloadUsers).catch((e) => { $<HTMLElement>('#usr-msg')!.textContent = msgOf(e); });
+      const act = b.dataset.act;
+      if (act === 'del' && !window.confirm('确定删除这个用户？他的数据会一起删掉。')) return;
+      const req = act === 'del' ? api.deleteUser(id)
+        : api.updateUser(id, { disabled: act === 'disable' });
+      void req.then(reloadUsers).catch((e) => {
+        $<HTMLElement>('#usr-msg')!.textContent = msgOf(e);
+      });
     });
     void reloadUsers();
   }
@@ -917,12 +947,13 @@ async function loadPinState() {
 async function savePin() {
   const msg = $<HTMLElement>('#pin-msg')!;
   const pin = $<HTMLInputElement>('#pin-new')!.value.trim();
-  if (!/^\d{4,12}$/.test(pin)) { msg.textContent = 'PIN 需要 4-12 位数字'; return; }
+  if (!/^\d{6}$/.test(pin)) { msg.textContent = 'PIN 需要 6 位数字'; return; }
   if (pin !== $<HTMLInputElement>('#pin-confirm')!.value.trim()) { msg.textContent = '两次输入不一致'; return; }
   const pass = $<HTMLInputElement>('#pin-pass')!.value;
+  if (!pass) { msg.textContent = '先填账号密码'; return; }
   msg.textContent = '保存中…';
   try {
-    await api.setPin(pin, pass || undefined);
+    await api.setPin(pin, pass);
     const me = loadConfig().user;
     if (me) saveConfig({ user: { ...me, hasPin: true } });
     $<HTMLInputElement>('#pin-new')!.value = '';
@@ -956,7 +987,18 @@ function renderDeviceRows() {
       <span class="mono">${esc(d.lastIp ?? '—')}</span>
       <span>${d.locked ? '已锁定' : d.online ? '在线' : '离线'}</span>
       <span class="hint">${esc(d.platform)}</span>
+      <button class="btn sm" data-ping="${esc(d.id)}" title="让这台设备试响">试响</button>
     </div>`).join('');
+  box.onclick = (ev) => {
+    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-ping]');
+    if (!b) return;
+    const id = b.dataset.ping!;
+    b.textContent = '发送中';
+    void api.pingDevice(id)
+      .then((r) => { flash(r.ok ? `已发试响到这台设备（${r.via ?? 'default'}）` : `试响失败：${r.error ?? '未知原因'}`); })
+      .catch((e) => flash(msgOf(e)))
+      .finally(() => { b.textContent = '试响'; });
+  };
 }
 
 async function reloadUsers() {
@@ -978,14 +1020,16 @@ async function reloadUsers() {
 
 async function addUser() {
   const msg = $<HTMLElement>('#usr-msg')!;
+  const username = $<HTMLInputElement>('#usr-name')!.value.trim();
+  const password = $<HTMLInputElement>('#usr-pass')!.value;
+  const confirmPassword = $<HTMLInputElement>('#usr-pass2')!.value;
+  if (!username || password.length < 8) { msg.textContent = '用户名必填，密码至少 8 位'; return; }
+  if (password !== confirmPassword) { msg.textContent = '两次密码不一致'; return; }
   try {
-    await api.createUser({
-      username: $<HTMLInputElement>('#usr-name')!.value.trim(),
-      password: $<HTMLInputElement>('#usr-pass')!.value,
-      role: $<HTMLSelectElement>('#usr-role')!.value as 'admin' | 'user',
-    });
+    await api.createUser({ username, password, confirmPassword });
     $<HTMLInputElement>('#usr-name')!.value = '';
     $<HTMLInputElement>('#usr-pass')!.value = '';
+    $<HTMLInputElement>('#usr-pass2')!.value = '';
     msg.textContent = '已创建';
     void reloadUsers();
   } catch (e) { msg.textContent = msgOf(e); }
@@ -1500,6 +1544,138 @@ function tickUrgency() {
   }
 }
 
+/* ------------------------------------------------ 自绘日期时间选择器 */
+
+let whenPop: HTMLElement | null = null;
+let whenOut: ((ev: MouseEvent) => void) | null = null;
+
+function closeWhenPicker() {
+  if (whenOut) document.removeEventListener('click', whenOut);
+  whenOut = null;
+  whenPop?.remove();
+  whenPop = null;
+}
+
+function openWhenPicker(e: Entry, anchor: HTMLElement) {
+  closeWhenPicker();
+  const now = serverNow();
+  const p = (n: number) => String(n).padStart(2, '0');
+  const dateKey = (d: Date) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  const selected = new Date(e.remindAt ?? now + 3600_000);
+  let hh = selected.getHours(), mm = selected.getMinutes();
+  let viewY = selected.getFullYear(), viewM = selected.getMonth();
+
+  const pop = document.createElement('div');
+  pop.className = 'dp-pop';
+  document.body.appendChild(pop);
+  whenPop = pop;
+
+  const commit = (at: number) => {
+    const cur = state.entries.find((x) => x.id === e.id) ?? e;
+    void api.update(cur.id, { remindAt: at, version: cur.version })
+      .then(refresh)
+      .catch((err) => flashConflict(err, e.id));
+    closeWhenPicker();
+  };
+
+  const atTime = (d: Date, h: number, m: number) => {
+    const x = new Date(d);
+    x.setHours(h, m, 0, 0);
+    return x;
+  };
+
+  const render = () => {
+    const lead = new Date(viewY, viewM, 1).getDay();
+    const total = new Date(viewY, viewM + 1, 0).getDate();
+    const cells: string[] = [];
+    for (let i = 0; i < lead; i++) cells.push('<span></span>');
+    for (let d = 1; d <= total; d++) {
+      const key = `${viewY}-${p(viewM + 1)}-${p(d)}`;
+      const on = key === dateKey(selected);
+      const isToday = key === dateKey(new Date(now));
+      cells.push(`<button class="dp-day${on ? ' on' : ''}${isToday ? ' today' : ''}" data-day="${key}">${d}</button>`);
+    }
+    const hours = Array.from({ length: 24 }, (_, i) =>
+      `<option value="${i}"${i === hh ? ' selected' : ''}>${p(i)}</option>`).join('');
+    const mins = Array.from({ length: 12 }, (_, i) => i * 5)
+      .map((m) => `<option value="${m}"${m === mm ? ' selected' : ''}>${p(m)}</option>`).join('');
+
+    pop.innerHTML = `
+      <div class="dp-quick">
+        <button data-dp="today9">今天 9:00</button>
+        <button data-dp="today18">今晚 18:00</button>
+        <button data-dp="tomorrow9">明早 9:00</button>
+        <button data-dp="tomorrow18">明晚 18:00</button>
+        <button data-dp="week">下周一 9:00</button>
+        <button data-dp="hour">1 小时后</button>
+      </div>
+      <div class="dp-month">
+        <button class="btn sm" data-dp="prev" aria-label="上个月">‹</button>
+        <b>${viewY} 年 ${viewM + 1} 月</b>
+        <button class="btn sm" data-dp="next" aria-label="下个月">›</button>
+      </div>
+      <div class="dp-grid">
+        ${['日', '一', '二', '三', '四', '五', '六'].map((w) => `<span class="dp-w">${w}</span>`).join('')}
+        ${cells.join('')}
+      </div>
+      <div class="dp-time">
+        <select class="input" id="dp-h">${hours}</select><span>:</span><select class="input" id="dp-m">${mins}</select>
+      </div>
+      <div class="dp-foot">
+        <button class="btn sm" data-dp="cancel">取消</button>
+        <button class="btn solid sm" data-dp="ok">确定</button>
+      </div>`;
+  };
+
+  pop.addEventListener('click', (ev) => {
+    const t = ev.target as HTMLElement;
+    const day = t.closest<HTMLElement>('[data-day]');
+    if (day) {
+      const [y, m, d] = day.dataset.day!.split('-').map(Number);
+      selected.setFullYear(y, m - 1, d);
+      render();
+      return;
+    }
+    const b = t.closest<HTMLElement>('[data-dp]');
+    if (!b) return;
+    const act = b.dataset.dp;
+    if (!act) return;
+    if (act === 'prev' || act === 'next') {
+      viewM += act === 'next' ? 1 : -1;
+      if (viewM < 0) { viewM = 11; viewY--; }
+      if (viewM > 11) { viewM = 0; viewY++; }
+      render();
+      return;
+    }
+    if (act === 'cancel') { closeWhenPicker(); return; }
+    if (act === 'ok') {
+      hh = Number($<HTMLSelectElement>('#dp-h').value);
+      mm = Number($<HTMLSelectElement>('#dp-m').value);
+      commit(atTime(selected, hh, mm).getTime());
+      return;
+    }
+    const base = new Date(now);
+    if (act === 'tomorrow9' || act === 'tomorrow18') base.setDate(base.getDate() + 1);
+    if (act === 'week') {
+      let delta = (8 - base.getDay()) % 7 || 7;
+      base.setDate(base.getDate() + delta);
+    }
+    if (act === 'hour') commit(now + 3600_000);
+    else {
+      const hour = act.endsWith('18') ? 18 : 9;
+      const at = atTime(base, hour, 0);
+      commit(at.getTime() <= now ? at.getTime() + 86400_000 : at.getTime());
+    }
+  });
+
+  render();
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 288))}px`;
+  pop.style.top = `${Math.max(8, Math.min(r.bottom + 6, window.innerHeight - 370))}px`;
+  whenOut = (ev) => { if (!pop.contains(ev.target as Node) && ev.target !== anchor) closeWhenPicker(); };
+  setTimeout(() => document.addEventListener('click', whenOut!), 0);
+}
+
 function renderEditor() {
   const box = $<HTMLElement>('#editor')!;
   const e = state.entries.find((x) => x.id === state.selected);
@@ -1556,9 +1732,13 @@ function renderEditor() {
           <button data-w="1h" class="${e.remindAt !== null ? 'on' : ''}">${e.remindAt === null ? '1 小时后' : '已定时'}</button>
         </div>
         ${e.remindAt !== null ? `
-        <div class="date-row">
-          <input class="input" type="date" id="f-d" value="${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}">
-          <input class="input" type="time" id="f-tm" value="${pad(d.getHours())}:${pad(d.getMinutes())}">
+        <input type="hidden" id="f-d" value="${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}">
+        <input type="hidden" id="f-tm" value="${pad(d.getHours())}:${pad(d.getMinutes())}">
+        <div class="when-row">
+          <button type="button" class="input when-btn" id="f-when">
+            <span class="mono">${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}</span>
+            <span class="when-edit">点击修改</span>
+          </button>
         </div>
         <label class="quiet-row">
           <input type="checkbox" id="f-bq" ${e.bypassQuiet ? 'checked' : ''}>静音时段也照响
@@ -1599,6 +1779,9 @@ function renderEditor() {
       <button class="btn" data-do="tomorrow">推迟</button>
       <button class="btn danger sp-left" data-do="del">删除</button>
     </div>`;
+
+  const when = $<HTMLButtonElement>('#f-when');
+  if (when) when.onclick = () => openWhenPicker(e, when);
 }
 
 function renderAll() {
@@ -1613,11 +1796,18 @@ function renderAll() {
     state.view === 'today'
       ? `${c.today} 条需要处理，${state.entries.filter((e) => e.status === 'missed').length} 条已逾期`
       : v.sub;
+  // 重画会整块替换 innerHTML，滚动容器也跟着重建；不还原就会出现「点一下控件跳回顶部」
+  const listTop = document.querySelector<HTMLElement>('.list-scroll')?.scrollTop ?? 0;
+  const editorTop = document.querySelector<HTMLElement>('.ed-body')?.scrollTop ?? 0;
   renderSidebar();
   renderList();
   if (state.view === 'dashboard' || state.view === 'tokens' ||
       state.view === 'settings' || state.view === 'mystats') $<HTMLElement>('#editor')!.innerHTML = '';
   else renderEditor();
+  const listBox = document.querySelector<HTMLElement>('.list-scroll');
+  if (listBox) listBox.scrollTop = listTop;
+  const editorBox = document.querySelector<HTMLElement>('.ed-body');
+  if (editorBox) editorBox.scrollTop = editorTop;
   renderSkew();
 }
 
@@ -1823,9 +2013,9 @@ async function toggleDone(id: string) {
  * 原来点一下直接跳到明天同一时间，和按钮上的字对不上
  */
 const SNOOZE_CHOICES: Array<[string, number]> = [
-  ['10 分钟', 10],
-  ['30 分钟', 30],
-  ['1 小时', 60],
+  ['10 分钟后', 10],
+  ['30 分钟后', 30],
+  ['1 小时后', 60],
   ['明天同一时间', -1],
 ];
 
@@ -1852,6 +2042,14 @@ function chooseSnooze(base: Entry | undefined): Promise<'rearm' | number | null>
   return new Promise((resolve) => {
     // 已完成/被忽略过的条目，先给一个「重新提醒」的入口
     const canRearm = base?.status === 'done' || (base?.dismissCount ?? 0) > 0;
+    const whenLabel = (min: number) => {
+      if (min < 0) {
+        const d = new Date(base?.remindAt ?? serverNow());
+        d.setDate(d.getDate() + 1);
+        return `明天 ${hhmm(d.getTime())}`;
+      }
+      return hhmm(serverNow() + min * 60_000);
+    };
     const host = document.createElement('div');
     host.className = 'panel-mask';
     host.innerHTML = `
@@ -1860,7 +2058,7 @@ function chooseSnooze(base: Entry | undefined): Promise<'rearm' | number | null>
         <div class="panel-body">
           <div class="snooze-opts">
             ${SNOOZE_CHOICES.map(([label, min]) => `
-              <button class="nav" data-min="${min}">${label}</button>`).join('')}
+              <button class="nav" data-min="${min}">${label}<span class="mono">${whenLabel(min)}</span></button>`).join('')}
             ${canRearm ? '<button class="nav" data-rearm="1">现在就再提醒一次</button>' : ''}
           </div>
         </div>

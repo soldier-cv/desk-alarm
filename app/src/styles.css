@@ -52,6 +52,8 @@
   --scroll-thumb-hover: #3A3E44;
   --chip-hot-text: #FFB292;
 
+  /* 原生下拉弹层跟着主题走，不然暗色界面弹出白色列表 */
+  color-scheme: dark;
   --r-sm: 6px; --r: 8px; --r-lg: 12px;
   --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, "Microsoft YaHei", sans-serif;
   --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SFMono-Regular", monospace;
@@ -59,6 +61,7 @@
 
 /* ---- 莫兰迪：暖灰纸感浅色主题 ---- */
 :root[data-theme="morandi"] {
+  color-scheme: light;
   --bg: #EDEAE3;
   --surface: #F4F1EB;
   --raised: #FAF8F4;
@@ -242,6 +245,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
   border: 1px solid transparent; color: var(--text);
 }
 .snooze-opts .nav:hover { border-color: var(--line); background: var(--raised); }
+.snooze-opts .nav .mono { margin-left: auto; font-size: 11px; color: var(--dim); }
 .snooze-opts .nav:focus-visible { border-color: var(--flare); }
 
 /* 顶栏的连接状态可点开换地址，得像个能点的控件 */
@@ -522,6 +526,51 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .tk.shake .tk-top { animation: tk-shake 1.05s ease-in-out infinite; }
 @keyframes tk-flash { 0% { opacity: 0; } 55% { opacity: 1; } 65% { opacity: .45; } 100% { opacity: 1; } }
 .tk.entering { animation: tk-flash .35s ease-out; }
+
+/* ---------- 下拉与小控件：两套主题都按同一套画 ---------- */
+select.input {
+  appearance: none; -webkit-appearance: none; cursor: pointer;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%239AA0A6' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 11px center; background-size: 11px;
+}
+select.input option { background: var(--surface); color: var(--text); }
+select.input:focus-visible { outline: 2px solid var(--flare-line); outline-offset: 1px; }
+.switch:focus-visible, .eye:focus-visible { outline: 2px solid var(--flare); outline-offset: 2px; }
+.pwd-field { position: relative; display: flex; align-items: center; }
+.pwd-field .input { width: 100%; padding-right: 40px; }
+.eye {
+  position: absolute; right: 4px; width: 28px; height: 26px;
+  border: 1px solid var(--line-ctrl); border-radius: var(--r-sm);
+  background: var(--raised); color: var(--muted); font-size: 11px; cursor: pointer;
+}
+.eye:hover { color: var(--text); border-color: var(--flare); }
+
+/* ---------- 日期时间：自绘选择器，不用各平台长得不一样的原生控件 ---------- */
+.when-row { margin-top: 8px; }
+.when-btn { width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; text-align: left; cursor: pointer; }
+.when-btn .mono { font-size: 13px; color: var(--text); }
+.when-edit { font-size: 11px; color: var(--muted); flex: none; }
+.when-btn:hover { border-color: var(--flare); }
+.when-btn:hover .when-edit { color: var(--flare-text); }
+.dp-pop { position: fixed; z-index: 80; width: 272px; padding: 10px; background: var(--surface);
+  border: 1px solid var(--line-input); border-radius: var(--r); box-shadow: var(--shadow); user-select: none; }
+.dp-quick { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 10px; }
+.dp-quick button { height: 28px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--raised); color: var(--text); font-size: 11.5px; }
+.dp-quick button:hover { border-color: var(--flare); color: var(--flare-text); }
+.dp-month { display: flex; align-items: center; justify-content: space-between; font-size: 12px; margin-bottom: 6px; }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.dp-w { text-align: center; font-size: 10px; color: var(--dim); line-height: 22px; }
+.dp-day { height: 30px; border-radius: var(--r-sm); font-size: 12px; color: var(--text); }
+.dp-day:hover { background: var(--hover); }
+.dp-day.today { border: 1px solid var(--line-ctrl); }
+.dp-day.on { background: var(--flare); color: var(--on-flare); font-weight: 600; }
+.dp-time { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.dp-time select { width: 88px; }
+.dp-time span { color: var(--muted); }
+.dp-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 
 /* ---------- 看板与设置：统一的 8px 节奏、明确的数字层级 ---------- */
 .dash-hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 18px; }
