@@ -16,6 +16,7 @@ pub fn get(app: &AppHandle, label: &str) -> Option<WebviewWindow> {
 pub fn show(app: &AppHandle, label: &str) {
     if let Some(w) = get(app, label) {
         let _ = w.show();
+        #[cfg(desktop)]
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
@@ -43,8 +44,10 @@ pub fn show_takeover(app: &AppHandle, payload: serde_json::Value) {
     TAKEOVER_UNLOCKED.store(false, Ordering::SeqCst);
     if let Some(w) = get(app, "takeover") {
         let _ = w.emit("takeover:show", payload);
+        #[cfg(desktop)]
         let _ = w.set_always_on_top(true);
         let _ = w.show();
+        #[cfg(desktop)]
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
@@ -77,6 +80,7 @@ pub fn block_takeover_close(app: &AppHandle, label: &str) -> bool {
 /// 快速捕获窗口。贴在最上层，Esc 或失焦就关。
 pub fn show_capture(app: &AppHandle) {
     if let Some(w) = get(app, "capture") {
+        #[cfg(desktop)]
         let _ = w.set_always_on_top(true);
         let _ = w.show();
         let _ = w.set_focus();
