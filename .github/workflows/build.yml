@@ -3,7 +3,7 @@ name: build-client
 # 客户端打包。服务端部署在 Woodpecker，那边认 v* tag，这里也认同一个 tag，
 # 推一次 v0.2.0 两边一起走：服务端换镜像，客户端出安装包。
 #
-#   推 tag v*        打包 Windows，建 Release 并挂上安装包
+#   推 tag v*        打包 Windows + Android APK，建 Release 并挂上安装包
 #   手动填 tag       同上，用于给某个版本补包或重跑
 #   手动不填 tag     只打包，产物留在 workflow artifact，不动 Release
 #   PR               只跑静态检查，不打包
@@ -261,6 +261,182 @@ jobs:
             "release-assets/desk-alarm_${V}_x64-setup.exe" \
             "release-assets/desk-alarm_${V}_x64-setup.exe.sig"
 
+  # Android APK。和 Windows 共用同一个 tag，产物挂到同一个 Release。
+  # ubuntu-latest 自带 Android SDK，但 NDK/build-tools 版本未必对得上，
+  # 用 sdkmanager 补齐 docs/android.md 里钉住的版本。
+  android:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if command -v sdkmanager >/dev/null 2>&1; then
+            SDKMGR=sdkmanager
+          else
+            SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" "platform-tools" "build-tools;35.0.0" "ndk;26.1.10909125" "platforms;android-37"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: cd app && npm ci
+
+      # 版本号只认 tag：set-version 会更新 tauri.conf.json，Tauri 据此生成
+      # Android versionName 和 versionCode（major*1e6 + minor*1e3 + patch）。
+      - name: Set version from tag
+        if: ${{ needs.plan.outputs.release_tag != '' }}
+        run: node scripts/set-version.mjs ${{ needs.plan.outputs.release_tag }}
+
+      # 发版必须有正式签名。debug 证书每轮 runner 现生成，跨签名升级会
+      # INSTALL_FAILED_UPDATE_INCOMPATIBLE —— 用户下一版才发现装不上。
+      - name: Verify Android signing secrets
+        if: ${{ needs.plan.outputs.publish == 'true' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          CERT_SHA256: ${{ secrets.ANDROID_CERT_SHA256 }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          missing=0
+          check() { if [ -z "$2" ]; then echo "::error::缺少 Secret $1，Android 发版无法签名"; missing=1; fi; }
+          check ANDROID_KEYSTORE_B64 "$KEYSTORE_B64"
+          check ANDROID_KEYSTORE_PASSWORD "$STORE_PASS"
+          check ANDROID_KEY_ALIAS "$KEY_ALIAS"
+          check ANDROID_KEY_PASSWORD "$KEY_PASS"
+          check ANDROID_CERT_SHA256 "$CERT_SHA256"
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Android 签名 Secrets 齐全"
+
+      - name: Prepare release keystore
+        if: ${{ needs.plan.outputs.publish == 'true' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR=app/src-tauri/gen/android
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$DIR/app/release.jks"
+          cat > "$DIR/keystore.properties" <<EOF
+          storeFile=release.jks
+          storePassword=$STORE_PASS
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASS
+          EOF
+          test -s "$DIR/app/release.jks" || { echo "::error::keystore 解码后为空"; exit 1; }
+          echo "release keystore 已落位（keystore.properties / *.jks 均被 .gitignore 挡住）"
+
+      - name: Build Android APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd app
+          npx tauri android build --apk
+
+      # 配置写错时 Gradle 会静默回退 debug 签名，所以产物出来后必须验指纹。
+      - name: Verify APK signature
+        if: ${{ needs.plan.outputs.publish == 'true' }}
+        env:
+          CERT_SHA256: ${{ secrets.ANDROID_CERT_SHA256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK_DIR=app/src-tauri/gen/android/app/build/outputs/apk
+          APK="$(find "$APK_DIR" -type f -name '*.apk' ! -name '*unsigned*' | grep -i '/universal/' | head -n1 || true)"
+          [ -n "$APK" ] || APK="$(find "$APK_DIR" -type f -name '*.apk' ! -name '*unsigned*' | head -n1)"
+          [ -n "$APK" ] || { echo "::error::没找到 APK"; exit 1; }
+          echo "APK=$APK"
+          case "$APK" in *debug*) echo "::error::产物是 debug 签名，不能发版"; exit 1;; esac
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$APKSIGNER" verify --print-certs "$APK" | tee apk-certs.txt
+          # keytool 的输出带冒号，Secret 里贴带冒号的也认，两边统一去掉冒号和空白
+          actual="$(grep -im1 'SHA-256 digest' apk-certs.txt | awk '{print $NF}' | tr -d '\r: ' || true)"
+          [ -n "$actual" ] || { echo "::error::apksigner 没输出 SHA-256 指纹"; exit 1; }
+          expected="$(printf '%s' "$CERT_SHA256" | tr -d '\r\n: ')"
+          if [ "${actual^^}" != "${expected^^}" ]; then
+            echo "::error::APK 签名指纹不匹配：期望 $expected，实际 $actual"; exit 1
+          fi
+          echo "签名指纹校验通过"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deskalarm-android
+          path: app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+      - name: Publish APK to release
+        if: ${{ needs.plan.outputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${TAG#v}"
+          # 和 Windows job 并行，谁先跑完谁建 Release；对方随后 view 到已存在就跳过，不会重复建
+          for i in $(seq 1 12); do
+            if gh release view "$TAG" >/dev/null 2>&1; then break; fi
+            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag >/dev/null 2>&1 || true
+            sleep 5
+          done
+          gh release view "$TAG" >/dev/null 2>&1 || { echo "::error::Release $TAG 未创建（tag 是否已推到远端？）"; exit 1; }
+          APK="${APK_PATH:-}"
+          if [ -z "$APK" ]; then
+            APK_DIR=app/src-tauri/gen/android/app/build/outputs/apk
+            APK="$(find "$APK_DIR" -type f -name '*.apk' ! -name '*unsigned*' | grep -i '/universal/' | head -n1 || true)"
+            [ -n "$APK" ] || APK="$(find "$APK_DIR" -type f -name '*.apk' ! -name '*unsigned*' | head -n1)"
+          fi
+          [ -n "$APK" ] || { echo "::error::没找到 APK"; exit 1; }
+          NAME="desk-alarm_${V}_android-universal.apk"
+          cp "$APK" "$NAME"
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" "$NAME" --clobber; then
+              echo "APK 已上传：$NAME"
+              break
+            fi
+            if [ "$attempt" = "5" ]; then echo "::error::APK 上传重试 5 次仍失败"; exit 1; fi
+            echo "::warning::APK 上传第 ${attempt} 次失败，${attempt}0s 后重试"
+            sleep $((attempt * 10))
+          done
+
   # 生成客户端读的 latest.json。
   #
   # 插件要的不是"Release 里有包"，而是一个写着版本号 + 下载 URL +
@@ -346,9 +522,9 @@ jobs:
   # 所以脚本内部对关键失败一律 `echo ::error::` + exit 1，日志里必须看得见。
   gitee-release:
     if: ${{ needs.plan.outputs.publish == 'true' && github.repository == 'soldier-cv/desk-alarm' }}
-    # 排在 latest-json 之后：镜像要连 latest.json 一起搬过去，
-    # 否则 Gitee 上有安装包却没有清单，客户端照样问不出版本
-    needs: [plan, windows, latest-json]
+    # 排在 latest-json 和 android 之后：镜像要连 latest.json 一起搬过去，
+    # 否则 Gitee 上有安装包却没有清单，客户端照样问不出版本；APK 也要等传完再搬
+    needs: [plan, windows, android, latest-json]
     runs-on: ubuntu-latest
     env:
       GITEE_OWNER: huaxudong
@@ -482,13 +658,18 @@ jobs:
 
       # latest.json 里的 URL 指向 Gitee，而"清单传上去了"不代表"包也传上去了"。
       # 两者不同步时客户端已经判定有新版、点下去却 404 —— 比没有更新更难排查。
+      # Android APK 不在 latest.json 里（移动端没有 updater 插件），单独校验。
       - name: 校验镜像上的下载地址
         if: ${{ steps.token.outputs.ok == 'true' }}
         run: |
           set -uo pipefail
           base="https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${TAG}"
+          names="$(jq -r '.platforms[].url' assets/latest.json | sed "s|.*/||")"
+          for f in assets/*.apk; do
+            [ -f "$f" ] && names="$names $(basename "$f")"
+          done
           bad=""
-          for name in $(jq -r '.platforms[].url' assets/latest.json | sed "s|.*/||"); do
+          for name in $names; do
             code="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 30 "${base}/${name}" || echo 000)"
             if [ "$code" != "200" ]; then
               echo "::error::镜像上 ${name} 不可下载（HTTP ${code}）"

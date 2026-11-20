@@ -6,22 +6,57 @@ Android 端的代码逻辑和 Windows 端**完全共用同一份前端和 Rust �
 2. **机器指纹**：`machine_id()` 在 Android 上读 `ro.serialno` 等系统属性，不是 Windows 注册表
 3. **设备锁定只在桌面端提供**：Windows 用会话检测（`session.rs`，仅 `#[cfg(windows)]`）。移动端切后台、锁屏都照常接收 FCM 提醒；设置页不显示 PIN/锁定，服务端也会拒绝移动端的锁定请求
 
-## 当前状态：代码就绪，缺构建环境
+## 当前状态：代码就绪，发版走 GitHub Actions
 
 代码侧已经为移动端做好了适配：
 - `lib.rs` 用 `#[cfg(desktop)]` / `#[cfg(mobile)]` 隔开桌面专属插件（托盘、开机自启、全局热键、单实例、updater、多窗口），移动端只保留通知插件
 - `machine_id()` 有 Android 分支；`platform()` 会返回 `android`，前端据此隐藏桌面专属按钮
 - `shared/types.ts` 的 `Platform` 含 `android`
 
-**这台开发机缺 NDK / cmdline-tools / build-tools**，出不了包。有完整 Android SDK 的机器按下面步骤构建。
+**发版不用本机 SDK**：推 `v*` tag 后，GitHub Actions 的 `android` job 在 ubuntu-latest 上补齐 NDK/build-tools，打出 APK 并挂到同一个 Release，再由 `gitee-release` job 同步到 Gitee。Runner 自带 Android SDK，本地这套步骤只用于离线调试。
 
-## 构建步骤（在有 SDK 的机器上）
+## 发版：APK 签名与 Secrets
+
+Android 只允许同证书覆盖安装。debug 证书的签名每轮 runner 现生成，拿它发版会导致用户下一版 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，所以发版链路**必须有正式签名**：
+
+1. 生成一次发布密钥（只做一次，丢了就无法给现有用户升级）：
+
+   ```bash
+   keytool -genkeypair -v -keystore release.jks -alias deskalarm \
+     -keyalg RSA -keysize 2048 -validity 10000
+   # 记下 storePassword / keyPassword；下面四个值要和 keystore 一起保存
+   ```
+
+2. 取签名指纹（CI 用它强校验产物，防止 Gradle 静默回退 debug 签名）：
+
+   ```bash
+   keytool -list -v -keystore release.jks -alias deskalarm | grep 'SHA256:'
+   # 形如 3A:9F:...，去掉冒号与空白后就是 ANDROID_CERT_SHA256
+   ```
+
+3. 在 GitHub 仓库 Settings → Secrets 添加：
+
+   | Secret | 值 |
+   |---|---|
+   | `ANDROID_KEYSTORE_B64` | `base64 -w0 release.jks`（Windows 用 `certutil` 或 Git Bash） |
+   | `ANDROID_KEYSTORE_PASSWORD` | keystore 口令 |
+   | `ANDROID_KEY_ALIAS` | 如 `deskalarm` |
+   | `ANDROID_KEY_PASSWORD` | key 口令 |
+   | `ANDROID_CERT_SHA256` | 上一步的 SHA-256 指纹（冒号可留可去） |
+
+CI 会把 keystore 解码到 `gen/android/app/release.jks`，把口令写进 `gen/android/keystore.properties`。两者都被 `.gitignore` 挡住，不会入库。发版前检查 Secrets 齐全，打完包用 `apksigner verify --print-certs` 比对指纹，任一不符直接让 job 失败。
+
+APK 版本号由 tag 决定：`scripts/set-version.mjs` 更新 `tauri.conf.json`，Tauri 据此生成 `versionName` 和 `versionCode`（`major*1000000 + minor*1000 + patch`）。tag 不递增会导致用户看不到更新。
+
+产物：`desk-alarm_<版本>_android-universal.apk`，同时出现在 GitHub Release 和 Gitee Release。移动端没有 updater 插件，不读 `latest.json`，用户从 Release 页手动下载安装。
+
+## 构建步骤（离线调试，在有 SDK 的机器上）
 
 ### 1. 装 SDK 组件
 
 ```powershell
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"
-& "$sdk\cmdline-tools\latest\bin\sdkmanager.bat" "platform-tools" "build-tools;35.0.0" "ndk;26.1.10909125" "platforms;android-35"
+& "$sdk\cmdline-tools\latest\bin\sdkmanager.bat" "platform-tools" "build-tools;35.0.0" "ndk;26.1.10909125" "platforms;android-37"
 ```
 
 ### 2. 设环境变量

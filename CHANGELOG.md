@@ -5,7 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
-## [Unreleased]
+## [v0.4.0] - 2026-11-20
+
+### Added
+- Android 发版接入 GitHub Actions：推 `v*` tag 时构建 universal APK、用发布密钥签名并校验指纹，挂到 GitHub Release 后同步到 Gitee Release 并校验下载地址。所需 Secrets 见 `docs/android.md`。
 
 ## [v0.3.7] - 2026-11-20
 

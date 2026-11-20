@@ -14,7 +14,27 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release 签名：发版由 CI 从 Secrets 写 keystore.properties（见 docs/android.md）。
+// 缺配置时退回 debug 签名仅供开发；发版链路靠 apksigner 指纹校验兜底。
+val keystoreProperties = Properties().apply {
+    val propFile = file("../keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+val releaseStoreFile = keystoreProperties.getProperty("storeFile")
+
 android {
+    signingConfigs {
+        create("release") {
+            if (releaseStoreFile != null) {
+                storeFile = file(releaseStoreFile)
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
     compileSdk = 37
     namespace = "io.github.soldier_cv.deskalarm"
     defaultConfig {
@@ -39,6 +59,9 @@ android {
             }
         }
         getByName("release") {
+            if (releaseStoreFile != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                enable = true
             }

@@ -14,7 +14,7 @@
 | MCP（stdio + HTTP 双入口，只认 Agent 令牌） | 完成 |
 | 开发看板（应用内视图 + admin/overview） | 完成 |
 | Windows 客户端（Tauri 2） | 完成，NSIS 安装包 + 裸 exe |
-| Android 客户端 | 代码就绪、已按移动端 cfg 适配，在有 SDK 的机器上用 `scripts/build-android.ps1` 构建，见 `docs/android.md` |
+| Android 客户端 | 代码就绪、已按移动端 cfg 适配；发版由 GitHub Actions 打正式签名 APK 并同步 Gitee，见 `docs/android.md` |
 
 ## 数据库授权
 
@@ -233,10 +233,10 @@ Android 在有 SDK 的机器上用 build-android.ps1（见 `docs/android.md`）�
 | 内容 | 在哪跑 | 干什么 |
 |---|---|---|
 | 服务端 | Woodpecker（`.woodpecker.yaml`） | 构建 api 镜像推 registry，`docker compose` 拉起并等健康检查 |
-| 客户端 | GitHub Actions（`.github/workflows/build.yml`） | 打包 Windows NSIS 安装包，建 GitHub Release 并挂上去 |
-| Gitee 镜像 | GitHub Actions（`build.yml` 的 `gitee-release`） | 推 tag 到 Gitee，建同名 Release，把同样的安装包传上去 |
+| 客户端 | GitHub Actions（`.github/workflows/build.yml`） | 打包 Windows NSIS 安装包 + Android 正式签名 APK，建 GitHub Release 并挂上去 |
+| Gitee 镜像 | GitHub Actions（`build.yml` 的 `gitee-release`） | 推 tag 到 Gitee，建同名 Release，把同样的安装包/APK 传上去并校验下载地址 |
 
-Android 不在这条流水线里——在有 SDK 的机器上用 `scripts/build-android.ps1` 本地构建。
+Android 也在这条流水线里：推同一个 tag，runner 补齐 NDK 后打出 universal APK，用 Secrets 里的发布密钥签名，验指纹后挂到 Release，再同步到 Gitee。需要 `ANDROID_KEYSTORE_B64` 等五个 Secrets，生成方法见 `docs/android.md`；缺 Secrets 时发版 job 直接失败，不会退化成 debug 签名。
 
 ```bash
 # 版本号来源只有 tag 一处，三处声明文件由脚本同步
@@ -258,7 +258,7 @@ GitHub Actions 的触发范围：
 
 | 事件 | 行为 |
 |---|---|
-| 推 `v*` tag | Windows 打包，发 Release |
+| 推 `v*` tag | Windows + Android 打包，发 Release |
 | 手动触发并填 tag | 同上，用于补包或重跑 |
 | 手动触发不填 tag | 只打包，产物在 workflow artifact，不动 Release |
 | PR | 只跑类型检查、构建、对比度、URL、需求对齐自检，不打包 |
@@ -385,7 +385,6 @@ New-NetFirewallRule -DisplayName "DeskAlarm 8091" -Direction Inbound `
 
 ## 还没做的
 
-- Android 客户端。代码就绪、已按移动端 cfg 适配，在有 SDK 的机器上用 `scripts/build-android.ps1` 构建。步骤见 `docs/android.md`
 - FCM 凭据。没配的话安卓到点不会响，只会留在队列里等上线补发。服务端启动日志会打一行 `FCM 不可用`
 - Android 推送插件还没接，当前安卓到点靠「下次上线 welcome 补发」兜底
 - 代码签名。现在跑 exe 有 SmartScreen 提示
