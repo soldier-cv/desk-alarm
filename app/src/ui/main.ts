@@ -356,8 +356,8 @@ function renderShell() {
       <div class="sp"></div>
       <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
       <button class="btn sm no-drag" id="btn-theme" title="切换配色"></button>
-      <button class="btn sm no-drag" id="btn-lock" title="锁定本机">锁定</button>
       ${isDesktop() ? `
+      <button class="btn sm no-drag" id="btn-lock" title="锁定本机">锁定</button>
       <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>
       <button class="btn sm no-drag" id="btn-update" title="检查更新">更新</button>` : ''}
     </div>
@@ -405,7 +405,8 @@ function renderShell() {
     $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
     $<HTMLButtonElement>('#btn-update')!.onclick = () => void checkUpdate();
   }
-  $<HTMLButtonElement>('#btn-lock')!.onclick = () => void lockDevice('manual');
+  const lock = $<HTMLButtonElement>('#btn-lock');
+  if (lock) lock.onclick = () => void lockDevice('manual');
   // 点连接状态就能换服务端地址，不用翻设置
   $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
   renderThemeButton();
@@ -765,7 +766,8 @@ function renderSettingsView(box: HTMLElement) {
     </section>
 
     <section class="set-card">
-      <h2>设备与安全</h2>
+      <h2>${isDesktop() ? '设备与安全' : '设备'}</h2>
+      ${isDesktop() ? `
       <div id="pin-state" class="hint"></div>
       <div class="set-grid">
         <label>PIN（4-12 位数字）<input class="input" id="pin-new" inputmode="numeric" autocomplete="off"></label>
@@ -779,7 +781,7 @@ function renderSettingsView(box: HTMLElement) {
       </div>
       <div class="set-row"><div><b>本机</b><small id="lock-note">锁定后按离线处理，到点提醒等解锁后补发</small></div>
         <button class="btn sm" id="set-lock">锁定</button></div>
-      ${isDesktop() ? `<div class="set-row"><div><b>试响</b><small>确认这台设备能出声</small></div>
+      <div class="set-row"><div><b>试响</b><small>确认这台设备能出声</small></div>
         <button class="btn sm" id="set-ping">试响</button></div>` : ''}
       <div id="set-devices" class="dev-table"></div>
     </section>
@@ -833,11 +835,14 @@ function renderSettingsView(box: HTMLElement) {
   $<HTMLButtonElement>('#set-update')!.onclick = () => void checkUpdate();
   const ping = $<HTMLButtonElement>('#set-ping');
   if (ping) ping.onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
-  $<HTMLButtonElement>('#set-lock')!.onclick = () => void lockDevice('manual');
+  const lock = $<HTMLButtonElement>('#set-lock');
+  if (lock) lock.onclick = () => void lockDevice('manual');
 
   $<HTMLButtonElement>('#set-save')!.onclick = () => void saveSettingsForm();
-  $<HTMLButtonElement>('#pin-save')!.onclick = () => void savePin();
-  $<HTMLButtonElement>('#pin-remove')!.onclick = () => void removePin();
+  const pinSave = $<HTMLButtonElement>('#pin-save');
+  if (pinSave) pinSave.onclick = () => void savePin();
+  const pinRemove = $<HTMLButtonElement>('#pin-remove');
+  if (pinRemove) pinRemove.onclick = () => void removePin();
   $<HTMLButtonElement>('#log-save')!.onclick = () => void saveLogPolicy();
 
   if (admin) {
@@ -2111,11 +2116,6 @@ function boot() {
   }
   on('session:locked', () => void lockDevice('system'));
   on('session:unlocked', () => { if (lockReason === 'system') void unlockDevice(); });
-  if (platform === 'android') {
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && !lockReason) void lockDevice('manual');
-    });
-  }
   rt = new Realtime(onRealtime, setLink);
   rt.connect();
   void refresh();

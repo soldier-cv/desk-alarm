@@ -52,6 +52,10 @@ export async function deviceRoutes(app: FastifyInstance) {
     if (!dev) {
       return reply.code(404).send({ error: 'NO_DEVICE', message: '当前会话没有关联设备' });
     }
+    // 手机锁屏/切后台是常态，锁了就拿不到提醒；这个能力只对桌面端有意义
+    if (dev.platform === 'android' || dev.platform === 'ios') {
+      return reply.code(400).send({ error: 'UNSUPPORTED_PLATFORM', message: '移动端不支持锁定' });
+    }
 
     const body = req.body as { locked?: boolean; pin?: string; reason?: 'manual' | 'system' };
     if (typeof body.locked !== 'boolean') {

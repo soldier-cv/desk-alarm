@@ -4,7 +4,7 @@ Android 端的代码逻辑和 Windows 端**完全共用同一份前端和 Rust �
 
 1. **推送通道**：Android 后台会杀进程，WebSocket 活不下来，靠 FCM 把进程叫醒
 2. **机器指纹**：`machine_id()` 在 Android 上读 `ro.serialno` 等系统属性，不是 Windows 注册表
-3. **设备锁定**：Windows 用 WTS 会话通知（`session.rs`，仅 `#[cfg(windows)]`）；Android 没有对应原生代码，靠前端 `visibilitychange` 在切后台时锁定，回前台仍要 PIN。锁定状态存在服务端，两端行为一致
+3. **设备锁定只在桌面端提供**：Windows 用会话检测（`session.rs`，仅 `#[cfg(windows)]`）。移动端切后台、锁屏都照常接收 FCM 提醒；设置页不显示 PIN/锁定，服务端也会拒绝移动端的锁定请求
 
 ## 当前状态：代码就绪，缺构建环境
 
