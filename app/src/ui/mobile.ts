@@ -287,7 +287,7 @@ function renderSettings() {
     <div class="set-group">
       <h3>外观</h3>
       <div class="set-row"><div><div class="lbl">主题</div></div>
-        <select id="theme" style="background:var(--field);border:1px solid var(--line-input);border-radius:6px;padding:8px">
+        <select id="theme" class="m-select">
           ${THEMES.map((t) => `<option value="${t.id}" ${loadTheme() === t.id ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}
         </select></div>
     </div>
