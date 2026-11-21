@@ -11,7 +11,6 @@ import {
   type AckAction, type Entry, type ServerMessage, type Settings, type User,
 } from '../api';
 import { AlarmController, pushWeak } from '../alarm';
-import { clearDevicePin, hasDevicePin, setDevicePin, verifyDevicePin } from '../device-pin';
 import { applyTheme, loadTheme, saveTheme, THEMES } from '../theme';
 import '../styles-mobile.css';
 
@@ -275,15 +274,6 @@ function renderSettings() {
       <button class="btn block" id="test">测试连接</button>
     </div>
     <div class="set-group">
-      <h3>本机 PIN</h3>
-      <div class="set-field"><label>新 PIN（6 位数字）</label><input id="pin-new" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div>
-      <div class="set-field"><label>确认新 PIN</label><input id="pin-confirm" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div>
-      <div class="set-field"><label>当前 PIN（修改或移除时需要）</label><input id="pin-current" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div>
-      <div class="probe" id="pin-msg"></div>
-      <button class="btn block" id="pin-save">设置 PIN</button>
-      <button class="btn block" id="pin-remove" style="margin-top:8px">移除 PIN</button>
-    </div>
-    <div class="set-group">
       <h3>提醒偏好</h3>
       <div class="set-row"><div><div class="lbl">强提醒升级等待</div><div class="sub">多久没处理就升级</div></div>
         <span class="set-val">${s.escalateAfterSec} 秒</span></div>
@@ -316,53 +306,14 @@ function renderSettings() {
     </div>
   </div>`;
 
-  const doTest = async () => {
+  document.getElementById('test')!.onclick = async () => {
     const v = (document.getElementById('base') as HTMLInputElement).value;
     const probe = document.getElementById('probe')!;
     probe.textContent = '测试中…'; probe.className = 'probe';
     const r = await probeServer(v);
     probe.textContent = r.ok ? '已连上，时钟偏差 ' + Math.round(r.skewMs) + ' ms' : r.reason;
     probe.className = 'probe ' + (r.ok ? 'ok' : 'bad');
-    if (r.ok) saveConfig({ baseUrl: normalizeBaseUrl(v), serverSkewMs: r.skewMs });
-  };
-  document.getElementById('test')!.onclick = () =>
-    promptPin('修改服务端地址会切换连接的服务器。', () => { void doTest(); });
-
-  const pinMsg = document.getElementById('pin-msg')!;
-  const pinSave = document.getElementById('pin-save') as HTMLButtonElement;
-  const pinRemove = document.getElementById('pin-remove') as HTMLButtonElement;
-  pinSave.textContent = hasDevicePin() ? '修改 PIN' : '设置 PIN';
-  pinRemove.disabled = !hasDevicePin();
-  pinSave.onclick = async () => {
-    pinMsg.className = 'probe'; pinMsg.textContent = '';
-    const pin = (document.getElementById('pin-new') as HTMLInputElement).value.trim();
-    const confirm = (document.getElementById('pin-confirm') as HTMLInputElement).value.trim();
-    if (!/^\d{6}$/.test(pin)) { pinMsg.textContent = 'PIN 需要 6 位数字'; return; }
-    if (pin !== confirm) { pinMsg.textContent = '两次输入不一致'; return; }
-    if (hasDevicePin()) {
-      const cur = (document.getElementById('pin-current') as HTMLInputElement).value.trim();
-      if (!await verifyDevicePin(cur)) { pinMsg.textContent = '当前 PIN 不对'; return; }
-    }
-    try {
-      await setDevicePin(pin);
-      (document.getElementById('pin-new') as HTMLInputElement).value = '';
-      (document.getElementById('pin-confirm') as HTMLInputElement).value = '';
-      (document.getElementById('pin-current') as HTMLInputElement).value = '';
-      pinMsg.textContent = 'PIN 已保存到本机'; pinMsg.className = 'probe ok';
-      pinSave.textContent = '修改 PIN'; pinRemove.disabled = false;
-    } catch (e) {
-      pinMsg.textContent = e instanceof Error ? e.message : String(e);
-      pinMsg.className = 'probe bad';
-    }
-  };
-  pinRemove.onclick = async () => {
-    pinMsg.className = 'probe';
-    const cur = (document.getElementById('pin-current') as HTMLInputElement).value.trim();
-    if (!await verifyDevicePin(cur)) { pinMsg.textContent = '当前 PIN 不对'; return; }
-    clearDevicePin();
-    (document.getElementById('pin-current') as HTMLInputElement).value = '';
-    pinMsg.textContent = '本机 PIN 已移除'; pinMsg.className = 'probe ok';
-    pinSave.textContent = '设置 PIN'; pinRemove.disabled = true;
+    if (r.ok) saveConfig({ serverSkewMs: r.skewMs });
   };
   document.getElementById('reload')!.onclick = async () => {
     try { const r = await api.settings(); saveConfig({ settings: r.settings }); toast('偏好已更新'); }
@@ -402,7 +353,7 @@ function renderSettings() {
   };
   document.getElementById('ping')!.onclick = () => { notify('试响', '如果你看到这条通知，说明手机通知正常'); toast('已发通知'); };
   document.getElementById('logout')!.onclick = () => {
-    promptPin('退出登录需要验证本机 PIN。', () => { rt?.close(); clearToken(); location.reload(); });
+    rt?.close(); clearToken(); location.reload();
   };
 }
 
@@ -455,74 +406,6 @@ function connect() {
   rt?.close();
   rt = new Realtime(onRealtime, setConn);
   rt.connect();
-}
-
-/* ------------------------------------------------------------ 本机 PIN */
-
-/** 登录后首设：PIN 只存本机，不入库；手机和电脑、同一账号的多台设备各设各的 */
-function renderPinSetup() {
-  const host = document.getElementById('app')!;
-  host.innerHTML = `
-  <div class="auth">
-    <div class="auth-card">
-      <div class="mark"><i></i></div>
-      <h1>先设置本机 PIN</h1>
-      <p>这台设备还没有 PIN。它是 6 位数字，只保存在本机，不上传服务端；同一账号下的其他电脑和手机可以各设各的。</p>
-      <div class="fld"><label>6 位数字 PIN</label><input id="ps-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div>
-      <div class="fld"><label>再输一次</label><input id="ps-confirm" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div>
-      <div class="err" id="ps-err"></div>
-      <button class="btn solid" id="ps-go">设置并进入</button>
-    </div>
-  </div>`;
-  const pin = document.getElementById('ps-pin') as HTMLInputElement;
-  const confirm = document.getElementById('ps-confirm') as HTMLInputElement;
-  const err = document.getElementById('ps-err')!;
-  const submit = async () => {
-    err.textContent = '';
-    const v = pin.value.trim();
-    if (!/^\d{6}$/.test(v)) { err.textContent = 'PIN 需要 6 位数字'; return; }
-    if (v !== confirm.value.trim()) { err.textContent = '两次输入不一致'; return; }
-    try {
-      await setDevicePin(v);
-      boot();
-    } catch (e) { err.textContent = e instanceof Error ? e.message : String(e); }
-  };
-  document.getElementById('ps-go')!.onclick = () => void submit();
-  confirm.onkeydown = (ev) => { if (ev.key === 'Enter') void submit(); };
-  pin.focus();
-}
-
-function afterAuth() {
-  if (!hasDevicePin()) renderPinSetup();
-  else boot();
-}
-
-/** 改服务端地址、退出登录这类动作先验一次本机 PIN */
-function promptPin(reason: string, onOk: () => void) {
-  if (!hasDevicePin()) { onOk(); return; }
-  const host = document.createElement('div');
-  host.style.cssText = 'position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.6)';
-  host.innerHTML = `
-    <div style="width:100%;max-width:360px;background:var(--surface);border:1px solid var(--line-input);border-radius:var(--r-lg);padding:20px">
-      <div style="font-weight:600;margin-bottom:6px">需要验证本机 PIN</div>
-      <div style="font-size:13px;color:var(--muted);margin-bottom:16px">${esc(reason)}</div>
-      <input id="gate-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="off" style="width:100%;background:var(--field);border:1px solid var(--line-input);border-radius:var(--r);padding:12px;color:var(--text)">
-      <div id="gate-err" style="color:var(--danger-text);font-size:13px;min-height:18px;margin-top:6px"></div>
-      <button class="btn solid block" id="gate-ok">确认</button>
-      <button class="btn block" id="gate-cancel" style="margin-top:8px">取消</button>
-    </div>`;
-  document.body.appendChild(host);
-  const input = document.getElementById('gate-pin') as HTMLInputElement;
-  const errEl = document.getElementById('gate-err')!;
-  const close = () => host.remove();
-  document.getElementById('gate-cancel')!.onclick = close;
-  const ok = async () => {
-    if (await verifyDevicePin(input.value.trim())) { close(); onOk(); }
-    else errEl.textContent = 'PIN 不对';
-  };
-  document.getElementById('gate-ok')!.onclick = () => void ok();
-  input.onkeydown = (ev) => { if (ev.key === 'Enter') void ok(); };
-  input.focus();
 }
 
 /* ------------------------------------------------------------ 登录 / 初始化 */
@@ -580,7 +463,7 @@ function renderAuth(needed: boolean) {
         const r = await api.login(username, password, deviceName, platform);
         saveConfig({ token: r.token, user: r.user, device: r.device });
       }
-      afterAuth();
+      boot();
     } catch (e) {
       if (e instanceof ApiError && e.code === 'ALREADY_SETUP') { renderAuth(false); return; }
       err.textContent = '登录失败：' + (e instanceof Error ? e.message : '请重试');
@@ -619,5 +502,5 @@ onUnauthorized(() => { rt?.close(); location.reload(); });
     }
     return;
   }
-  afterAuth();
+  boot();
 })();
