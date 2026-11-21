@@ -7,11 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.4.3] - 2026-11-21
+
 ### Added
-- Android 用常驻通知的前台服务保持进程存活，WebSocket 在后台不断线；不依赖 Google 服务，国产 ROM 可用。
+- Android 端独立移动端界面（随手记 / 今天 / 设置三页签），复用原 API/alarm/theme 逻辑，桌面端布局不变。
+- Android 端应用内在线更新：设置页「应用更新」检查新版本，用系统 DownloadManager 下载 APK 并调起系统安装器；latest.json 增加 android 条目（Gitee 源）。
+
+### Fixed
+- Android 图标对齐桌面端（去掉 Tauri 默认的黑色外框）。
+- 修复 Android 打开后显示空白「随手记」页的问题：移动端只建 main 窗口，避免 capture 小窗覆盖。
+- 修复移动端按钮/下拉框尺寸与文字居中：控件满宽、44px 触控高度、文字水平垂直居中。
+
+## [v0.4.2] - 2026-11-21
+
+### Added
+- Android 常驻通知前台服务保持进程常驻，WebSocket 在后台不断线，不依赖 Google 服务，国产 ROM 可用。
 
 ### Removed
-- 移除未接线的 FCM 服务端通道、`FCM_*` 环境变量与相关文档。目前投递通道只有 WebSocket，断线期间的提醒仍由 `welcome` 补发。
+- 移除未上线的 FCM 推送通道（`FCM_*` 环境变量与文档），当前投递通道只有 WebSocket，错过的时间在上线时由 `welcome` 补发。
 
 ## [v0.4.1] - 2026-11-21
 
