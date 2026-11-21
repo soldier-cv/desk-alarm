@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
+import tailwindcss from '@tailwindcss/vite';
 
-// 三个窗口三个入口。Tauri 里每个窗口有自己的 url，
-// 这里对应 tauri.conf.json 里 windows[].url 的设置。
+// 四个入口：桌面三窗口 + 独立移动端页面。
 export default defineConfig({
+  plugins: [tailwindcss()],
   clearScreen: false,
   server: {
     port: 5173,

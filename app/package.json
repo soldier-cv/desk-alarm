@@ -13,8 +13,10 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
     "@tauri-apps/cli": "^2.12.0",
     "@types/node": "^22.20.4",
+    "tailwindcss": "^4.3.5",
     "typescript": "^5.9.3",
     "vite": "^6.4.3"
   },
