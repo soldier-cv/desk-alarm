@@ -292,6 +292,14 @@ function renderSettings() {
         </select></div>
     </div>
     <div class="set-group">
+      <h3>应用更新</h3>
+      <div class="set-row"><div><div class="lbl">当前版本</div><div class="sub">检查并安装最新版</div></div>
+        <span class="set-val" id="curver">v—</span></div>
+      <div class="set-row"><div><div class="lbl" id="upd-status">检查结果会显示在这里</div></div></div>
+      <button class="btn block" id="check-upd" style="margin-top:8px">检查更新</button>
+      <button class="btn solid block" id="do-upd" style="margin-top:8px;display:none">下载并安装</button>
+    </div>
+    <div class="set-group">
       <button class="btn block" id="ping">试响一次（确认能通知）</button>
       <button class="btn block" id="logout" style="margin-top:10px">退出登录</button>
     </div>
@@ -312,6 +320,35 @@ function renderSettings() {
   };
   document.getElementById('theme')!.onchange = (ev) => {
     saveTheme((ev.target as HTMLSelectElement).value as 'dark' | 'morandi');
+  };
+  let pendingApk: { url: string; name: string } | null = null;
+  const statusEl = document.getElementById('upd-status')!;
+  document.getElementById('check-upd')!.onclick = async () => {
+    statusEl.textContent = '检查中…';
+    try {
+      const r = await invoke<{ available: boolean; currentVersion: string; latestVersion: string; sourceUrl: string; message: string }>('check_update');
+      document.getElementById('curver')!.textContent = 'v' + r.currentVersion;
+      if (!r.available) { statusEl.textContent = r.message || '当前已是最新版本'; pendingApk = null; return; }
+      statusEl.textContent = '发现新版本 v' + r.latestVersion + '，可下载安装';
+      pendingApk = {
+        url: r.sourceUrl,
+        name: 'deskalarm_' + r.latestVersion.replace(/^v/, '') + '_android-universal.apk',
+      };
+      (document.getElementById('do-upd') as HTMLElement).style.display = 'flex';
+    } catch (e) {
+      statusEl.textContent = '检查失败：' + (e instanceof Error ? e.message : String(e));
+    }
+  };
+  document.getElementById('do-upd')!.onclick = async () => {
+    if (!pendingApk) return;
+    statusEl.textContent = '开始下载，请在通知栏查看进度…';
+    try {
+      await invoke('plugin:apk-installer|download_and_install', pendingApk);
+      statusEl.textContent = '下载完成，请在系统安装器中确认安装';
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      statusEl.textContent = msg === 'NEED_INSTALL_PERMISSION' ? '请先允许「安装未知应用」后重试' : '安装失败：' + msg;
+    }
   };
   document.getElementById('ping')!.onclick = () => { notify('试响', '如果你看到这条通知，说明手机通知正常'); toast('已发通知'); };
   document.getElementById('logout')!.onclick = () => {

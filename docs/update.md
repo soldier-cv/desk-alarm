@@ -66,3 +66,15 @@ cd app && npx tauri signer generate --ci -w ~/.tauri/deskalarm.key
 `createUpdaterArtifacts: true` 让打包器产出 `.sig`。CI 需要把
 「版本 + 各平台的 url 与 signature」拼成静态 JSON 上传到 Release，
 客户端才读得到。格式见 Tauri 官方文档的 Static JSON File 一节。
+
+
+## 安卓端在线更新（应用内检查 + 下载安装）
+
+安卓端不走 Tauri updater（APK 无法像 exe 那样静默替换），而是「Rust 检查 + Kotlin 安装」：
+
+- `update.rs` 的 `platform_key()` 在 android 上返回 `android`，从 latest.json 读 android 条目的 APK 下载地址；APK 靠 Android 正式签名防篡改，清单里 signature 可为空（`needs_signature()`）
+- `ApkInstallerPlugin.kt`（gen/android 下）：用系统 `DownloadManager` 下载 APK，完成后经 FileProvider + `ACTION_INSTALL_PACKAGE` 调起系统安装器；Android 8+ 需用户授予「安装未知应用」权限（插件会引导到设置页）
+- 移动端设置页「应用更新」分组：`check_update` 检查版本，有新版本则 `invoke('plugin:apk-installer|download_and_install', {url, fileName})`
+- CI（`build.yml`）的 latest-json job 在清单里加 `android` 条目，URL 指向 Gitee 的 `desk-alarm_<版本>_android-universal.apk`
+
+注意：只有推 `v*` tag 触发 CI 重新生成 latest.json 后，android 条目才会出现在清单里；在此之前真机检查更新会提示「清单里没有当前平台（android）的安装包」，属正常现象。

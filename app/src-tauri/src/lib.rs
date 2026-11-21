@@ -55,6 +55,19 @@ pub fn run() {
     // 通知插件桌面和移动端都能用（移动端靠它弹系统通知）
     let builder = builder.plugin(tauri_plugin_notification::init());
 
+    // 安卓端注册 ApkInstallerPlugin 的同名空插件，让前端
+    // invoke('plugin:apk-installer|download_and_install') 路由到 Kotlin 实现。
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<_, ()>::new("apk-installer")
+            .setup(|_app, api| {
+                #[cfg(target_os = "android")]
+                api.register_android_plugin("io.github.soldier_cv.deskalarm", "ApkInstallerPlugin")?;
+                Ok(())
+            })
+            .build(),
+    );
+
     builder
         .setup(|app| {
             let handle = app.handle().clone();

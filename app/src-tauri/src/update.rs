@@ -63,12 +63,22 @@ struct Platform {
 }
 
 /// 当前平台在清单里的 key，与 Tauri 的 {{target}}-{{arch}} 一致。
+/// 安卓端的 APK 不是 Tauri updater 的静默安装包，但同样从 latest.json
+/// 的 `android` 条目取下载地址，交给 Kotlin 插件用 DownloadManager 安装。
 fn platform_key() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows-x86_64"
+    } else if cfg!(target_os = "android") {
+        "android"
     } else {
         "linux-x86_64"
     }
+}
+
+/// 安卓 APK 靠 Android 自身签名（正式 keystore）防篡改，不走 Tauri 的
+/// minisign .sig 校验；清单里 android 条目的 signature 可以为空。
+fn needs_signature() -> bool {
+    !cfg!(target_os = "android")
 }
 
 /// 下载地址的硬闸门。
@@ -179,7 +189,7 @@ fn usable(m: &Manifest) -> Result<Option<String>, String> {
     let Some(p) = m.platforms.get(key) else {
         return Err(format!("清单里没有当前平台（{key}）的安装包"));
     };
-    if p.url.is_empty() || p.signature.is_empty() {
+    if p.url.is_empty() || (needs_signature() && p.signature.is_empty()) {
         return Err(format!("清单里 {key} 的 url 或 signature 为空"));
     }
     // 地址来自远端，不校验的话一个被劫持的清单就能让客户端装任意 exe

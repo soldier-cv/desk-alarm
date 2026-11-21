@@ -443,7 +443,7 @@ jobs:
   # 签名内容的静态 JSON。缺了它客户端连"有没有新版"都问不出来。
   latest-json:
     if: ${{ needs.plan.outputs.publish == 'true' }}
-    needs: [plan, windows]
+    needs: [plan, windows, android]
     runs-on: ubuntu-latest
     # 顶层 permissions 是 contents: read，只读 token 无法上传 Release 附件
     # （报 HTTP 403 Resource not accessible by integration）。
@@ -491,12 +491,14 @@ jobs:
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg winUrl "${GITEE_REL}/desk-alarm_${V}_x64-setup.exe" \
             --arg winSig "$WIN_SIG" \
+            --arg androidUrl "${GITEE_REL}/desk-alarm_${V}_android-universal.apk" \
             '{
               version: $v,
               notes: $notes,
               pub_date: $date,
               platforms: {
-                "windows-x86_64": { url: $winUrl, signature: $winSig }
+                "windows-x86_64": { url: $winUrl, signature: $winSig },
+                "android": { url: $androidUrl, signature: "" }
               }
             }' > latest.json
 
