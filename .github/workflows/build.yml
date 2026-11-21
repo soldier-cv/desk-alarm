@@ -559,7 +559,8 @@ jobs:
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
           git remote add gitee "https://${GITEE_OWNER}:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
-          git fetch --tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          # tag 触发时 checkout@v4 已 fetch 并 checkout 该 tag；再 fetch 同名 ref 会失败，直接 push 即可
+          git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null || { echo "::error::本地未找到 tag ${TAG}"; exit 1; }
           git push gitee "refs/tags/${TAG}:refs/tags/${TAG}" --force
 
       - name: 从 GitHub Release 取安装包
