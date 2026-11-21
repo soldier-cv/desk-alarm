@@ -1,6 +1,8 @@
-/* 移动端样式：基于 Tailwind v4。桌面 styles.css 的视觉变量在这里映射成
-   Tailwind 主题色，组件类用 @apply 组合标准工具类，避免手写像素级细节出错。 */
-@import "tailwindcss";
+/* 移动端样式：Tailwind CSS v3（生成纯静态 CSS，不依赖运行时 CSS 变量，
+   兼容 Tauri 把 CSS 嵌进二进制的场景）。桌面 styles.css 的色板映射到这里。 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
   --bg: #0B0C0D; --surface: #121315; --raised: #191B1E; --hover: #1E2024;
@@ -9,10 +11,9 @@
   --text: #ECEDEF; --muted: #8C9097; --dim: #82868D;
   --flare: #FF5C2B; --on-flare: #140A06; --flare-tint: rgba(255,92,43,.12); --flare-line: rgba(255,92,43,.38);
   --ok: #6FA392; --offline-dot: #9AA0A6; --danger-text: #FF8A7C; --warn-text: #C9A186;
-  --chip-hot-text: #FFB292;
-  color-scheme: dark;
-  --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, "Microsoft YaHei", sans-serif;
+  --chip-hot-text: #FFB292; --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, "Microsoft YaHei", sans-serif;
   --shadow: 0 18px 50px rgba(0,0,0,.55);
+  color-scheme: dark;
 }
 :root[data-theme="morandi"] {
   color-scheme: light;
@@ -26,142 +27,113 @@
   --shadow: 0 18px 44px rgba(60,56,51,.18);
 }
 
-@theme inline {
-  --color-bg: var(--bg);
-  --color-surface: var(--surface);
-  --color-raised: var(--raised);
-  --color-hover: var(--hover);
-  --color-field: var(--field);
-  --color-line: var(--line);
-  --color-lineinput: var(--line-input);
-  --color-linectrl: var(--line-ctrl);
-  --color-linesoft: var(--line-soft);
-  --color-text: var(--text);
-  --color-muted: var(--muted);
-  --color-dim: var(--dim);
-  --color-flare: var(--flare);
-  --color-onflare: var(--on-flare);
-  --color-ok: var(--ok);
-  --color-danger: var(--danger-text);
-  --color-warn: var(--warn-text);
-  --color-chiphot: var(--chip-hot-text);
-  --font-sans: var(--sans);
-}
-
 html, body { margin: 0; height: 100%; overflow: hidden; }
-body { @apply bg-bg text-text font-sans text-[15px]; }
-button, input, select, textarea { font: inherit; color: inherit; }
-#app { height: 100dvh; @apply flex flex-col; }
+body { font-family: var(--sans); font-size: 15px; background: var(--bg); color: var(--text); }
+button, input, select, textarea { font-family: inherit; color: inherit; }
+#app { height: 100dvh; display: flex; flex-direction: column; }
 
-/* ---------- 基础组件（Tailwind 工具类组合） ---------- */
-.btn {
-  @apply inline-flex items-center justify-center min-h-11 px-5 rounded-lg border text-[15px] font-semibold whitespace-nowrap transition-opacity;
-  border-color: var(--line-ctrl);
-  background: var(--raised);
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center min-h-11 px-5 rounded-lg text-base font-semibold whitespace-nowrap;
+    border: 1px solid var(--line-ctrl);
+    background: var(--raised);
+    color: var(--text);
+  }
+  .btn:active { opacity: .8; }
+  .btn.solid { background: var(--flare); color: var(--on-flare); border-color: var(--flare); font-weight: 700; }
+  .btn.block { @apply flex w-full; }
+  .input {
+    @apply w-full min-h-11 rounded-lg px-3.5 outline-none;
+    background: var(--field); border: 1px solid var(--line-input);
+  }
+  .input:focus { border-color: var(--flare); box-shadow: 0 0 0 2px var(--flare-tint); }
+
+  .m-top { @apply flex shrink-0 items-center gap-2.5 px-4 pb-3; padding-top: calc(env(safe-area-inset-top) + 12px);
+    background: var(--bg); border-bottom: 1px solid var(--line-soft); }
+  .m-top .logo { @apply relative w-[22px] h-[22px] rounded-md shrink-0; background: var(--flare); }
+  .m-top .logo i { @apply absolute inset-[7px] rounded-sm; background: var(--bg); }
+  .m-top b { @apply text-base font-semibold; }
+  .m-top .sp { @apply flex-1; }
+  .m-conn { @apply inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full;
+    color: var(--muted); background: var(--field); border: 1px solid var(--line-soft); }
+  .m-conn .dot { @apply w-[7px] h-[7px] rounded-full shrink-0; background: var(--offline-dot); }
+  .m-conn.open .dot { background: var(--ok); }
+  .m-conn.connecting .dot { background: var(--warn-text); }
+
+  .m-view { @apply flex-1 min-h-0 flex-col hidden; }
+  .m-view.on { @apply flex; }
+
+  .cap-wrap { @apply p-5; }
+  .cap-card { @apply rounded-xl p-4; background: var(--surface); border: 1px solid var(--line); }
+  .cap-card label { @apply block text-xs mb-2.5; color: var(--muted); }
+  .cap-input { @apply w-full min-h-[120px] resize-none rounded-lg p-3 leading-relaxed outline-none;
+    background: var(--field); color: var(--text); border: 1px solid var(--line-input); }
+  .cap-input:focus { border-color: var(--flare); box-shadow: 0 0 0 2px var(--flare-tint); }
+  .cap-parse { @apply flex flex-wrap gap-1.5 mt-3 min-h-6; }
+  .cap-parse .chip { @apply inline-flex items-center h-[26px] px-2.5 rounded-full text-xs;
+    background: var(--field); color: var(--muted); border: 1px solid var(--line-input); }
+  .cap-parse .chip.hot { border-color: var(--flare-line); background: var(--flare-tint); color: var(--chip-hot-text); }
+  .cap-row { @apply flex gap-2.5 mt-4; }
+  .cap-tip { @apply mt-3.5 text-xs leading-relaxed; color: var(--dim); }
+
+  .list-tabs { @apply flex-none flex gap-1 px-3 py-2; border-bottom: 1px solid var(--line-soft); }
+  .list-tabs button { @apply flex-1 border-0 bg-transparent py-2 rounded-md text-sm font-semibold; color: var(--muted); }
+  .list-tabs button.on { background: var(--raised); color: var(--text); }
+  .list-scroll { @apply flex-1 min-h-0 overflow-y-auto p-3; }
+  .entry { @apply rounded-lg p-3.5 mb-2.5; background: var(--surface); border: 1px solid var(--line-soft); border-left-width: 3px; border-left-color: transparent; }
+  .entry.due { border-left-color: var(--flare); }
+  .entry.close { border-left-color: var(--warn-text); }
+  .entry.over { border-left-color: var(--danger-text); }
+  .entry .row1 { @apply flex items-start gap-2.5; }
+  .entry .txt { @apply flex-1 min-w-0 leading-relaxed break-words; }
+  .entry .txt.done { color: var(--muted); text-decoration: line-through; }
+  .entry .meta { @apply mt-2 text-xs flex flex-wrap gap-x-2.5 gap-y-1; color: var(--muted); }
+  .entry .meta .hot { color: var(--chip-hot-text); }
+  .entry .acts { @apply flex gap-2 mt-3 flex-wrap; }
+  .entry .acts button { @apply flex-1 min-w-[72px] py-2 text-[13px]; }
+  .empty { @apply text-center py-16 px-6 leading-relaxed; color: var(--muted); }
+
+  .set-scroll { @apply flex-1 min-h-0 overflow-y-auto p-4; }
+  .set-group { @apply rounded-xl p-4 mb-3.5; background: var(--surface); border: 1px solid var(--line-soft); }
+  .set-group h3 { @apply text-sm font-semibold mb-3.5; color: var(--muted); }
+  .set-field { @apply mb-3.5; }
+  .set-field:last-child { @apply mb-0; }
+  .set-field label { @apply block text-[13px] mb-2; }
+  .set-row { @apply flex items-center justify-between gap-3 py-2.5; }
+  .set-row + .set-row { border-top: 1px solid var(--line-soft); }
+  .set-row .lbl { @apply text-sm; }
+  .set-row .sub { @apply text-xs mt-0.5; color: var(--muted); }
+  .set-val { @apply text-[13px]; color: var(--muted); }
+  .m-select { @apply min-w-[120px] min-h-11 px-3 rounded-md text-base;
+    background: var(--field); color: var(--text); border: 1px solid var(--line-ctrl); }
+  .who { @apply flex items-center gap-3; }
+  .who .avatar { @apply w-11 h-11 rounded-xl grid place-items-center font-bold text-lg;
+    background: var(--flare); color: var(--on-flare); }
+
+  .m-nav { @apply flex-none flex; padding-bottom: env(safe-area-inset-bottom);
+    background: var(--bg); border-top: 1px solid var(--line-soft); }
+  .m-nav button { @apply flex-1 border-0 bg-transparent py-2.5 flex flex-col items-center gap-0.5 text-[11px]; color: var(--muted); }
+  .m-nav button.on { color: var(--flare); }
+  .m-nav .ico { @apply text-xl leading-none; }
+
+  .auth { @apply flex-1 flex items-center justify-center p-6 overflow-y-auto; }
+  .auth-card { @apply w-full max-w-[420px]; }
+  .auth-card .mark { @apply relative w-[52px] h-[52px] rounded-xl mb-6; background: var(--flare); }
+  .auth-card .mark i { @apply absolute inset-4 rounded; background: var(--bg); }
+  .auth-card h1 { @apply text-[26px] font-semibold m-0 mb-3; }
+  .auth-card p { @apply text-sm leading-relaxed m-0 mb-6; color: var(--muted); }
+  .auth-card .fld { @apply mb-4; }
+  .auth-card .fld label { @apply block text-[13px] mb-2; }
+  .auth-card .probe { @apply text-xs mt-2 min-h-4; }
+  .auth-card .probe.ok { color: var(--ok); }
+  .auth-card .probe.bad { color: var(--danger-text); }
+  .auth-card .err { @apply text-[13px] min-h-[18px] mt-1.5; color: var(--danger-text); }
+  .auth-card .foot { @apply mt-5 text-center text-[13px]; color: var(--muted); }
+  .auth-card .foot a { color: var(--flare); cursor: pointer; }
+
+  .toast { @apply fixed left-1/2 px-4 py-2.5 rounded-full text-[13px] z-50 text-center;
+    bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    background: var(--raised-strong); color: var(--text); border: 1px solid var(--line);
+    box-shadow: var(--shadow); max-width: 90vw; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.on { opacity: 1; }
 }
-.btn:active { @apply opacity-80; }
-.btn.solid { @apply font-bold; background: var(--flare); color: var(--on-flare); border-color: var(--flare); }
-.btn.block { @apply flex w-full; }
-.input {
-  @apply w-full min-h-11 rounded-lg px-3.5 border outline-none;
-  background: var(--field); border-color: var(--line-input);
-}
-.input:focus { border-color: var(--flare); box-shadow: 0 0 0 2px var(--flare-tint); }
-
-/* ---------- 顶栏 ---------- */
-.m-top { @apply flex shrink-0 items-center gap-2.5 px-4 pb-3 border-b; padding-top: calc(env(safe-area-inset-top) + 12px);
-  background: var(--bg); border-color: var(--line-soft); }
-.m-top .logo { @apply relative w-[22px] h-[22px] rounded-md shrink-0; background: var(--flare); }
-.m-top .logo i { @apply absolute inset-[7px] rounded-sm; background: var(--bg); }
-.m-top b { @apply text-base font-semibold; }
-.m-top .sp { @apply flex-1; }
-.m-conn { @apply inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border;
-  color: var(--muted); background: var(--field); border-color: var(--line-soft); }
-.m-conn .dot { @apply w-[7px] h-[7px] rounded-full shrink-0; background: var(--offline-dot); }
-.m-conn.open .dot { background: var(--ok); }
-.m-conn.connecting .dot { background: var(--warn-text); }
-
-/* ---------- 视图容器 ---------- */
-.m-view { @apply flex-1 min-h-0 flex-col hidden; }
-.m-view.on { @apply flex; }
-
-/* ---------- 随手记 ---------- */
-.cap-wrap { @apply p-5; }
-.cap-card { @apply rounded-xl p-4 border; background: var(--surface); border-color: var(--line); }
-.cap-card label { @apply block text-xs mb-2.5; color: var(--muted); }
-.cap-input {
-  @apply w-full min-h-[120px] resize-none rounded-lg p-3 leading-relaxed outline-none border;
-  background: var(--field); color: var(--text); border-color: var(--line-input);
-}
-.cap-input:focus { border-color: var(--flare); box-shadow: 0 0 0 2px var(--flare-tint); }
-.cap-parse { @apply flex flex-wrap gap-1.5 mt-3 min-h-6; }
-.cap-parse .chip { @apply inline-flex items-center h-[26px] px-2.5 rounded-full text-xs border;
-  background: var(--field); color: var(--muted); border-color: var(--line-input); }
-.cap-parse .chip.hot { border-color: var(--flare-line); background: var(--flare-tint); color: var(--chip-hot-text); }
-.cap-row { @apply flex gap-2.5 mt-4; }
-.cap-tip { @apply mt-3.5 text-xs leading-relaxed; color: var(--dim); }
-
-/* ---------- 列表 ---------- */
-.list-tabs { @apply flex-none flex gap-1 px-3 py-2 border-b; border-color: var(--line-soft); }
-.list-tabs button { @apply flex-1 border-0 bg-transparent py-2 rounded-md text-sm font-semibold; color: var(--muted); }
-.list-tabs button.on { background: var(--raised); color: var(--text); }
-.list-scroll { @apply flex-1 min-h-0 overflow-y-auto p-3; }
-.entry { @apply rounded-lg p-3.5 mb-2.5 border border-l-[3px]; background: var(--surface); border-color: var(--line-soft); }
-.entry.due { border-left-color: var(--flare); }
-.entry.close { border-left-color: var(--warn-text); }
-.entry.over { border-left-color: var(--danger-text); }
-.entry .row1 { @apply flex items-start gap-2.5; }
-.entry .txt { @apply flex-1 min-w-0 leading-relaxed break-words; }
-.entry .txt.done { color: var(--muted); text-decoration: line-through; }
-.entry .meta { @apply mt-2 text-xs flex flex-wrap gap-x-2.5 gap-y-1; color: var(--muted); }
-.entry .meta .hot { color: var(--chip-hot-text); }
-.entry .acts { @apply flex gap-2 mt-3 flex-wrap; }
-.entry .acts button { @apply flex-1 min-w-[72px] py-2 text-[13px]; }
-.empty { @apply text-center py-16 px-6 leading-relaxed; color: var(--muted); }
-
-/* ---------- 设置 ---------- */
-.set-scroll { @apply flex-1 min-h-0 overflow-y-auto p-4; }
-.set-group { @apply rounded-xl p-4 mb-3.5 border; background: var(--surface); border-color: var(--line-soft); }
-.set-group h3 { @apply text-sm font-semibold mb-3.5; color: var(--muted); }
-.set-field { @apply mb-3.5; }
-.set-field:last-child { @apply mb-0; }
-.set-field label { @apply block text-[13px] mb-2; }
-.set-row { @apply flex items-center justify-between gap-3 py-2.5; }
-.set-row + .set-row { border-top: 1px solid var(--line-soft); }
-.set-row .lbl { @apply text-sm; }
-.set-row .sub { @apply text-xs mt-0.5; color: var(--muted); }
-.set-val { @apply text-[13px]; color: var(--muted); }
-.m-select { @apply min-w-[120px] min-h-11 px-3 rounded-md border text-[15px];
-  background: var(--field); color: var(--text); border-color: var(--line-ctrl); }
-.who { @apply flex items-center gap-3; }
-.who .avatar { @apply w-11 h-11 rounded-xl grid place-items-center font-bold text-lg;
-  background: var(--flare); color: var(--on-flare); }
-
-/* ---------- 底部导航 ---------- */
-.m-nav { @apply flex-none flex border-t; padding-bottom: env(safe-area-inset-bottom);
-  background: var(--bg); border-color: var(--line-soft); }
-.m-nav button { @apply flex-1 border-0 bg-transparent py-2.5 flex flex-col items-center gap-0.5 text-[11px]; color: var(--muted); }
-.m-nav button.on { color: var(--flare); }
-.m-nav .ico { @apply text-xl leading-none; }
-
-/* ---------- 登录 / 初始化 ---------- */
-.auth { @apply flex-1 flex items-center justify-center p-6 overflow-y-auto; }
-.auth-card { @apply w-full max-w-[420px]; }
-.auth-card .mark { @apply relative w-[52px] h-[52px] rounded-xl mb-6; background: var(--flare); }
-.auth-card .mark i { @apply absolute inset-4 rounded; background: var(--bg); }
-.auth-card h1 { @apply text-[26px] font-semibold m-0 mb-3; }
-.auth-card p { @apply text-sm leading-relaxed m-0 mb-6; color: var(--muted); }
-.auth-card .fld { @apply mb-4; }
-.auth-card .fld label { @apply block text-[13px] mb-2; }
-.auth-card .probe { @apply text-xs mt-2 min-h-4; }
-.auth-card .probe.ok { color: var(--ok); }
-.auth-card .probe.bad { color: var(--danger-text); }
-.auth-card .err { @apply text-[13px] min-h-[18px] mt-1.5; color: var(--danger-text); }
-.auth-card .foot { @apply mt-5 text-center text-[13px]; color: var(--muted); }
-.auth-card .foot a { color: var(--flare); cursor: pointer; }
-
-.toast { @apply fixed left-1/2 px-4 py-2.5 rounded-full text-[13px] z-[90] text-center;
-  bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%);
-  background: var(--raised-strong); color: var(--text); border: 1px solid var(--line);
-  box-shadow: var(--shadow); max-width: 90vw; opacity: 0; transition: opacity .2s; pointer-events: none; }
-.toast.on { opacity: 1; }

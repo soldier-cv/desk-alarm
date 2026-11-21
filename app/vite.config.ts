@@ -1,10 +1,8 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
-import tailwindcss from '@tailwindcss/vite';
 
 // 四个入口：桌面三窗口 + 独立移动端页面。
 export default defineConfig({
-  plugins: [tailwindcss()],
   clearScreen: false,
   server: {
     port: 5173,
