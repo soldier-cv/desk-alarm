@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.4.4] - 2026-11-21
+
+### Fixed
+- 修复 CI 同步 tag 到 Gitee 的步骤：tag 触发时 checkout 已带 tag，去掉重复的 fetch 避免同步失败导致 Gitee 下载 404。
+
+
+
 ## [v0.4.3] - 2026-11-21
 
 ### Added
