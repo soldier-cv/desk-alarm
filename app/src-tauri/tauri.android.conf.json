@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "DeskAlarm",
+        "url": "mobile.html",
+        "width": 400,
+        "height": 800,
+        "center": true,
+        "theme": "Dark",
+        "backgroundColor": "#0B0C0D",
+        "visible": true
+      }
+    ]
+  }
+}

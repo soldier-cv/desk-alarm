@@ -20,6 +20,7 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         takeover: resolve(__dirname, 'takeover.html'),
         capture: resolve(__dirname, 'capture.html'),
+        mobile: resolve(__dirname, 'mobile.html'),
       },
     },
   },

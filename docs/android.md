@@ -1,10 +1,13 @@
 # Android 端
 
-Android 端的代码逻辑和 Windows 端**完全共用同一份前端和 Rust 源码**。真正只有 Android 的差异是两样：
+Android 端的 Rust 源码和 Windows 端共用，协议、解析、提醒逻辑（`api.ts` / `alarm.ts` / `theme.ts`）也共用；但**界面是独立的一套**：桌面三栏布局在窄屏上会被挤烂，所以 Android 走 `mobile.html` + `src/ui/mobile.ts` + `styles-mobile.css`，顶部状态 + 底部三页签（随手记 / 今天 / 设置）。`tauri.android.conf.json` 让 Android 只建 `main` 一个窗口并指向 `mobile.html`——若沿用桌面的三个窗口配置，capture 小窗会盖在最上面，表现为「打开就是空白随手记页」。
+
+Android 端的差异：
 
 1. **后台保活**：用常驻通知的前台服务把进程抬到前台优先级，让 WebSocket 在后台不断线。桌面端本来就是常驻进程，所以两端都走同一条 WS 通道，服务端不需要 FCM 之类的第二通道
 2. **机器指纹**：`machine_id()` 在 Android 上读 `ro.serialno` 等系统属性，不是 Windows 注册表
 3. **设备锁定只在桌面端提供**：Windows 用会话检测（`session.rs`，仅 `#[cfg(windows)]`）。移动端切后台、锁屏都照常接收提醒；设置页不显示 PIN/锁定，服务端也会拒绝移动端的锁定请求
+4. **图标**：`icons/android/` 的 launcher 图标由桌面 `icon.png` 直接生成（无 Tauri 默认的黑色外框），`gen/android/.../res/` 里是同一份拷贝
 
 ## 当前状态：代码就绪，发版走 GitHub Actions
 
