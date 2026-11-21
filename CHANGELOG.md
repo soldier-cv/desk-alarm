@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.4.5] - 2026-11-21
+
+### Fixed
+- 桌面端更新改回「下载 → 安装」两步：点右上角「有更新 vX」先下载，下载完按钮变成「安装 vX」，再点一次才安装并重启。设置页按钮同步这套流程；装完清掉「有更新」状态，不再一直提示。
+
 ## [v0.4.4] - 2026-11-21
 
 ### Fixed
 - 修复 CI 同步 tag 到 Gitee 的步骤：tag 触发时 checkout 已带 tag，去掉重复的 fetch 避免同步失败导致 Gitee 下载 404。
-
-
 
 ## [v0.4.3] - 2026-11-21
 

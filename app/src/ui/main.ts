@@ -549,6 +549,9 @@ const AUTO_INTERVAL_MS = 30 * 60_000;
 
 interface UpdateResult { at: number; available: boolean; version: string; message: string }
 
+// 下载完的包只活在进程内存里，重启后必须重新下载，所以不写 localStorage
+let downloadedVersion: string | null = null;
+
 function lastUpdateResult(): UpdateResult | null {
   try {
     return JSON.parse(localStorage.getItem(UPDATE_RESULT_KEY) ?? 'null') as UpdateResult | null;
@@ -557,26 +560,29 @@ function lastUpdateResult(): UpdateResult | null {
 
 function renderUpdateStatus() {
   const r = lastUpdateResult();
+  const ready = !!r?.available && downloadedVersion === r.version;
   const status = $<HTMLElement>('#update-status');
   if (status) {
     status.textContent = !r ? '尚未检查'
-      : r.available ? `发现 v${r.version}，点右上角「有更新」安装`
-      : `上次检查 ${new Date(r.at).toLocaleString('zh-CN')}：${r.message || '已是最新'}`;
+      : !r.available ? `上次检查 ${new Date(r.at).toLocaleString('zh-CN')}：${r.message || '已是最新'}`
+      : ready ? `v${r.version} 已下载，点「安装」开始安装`
+      : `发现 v${r.version}，点右上角「有更新」下载`;
   }
   const install = $<HTMLButtonElement>('#set-install');
   if (install) {
     install.hidden = !r?.available;
-    const ver = $<HTMLElement>('#set-install-ver');
-    if (ver) ver.textContent = r?.available ? r.version : '';
+    install.textContent = !r?.available ? '' : ready ? `安装 v${r.version}` : `下载 v${r.version}`;
   }
   const btn = $<HTMLButtonElement>('#btn-update');
   if (btn) {
-    btn.textContent = r?.available ? `有更新 v${r.version}` : '更新';
+    btn.textContent = !r?.available ? '更新' : ready ? `安装 v${r.version}` : `有更新 v${r.version}`;
     btn.classList.toggle('has-update', !!r?.available);
   }
 }
 
 function rememberResult(info: UpdateInfo) {
+  const prev = lastUpdateResult();
+  if (!info.available || (prev && prev.version !== info.latestVersion)) downloadedVersion = null;
   const r: UpdateResult = {
     at: Date.now(), available: info.available,
     version: info.latestVersion, message: info.message,
@@ -594,7 +600,7 @@ function autoCheckUpdate(force = false) {
     .then((info) => {
       if (!info) return;
       const r = rememberResult(info);
-      if (r.available) flash(`发现新版本 v${r.version}，点右上角「有更新」安装`);
+      if (r.available) flash(`发现新版本 v${r.version}，点右上角「有更新」下载`);
     })
     .catch(() => { /* 后台检查失败不该打扰用户 */ });
 }
@@ -611,7 +617,7 @@ async function checkUpdate() {
     const info = await invoke<UpdateInfo>('check_update');
     if (!info) return;
     const r = rememberResult(info);
-    flash(r.available ? `发现新版本 v${r.version}，点右上角「有更新」安装` : (info.message || '当前已是最新版本'));
+    flash(r.available ? `发现新版本 v${r.version}，点右上角「有更新」下载` : (info.message || '当前已是最新版本'));
   } catch (err) {
     flash('检查更新失败：' + (err instanceof Error ? err.message : String(err)));
   } finally {
@@ -621,21 +627,45 @@ async function checkUpdate() {
   }
 }
 
-/**
- * 安装由用户点击触发：右上角「有更新 vX」或设置页「安装 vX」都算明确授权。
- * 只装清单里的最新版，成功后 Rust 会清掉下载的安装包。
- */
+/** 下载与安装分两步：缓存的包只在进程内存里，重启后得重新下载 */
+async function downloadUpdate() {
+  if (!hasTauri()) return;
+  const top = $<HTMLButtonElement>('#btn-update');
+  const set = $<HTMLButtonElement>('#set-install');
+  if (top) { top.disabled = true; top.textContent = '下载中…'; }
+  if (set) { set.disabled = true; set.textContent = '下载中…'; }
+  try {
+    const version = await invoke<string>('download_update');
+    if (!version) return;
+    downloadedVersion = version;
+    flash(`v${version} 下载完成，点「安装」开始安装`);
+  } catch (err) {
+    flash('下载失败：' + (err instanceof Error ? err.message : String(err)));
+  } finally {
+    if (top) top.disabled = false;
+    if (set) set.disabled = false;
+    renderUpdateStatus();
+  }
+}
+
+/** 只装已下载好的那一个版本，不会重新下载 */
 async function installUpdate() {
   if (!hasTauri()) return;
   const top = $<HTMLButtonElement>('#btn-update');
   const set = $<HTMLButtonElement>('#set-install');
-  if (top) top.disabled = true;
-  if (set) { set.disabled = true; set.textContent = '下载安装中…'; }
+  if (top) { top.disabled = true; top.textContent = '安装中…'; }
+  if (set) { set.disabled = true; set.textContent = '安装中…'; }
+  const prev = lastUpdateResult();
+  // Windows 上插件启动安装器后就退出进程，invoke 的后续回调不一定执行，
+  // 所以「有更新」标记必须在调用前清掉，否则下次启动还会一直提示
+  if (prev) localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify({ ...prev, available: false }));
+  downloadedVersion = null;
   try {
     const done = await invoke<string>('install_update');
     flash(done || '更新已安装，重启后生效');
     await relaunch();
   } catch (err) {
+    if (prev) localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify(prev));
     flash('安装失败：' + (err instanceof Error ? err.message : String(err)));
   } finally {
     if (top) top.disabled = false;
@@ -644,10 +674,20 @@ async function installUpdate() {
   }
 }
 
-/** 右上角按钮：已是新版就检查，有新版就直接下载安装 */
+/** 右上角：没查过就检查，查到有更新先下载，下载完变成安装 */
 function onTopUpdateClick() {
-  if (lastUpdateResult()?.available) void installUpdate();
-  else void checkUpdate();
+  const r = lastUpdateResult();
+  if (!r?.available) void checkUpdate();
+  else if (downloadedVersion === r.version) void installUpdate();
+  else void downloadUpdate();
+}
+
+/** 设置页的按钮跟右上角走同一套两步流程 */
+function onInstallClick() {
+  const r = lastUpdateResult();
+  if (!r?.available) return;
+  if (downloadedVersion === r.version) void installUpdate();
+  else void downloadUpdate();
 }
 
 /** 一次性的提示条 */
@@ -809,7 +849,7 @@ function renderSettingsView(box: HTMLElement) {
       <div class="set-row"><div><b>更新</b><small id="update-status">尚未检查</small></div>
         <div class="set-actions">
           <button class="btn sm" id="set-update">检查更新</button>
-          <button class="btn solid sm" id="set-install" hidden>安装 v<span id="set-install-ver"></span></button>
+          <button class="btn solid sm" id="set-install" hidden></button>
         </div></div>
     </section>
 
@@ -924,7 +964,7 @@ function renderSettingsView(box: HTMLElement) {
     auto.onchange = () => void native('set_autostart', { enable: auto.checked });
   }
   $<HTMLButtonElement>('#set-update')!.onclick = () => void checkUpdate();
-  $<HTMLButtonElement>('#set-install')!.onclick = () => void installUpdate();
+  $<HTMLButtonElement>('#set-install')!.onclick = () => onInstallClick();
   const ping = $<HTMLButtonElement>('#set-ping');
   if (ping) ping.onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
   const lock = $<HTMLButtonElement>('#set-lock');

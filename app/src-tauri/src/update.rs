@@ -1,6 +1,7 @@
 //! 应用内更新：Gitee 优先、GitHub 降级。
 //! 为什么不用插件内置的 endpoints 轮询、以及为什么选官方插件，见 docs/update.md。
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -324,18 +325,26 @@ pub fn cleanup_installers(app: &AppHandle) {
     }
 }
 
-/// 前端调用：下载并安装。走插件的 download_and_install，
-/// 签名校验与静默安装都由它负责。
-#[tauri::command]
-pub async fn install_update(app: AppHandle) -> Result<String, String> {
+/// 下载完先留在进程里，等用户点「安装」再用。
+/// 不写盘：install 是 Update 的方法，平台相关的安装逻辑都在那个对象里。
+struct PendingUpdate {
+    version: String,
+    update: tauri_plugin_updater::Update,
+    bytes: Vec<u8>,
+}
+
+static PENDING_UPDATE: Mutex<Option<PendingUpdate>> = Mutex::new(None);
+
+/// 把 resolve() 的结果做成可下载的 Update：绑定清单实际给出的地址，
+/// 并挡住插件缓存旧包导致的降级。下载与安装分两步，这里只做到校验。
+async fn prepare_update(app: &AppHandle) -> Result<(String, tauri_plugin_updater::Update), String> {
     let info = match tokio::time::timeout(CHECK_BUDGET, resolve()).await {
-        Ok(Ok(i)) => i,
-        Ok(Err(e)) => return Err(e),
+        Ok(r) => r,
         Err(_) => return Err("检查更新超时".into()),
-    };
+    }?;
 
     if !info.available {
-        return Ok("当前已是最新版本".into());
+        return Err("当前已是最新版本".into());
     }
 
     // 安装必须用 resolve() 真正拿到清单的那条地址，不能按 source 字符串猜
@@ -350,27 +359,51 @@ pub async fn install_update(app: AppHandle) -> Result<String, String> {
         .build()
         .map_err(|e| format!("初始化更新器失败: {e}"))?;
 
-    let Some(update) = updater
+    let update = updater
         .check()
         .await
         .map_err(|e| format!("校验更新失败: {e}"))?
-    else {
-        return Ok("当前已是最新版本".into());
-    };
+        .ok_or_else(|| "当前已是最新版本".to_string())?;
 
     let version = update.version.clone();
-    // 插件可能返回旧的缓存包；只装清单里那一个最新版本，绝不降级
+    // 插件可能返回旧的缓存包；只认清单里那一个版本，绝不降级
     if is_newer(&info.latest_version, &version) || is_newer(&version, &info.latest_version) {
         return Err(format!(
-            "清单版本 {} 与待安装版本 {} 不一致，已取消安装",
+            "清单版本 {} 与待安装版本 {} 不一致，已取消更新",
             info.latest_version, version
         ));
     }
-    // download 内部已做签名校验，验不过直接返回错误，不会走到 install
+    Ok((version, update))
+}
+
+/// 前端调用：下载并验签，不安装。返回实际下载到的版本号。
+#[tauri::command]
+pub async fn download_update(app: AppHandle) -> Result<String, String> {
+    *PENDING_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+    let (version, update) = prepare_update(&app).await?;
+    // download 内部已做签名校验，验不过直接返回错误
     let bytes = update
         .download(|_chunk, _total| {}, || {})
         .await
         .map_err(|e| format!("下载更新失败: {e}"))?;
+
+    *PENDING_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(PendingUpdate {
+        version: version.clone(),
+        update,
+        bytes,
+    });
+    Ok(version)
+}
+
+/// 前端调用：装 download_update 下载好的包，不重新下载。
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> Result<String, String> {
+    let PendingUpdate { version, update, bytes } = PENDING_UPDATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .ok_or_else(|| "还没有下载更新，请先下载".to_string())?;
 
     update
         .install(bytes)

@@ -155,6 +155,7 @@ pub fn run() {
             logging::get_log_policy,
             logging::set_log_policy,
             update::check_update,
+            update::download_update,
             update::install_update,
         ])
         .build(tauri::generate_context!())
