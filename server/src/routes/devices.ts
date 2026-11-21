@@ -8,7 +8,6 @@ import { one } from '../db.js';
 import {
   deleteDevice, getDeviceOwned, listDevices, renameDevice, setLocked, setPushEnabled,
 } from '../repo/devices.js';
-import { getUserSecrets, verifyPin } from '../repo/users.js';
 
 export async function deviceRoutes(app: FastifyInstance) {
   app.post('/auth/login', async (req, reply) => {
@@ -66,26 +65,13 @@ export async function deviceRoutes(app: FastifyInstance) {
     }
 
     const userId = session.user.id;
-    if (body.locked) {
-      if (!session.user.hasPin) {
-        return reply.code(409).send({ error: 'PIN_REQUIRED', message: '先设置 PIN 才能锁定设备' });
-      }
-      await setLocked(dev.id, true, body.reason ?? 'manual');
-    } else {
-      // 系统锁屏已经验过身份，自动解锁不该再要一次 PIN
-      if (dev.lockReason === 'system') {
-        await setLocked(dev.id, false);
-      } else {
-        const hash = (await getUserSecrets(userId))?.pinHash;
-        if (!hash) {
-          return reply.code(409).send({ error: 'PIN_REQUIRED', message: '需要 PIN 才能解锁设备' });
-        }
-        if (!body.pin || !verifyPin(body.pin, hash)) {
-          return reply.code(401).send({ error: 'BAD_PIN', message: 'PIN 不对' });
-        }
-        await setLocked(dev.id, false);
-      }
-    }
+    // PIN 现在是设备本机的屏幕锁，服务端不持有也不校验；locked 只控制投递层。
+    // 客户端本地验过 PIN 后才会请求解锁，旧的 pin 字段留着兼容但忽略。
+    await setLocked(
+      dev.id,
+      body.locked,
+      body.locked ? (body.reason ?? 'manual') : undefined,
+    );
 
     const devices = await listDevices(userId);
     hub.broadcastToUser(userId, { t: 'devices.changed', devices });

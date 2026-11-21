@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+- 登录后强制设置本机 PIN（6 位数字）：加盐 PBKDF2 哈希只存本机，不入库、不传服务端；电脑、手机以及同一账号下的多台设备各设各的。桌面设置页改成「本机 PIN」，手机设置页新增 PIN 管理，并用它保护服务端地址和退出登录。
+
+### Changed
+- 登录 token 改为滑动续期：空闲 30 天过期，活跃时自动往后推，绝对上限 90 天；到期后统一回登录页并提示，不再在各按钮上报含糊的连接错误。
+- 设备解锁改为本机校验 PIN，服务端不再接收或校验 PIN，`locked` 仍只控制投递层。
+
+### Fixed
+- Android release 包默认禁用明文 HTTP，导致连不上局域网 `http://` 服务端；已改为放行明文流量。
+
 ## [v0.4.5] - 2026-11-21
 
 ### Fixed

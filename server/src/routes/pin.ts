@@ -1,3 +1,7 @@
+/**
+ * 已废弃：账号级 PIN。PIN 现在只存各设备本机（app/src/device-pin.ts），
+ * 不入库也不传服务端。这几个接口留着兼容还没升级的老客户端，新客户端不再调用。
+ */
 import type { FastifyInstance } from 'fastify';
 import { requireHuman } from '../auth.js';
 import { clearPin, getUserSecrets, setPin, verifyPassword } from '../repo/users.js';

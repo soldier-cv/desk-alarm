@@ -6,13 +6,14 @@ import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, getMachineId, getPlatform, hhmm, hostOf,
-  lateBy, loadConfig, normalizeBaseUrl, parseInput, probeServer, saveConfig,
+  lateBy, loadConfig, normalizeBaseUrl, onUnauthorized, parseInput, probeServer, saveConfig,
   serverNow, switchServer, urgencyOf,
   type AckAction, type AgentScope, type Device, type Dismissal, type Entry, type EntryCounts,
   type MyStats, type Overview, type ServerMessage, type Settings,
 } from '../api';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
+import { clearDevicePin, hasDevicePin, setDevicePin, verifyDevicePin } from '../device-pin';
 import { THEMES, applyTheme, loadTheme, saveTheme } from '../theme';
 import '../styles.css';
 
@@ -213,7 +214,7 @@ function renderLogin() {
       const serverPlatform = web ? 'web' : platform === 'macos' ? 'mac' : platform;
       const r = await api.login(username, code.value, name, serverPlatform);
       saveConfig({ user: r.user, deviceName: name, token: r.token, device: r.device });
-      boot();
+      afterAuth();
       // Web 本来就故意不建设备；桌面端没拿到才需要提醒用户
       if (!web && !r.device) flash('服务端没建设备，实时提醒不可用');
     } catch (e) {
@@ -316,7 +317,7 @@ function renderSetup() {
       const machineId = await getMachineId();
       const r = await api.setup({ username, password, confirmPassword: confirm, machineId });
       saveConfig({ token: r.token, user: r.user, device: r.device });
-      boot();
+      afterAuth();
     } catch (e) {
       err.textContent = e instanceof ApiError ? e.message : '连不上服务端，确认地址和服务是否在跑';
       go.disabled = false;
@@ -874,15 +875,15 @@ function renderSettingsView(box: HTMLElement) {
       ${isDesktop() ? `
       <div id="pin-state" class="hint"></div>
       <div class="set-grid">
-        <label>PIN（6 位数字）
+        <label>新 PIN（6 位数字）
           <span class="pwd-field"><input class="input" id="pin-new" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
           <button type="button" class="eye" data-eye="pin-new" aria-label="显示 PIN"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
-        <label>确认 PIN
+        <label>确认新 PIN
           <span class="pwd-field"><input class="input" id="pin-confirm" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
           <button type="button" class="eye" data-eye="pin-confirm" aria-label="显示 PIN"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
-        <label>账号密码（设置、修改或移除 PIN 都需要）
-          <span class="pwd-field"><input class="input" id="pin-pass" type="password" autocomplete="current-password">
-          <button type="button" class="eye" data-eye="pin-pass" aria-label="显示密码"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
+        <label>当前 PIN（修改或移除时需要）
+          <span class="pwd-field"><input class="input" id="pin-current" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
+          <button type="button" class="eye" data-eye="pin-current" aria-label="显示 PIN"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
       </div>
       <div class="set-actions">
         <button class="btn solid sm" id="pin-save">设置 PIN</button>
@@ -1036,17 +1037,19 @@ async function loadSettingsForm() {
   } catch { /* 读不到就保留本地缓存，不覆盖用户正在填的内容 */ }
 }
 
-async function loadPinState() {
+function loadPinState() {
   const el = $<HTMLElement>('#pin-state');
   if (!el) return;
-  const has = !!loadConfig().user?.hasPin;
-  el.textContent = has ? '已设置 PIN。修改或移除需要账号密码。' : '尚未设置 PIN，设置后才能锁定本机。';
+  const has = hasDevicePin();
+  el.textContent = has
+    ? '本机 PIN 已设置，只保存在这台设备上，不上传服务端。'
+    : '尚未设置本机 PIN，登录后需要先设置才能使用。';
   $<HTMLButtonElement>('#pin-save')!.textContent = has ? '修改 PIN' : '设置 PIN';
   $<HTMLButtonElement>('#pin-remove')!.disabled = !has;
   const note = $<HTMLElement>('#lock-note');
   if (note) note.textContent = has
     ? '锁定后按离线处理，到点提醒等解锁后补发'
-    : '请先设置 PIN，才能锁定本机';
+    : '请先设置本机 PIN，才能锁定本机';
 }
 
 async function savePin() {
@@ -1054,33 +1057,29 @@ async function savePin() {
   const pin = $<HTMLInputElement>('#pin-new')!.value.trim();
   if (!/^\d{6}$/.test(pin)) { msg.textContent = 'PIN 需要 6 位数字'; return; }
   if (pin !== $<HTMLInputElement>('#pin-confirm')!.value.trim()) { msg.textContent = '两次输入不一致'; return; }
-  const pass = $<HTMLInputElement>('#pin-pass')!.value;
-  if (!pass) { msg.textContent = '先填账号密码'; return; }
+  if (hasDevicePin()) {
+    const cur = $<HTMLInputElement>('#pin-current')!.value.trim();
+    if (!await verifyDevicePin(cur)) { msg.textContent = '当前 PIN 不对'; return; }
+  }
   msg.textContent = '保存中…';
   try {
-    await api.setPin(pin, pass);
-    const me = loadConfig().user;
-    if (me) saveConfig({ user: { ...me, hasPin: true } });
+    await setDevicePin(pin);
     $<HTMLInputElement>('#pin-new')!.value = '';
     $<HTMLInputElement>('#pin-confirm')!.value = '';
-    $<HTMLInputElement>('#pin-pass')!.value = '';
-    msg.textContent = 'PIN 已保存';
-    void loadPinState();
+    $<HTMLInputElement>('#pin-current')!.value = '';
+    msg.textContent = 'PIN 已保存到本机';
+    loadPinState();
   } catch (e) { msg.textContent = msgOf(e); }
 }
 
 async function removePin() {
   const msg = $<HTMLElement>('#pin-msg')!;
-  const pass = $<HTMLInputElement>('#pin-pass')!.value;
-  if (!pass) { msg.textContent = '先填账号密码'; return; }
-  try {
-    await api.deletePin(pass);
-    const me = loadConfig().user;
-    if (me) saveConfig({ user: { ...me, hasPin: false } });
-    $<HTMLInputElement>('#pin-pass')!.value = '';
-    msg.textContent = 'PIN 已移除';
-    void loadPinState();
-  } catch (e) { msg.textContent = msgOf(e); }
+  const cur = $<HTMLInputElement>('#pin-current')!.value.trim();
+  if (!await verifyDevicePin(cur)) { msg.textContent = '当前 PIN 不对'; return; }
+  clearDevicePin();
+  $<HTMLInputElement>('#pin-current')!.value = '';
+  msg.textContent = '本机 PIN 已移除';
+  loadPinState();
 }
 
 function renderDeviceRows() {
@@ -1248,8 +1247,8 @@ function renderLockScreen() {
 
 async function lockDevice(reason: 'manual' | 'system') {
   if (lockReason) return;
-  if (!loadConfig().user?.hasPin) {
-    flash('请先在设置里设置 PIN');
+  if (!hasDevicePin()) {
+    flash('请先在设置里设置本机 PIN');
     if (state.view !== 'settings') setView('settings');
     return;
   }
@@ -1266,8 +1265,14 @@ async function lockDevice(reason: 'manual' | 'system') {
 }
 
 async function unlockDevice(pin?: string) {
+  // 系统锁屏已经验过身份，自动解锁不再要 PIN；手动锁定则只在本地校验，不把 PIN 发给服务端
+  if (lockReason !== 'system' && !await verifyDevicePin(pin ?? '')) {
+    const el = $<HTMLElement>('#lock-err');
+    if (el) el.textContent = 'PIN 不对';
+    return;
+  }
   try {
-    await api.lockDevice(false, pin || undefined);
+    await api.lockDevice(false);
   } catch (e) {
     const el = $<HTMLElement>('#lock-err');
     if (el) el.textContent = msgOf(e);
@@ -2472,6 +2477,54 @@ function wireEvents() {
   listen('tray:quit', () => rt?.close());
 }
 
+/* ------------------------------------------------------------ 本机 PIN */
+
+/**
+ * 登录后强制设置本机 PIN。只写 localStorage，不进服务端。
+ * force=true 时还没有 boot，设完才进主界面；false 时只是设置页里补设。
+ */
+function renderPinSetup(force: boolean) {
+  if ($('#pin-setup')) return;
+  const host = document.createElement('div');
+  host.id = 'pin-setup';
+  host.className = 'lock-screen';
+  host.innerHTML = `
+    <div class="lock-card">
+      <span class="logo lg"><i></i></span>
+      <h1>${force ? '先设置本机 PIN' : '设置本机 PIN'}</h1>
+      <p>${force
+        ? '这台设备还没有 PIN。它只保存在本机，不上传服务端；同一账号下的其他电脑和手机可以各设各的。'
+        : 'PIN 只保存在这台设备上，不上传服务端。'}</p>
+      <input class="input" id="ps-pin" type="password" inputmode="numeric" maxlength="6" placeholder="6 位数字" autocomplete="off">
+      <input class="input" id="ps-confirm" type="password" inputmode="numeric" maxlength="6" placeholder="再输一次" autocomplete="off">
+      <button class="btn solid" id="ps-go">${force ? '设置并进入' : '保存'}</button>
+      <div class="login-err" id="ps-err"></div>
+    </div>`;
+  document.body.appendChild(host);
+  const pin = $<HTMLInputElement>('#ps-pin')!;
+  const confirm = $<HTMLInputElement>('#ps-confirm')!;
+  const err = $<HTMLElement>('#ps-err')!;
+  const submit = async () => {
+    err.textContent = '';
+    const v = pin.value.trim();
+    if (!/^\d{6}$/.test(v)) { err.textContent = 'PIN 需要 6 位数字'; return; }
+    if (v !== confirm.value.trim()) { err.textContent = '两次输入不一致'; return; }
+    try {
+      await setDevicePin(v);
+      host.remove();
+      if (force) boot(); else void loadPinState();
+    } catch (e) { err.textContent = msgOf(e); }
+  };
+  $<HTMLButtonElement>('#ps-go')!.onclick = () => void submit();
+  confirm.onkeydown = (ev) => { if (ev.key === 'Enter') void submit(); };
+  pin.focus();
+}
+
+function afterAuth() {
+  if (!hasDevicePin()) renderPinSetup(true);
+  else boot();
+}
+
 /* ------------------------------------------------------------ 启动 */
 
 function boot() {
@@ -2563,6 +2616,10 @@ function onRealtime(msg: ServerMessage) {
 // 先挂主题再渲染，否则会先闪一帧暗色再跳到浅色
 applyTheme(loadTheme());
 
+// token 过期后服务端统一回 401，api 层清掉本地会话并回到登录页，
+// 避免每个按钮都报「请检查连接」让人以为是网络坏了
+onUnauthorized(() => { rt?.close(); location.reload(); });
+
 (async () => {
   // 首屏先定平台，桌面专属按钮才不会闪一下又消失
   platform = await getPlatform();
@@ -2572,7 +2629,7 @@ applyTheme(loadTheme());
   try {
     if ((await api.setupStatus()).needed) { renderSetup(); return; }
   } catch { /* 连不上就走原来的登录/启动流程 */ }
-  if (cfg.token) boot();
+  if (cfg.token) afterAuth();
   else renderLogin();
 })();
 

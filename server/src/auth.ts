@@ -16,7 +16,7 @@ interface SessionRow {
   username: string;
   role: string;
   disabled: boolean;
-  pin_hash: string | null;
+  created_at: Date;
   expires_at: Date;
 }
 
@@ -112,7 +112,7 @@ export async function login(
     token: tok,
     user: {
       id: user.id, username: user.username, role: user.role,
-      disabled: user.disabled, hasPin: user.hasPin, createdAt: user.createdAt,
+      disabled: user.disabled, hasPin: false, createdAt: user.createdAt,
     },
     device,
   };
@@ -130,8 +130,8 @@ export async function resolveSession(req: FastifyRequest): Promise<Session | nul
   if (!tok) return null;
 
   const row = await one<SessionRow>(
-    `SELECT s.token, s.user_id, s.device_id, s.kind, s.expires_at,
-            u.username, u.role, u.disabled, u.pin_hash
+    `SELECT s.token, s.user_id, s.device_id, s.kind, s.created_at, s.expires_at,
+            u.username, u.role, u.disabled
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token = $1`,
     [tok],
@@ -142,12 +142,27 @@ export async function resolveSession(req: FastifyRequest): Promise<Session | nul
       return null;
     }
     if (row.disabled) return null;
+    // 滑动续期：剩余不足一半就推满，但不超过绝对上限。
+    // 每次推满后要再过半个窗口才写一次库，不需要额外节流。
+    const hardCap = new Date(row.created_at).getTime() + env.SESSION_MAX_MS;
+    if (hardCap <= now()) {
+      await run('DELETE FROM sessions WHERE token = $1', [tok]);
+      return null;
+    }
+    const expires = new Date(row.expires_at).getTime();
+    if (expires - now() < env.SESSION_TTL_MS / 2) {
+      const next = Math.min(now() + env.SESSION_TTL_MS, hardCap);
+      if (next > expires) {
+        await run('UPDATE sessions SET expires_at = $2 WHERE token = $1', [tok, new Date(next)]);
+      }
+    }
     const device = row.device_id ? (await getDevice(row.device_id)) ?? null : null;
     return {
       token: tok,
       user: {
         id: row.user_id, username: row.username, role: row.role as Role,
-        disabled: !!row.disabled, hasPin: !!row.pin_hash, createdAt: 0,
+        // 账号级 PIN 已废弃：PIN 现在只存在各设备本机，服务端不持有也不校验
+        disabled: !!row.disabled, hasPin: false, createdAt: 0,
       },
       device,
       kind: row.kind as Session['kind'],

@@ -39,7 +39,8 @@ android {
     compileSdk = 36
     namespace = "io.github.soldier_cv.deskalarm"
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "false"
+        // 用户自填的服务端地址是 http:// 局域网地址；release 默认禁明文会让安卓端全部连不上
+        manifestPlaceholders["usesCleartextTraffic"] = "true"
         applicationId = "io.github.soldier_cv.deskalarm"
         minSdk = 24
         targetSdk = 36

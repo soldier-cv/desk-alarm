@@ -149,6 +149,14 @@ export function clearToken() {
   saveConfig({ token: '', user: null, device: null });
 }
 
+/** 登录过期时由 UI 注册一个回登录页的动作；模块级标志避免并发请求重复弹屏 */
+type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+let unauthorizedFired = false;
+
+export function onUnauthorized(fn: UnauthorizedHandler) { unauthorizedHandler = fn; }
+function resetUnauthorized() { unauthorizedFired = false; }
+
 /** 服务端权威时间。所有「到点了吗」的判断都用它，不用本机 Date.now() */
 export function serverNow(): number {
   // 列表里每行都调它，不能每次都读一次 localStorage 再 parse
@@ -181,7 +189,16 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (text) {
     try { json = JSON.parse(text); } catch { /* 非 JSON 响应，走下面的状态码兜底 */ }
   }
-  if (!res.ok) throw new ApiError(res.status, json.error ?? 'UNKNOWN', json.message ?? res.statusText);
+  if (!res.ok) {
+    if (res.status === 401 && cfg.token && json.error === 'UNAUTHORIZED') {
+      clearToken();
+      if (!unauthorizedFired) {
+        unauthorizedFired = true;
+        unauthorizedHandler?.();
+      }
+    }
+    throw new ApiError(res.status, json.error ?? 'UNKNOWN', json.message ?? res.statusText);
+  }
   return json as T;
 }
 
@@ -191,7 +208,7 @@ export const api = {
   setup: (body: { username: string; password: string; confirmPassword: string; machineId?: string }) =>
     req<{ token: string; user: User; device: Device | null }>('/setup', {
       method: 'POST', body: JSON.stringify(body),
-    }),
+    }).then((r) => { resetUnauthorized(); return r; }),
 
   login: async (username: string, password: string, deviceName: string, platform: string = 'windows') => {
     const machineId = await getMachineId();
@@ -199,6 +216,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ username, password, deviceName, platform, machineId, transport: 'ws' }),
     });
+    resetUnauthorized();
     saveConfig({ user: r.user });
     return r;
   },

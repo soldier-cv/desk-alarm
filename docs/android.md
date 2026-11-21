@@ -8,6 +8,7 @@ Android 端的差异：
 2. **机器指纹**：`machine_id()` 在 Android 上读 `ro.serialno` 等系统属性，不是 Windows 注册表
 3. **设备锁定只在桌面端提供**：Windows 用会话检测（`session.rs`，仅 `#[cfg(windows)]`）。移动端切后台、锁屏都照常接收提醒；设置页不显示 PIN/锁定，服务端也会拒绝移动端的锁定请求
 4. **图标**：`icons/android/` 的 launcher 图标由桌面 `icon.png` 直接生成（无 Tauri 默认的黑色外框），`gen/android/.../res/` 里是同一份拷贝
+5. **明文 HTTP**：服务端地址是用户在运行时填的 `http://<局域网 IP>:8091`，所以 `gen/android/app/build.gradle.kts` 里 `usesCleartextTraffic` 在 `defaultConfig` 就置为 `true`（Tauri 默认只给 debug 开，release 会被 Android 直接拦掉，表现为「测试连接连不上」）。`connect-src` 同理保持宽松，不能把具体地址写进白名单
 
 ## 当前状态：代码就绪，发版走 GitHub Actions
 

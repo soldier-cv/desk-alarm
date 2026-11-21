@@ -3,8 +3,8 @@
  * users 表非空后这两个接口就不允许再写，避免有人事后偷偷加管理员。
  */
 import type { FastifyInstance } from 'fastify';
-import { token as newToken } from '../env.js';
-import { run, tx } from '../db.js';
+import { token as newToken, env } from '../env.js';
+import { run, tx, now } from '../db.js';
 import { countUsers, getUser, hashPassword } from '../repo/users.js';
 import { ensureSettings } from '../repo/settings.js';
 import { upsertDeviceByMachine } from '../repo/devices.js';
@@ -65,10 +65,11 @@ export async function setupRoutes(app: FastifyInstance) {
     }
 
     const tok = newToken();
+    const expires = new Date(now() + env.SESSION_TTL_MS);
     await run(
       `INSERT INTO sessions (token, user_id, device_id, kind, expires_at)
-       VALUES ($1,$2,$3,'user', now() + interval '90 days')`,
-      [tok, user.id, device?.id ?? null],
+       VALUES ($1,$2,$3,'user',$4)`,
+      [tok, user.id, device?.id ?? null, expires],
     );
     return reply.code(201).send({ token: tok, user, device });
   });

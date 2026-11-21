@@ -29,8 +29,14 @@ export const env = {
   PGPASSWORD: str('PGPASSWORD', ''),
   PG_POOL_MAX: int('PG_POOL_MAX', 10),
 
-  /** 会话有效期，默认 90 天 */
-  SESSION_TTL_MS: int('SESSION_TTL_MS', 90 * 24 * 60 * 60 * 1000),
+  /**
+   * 会话空闲窗口，默认 30 天。resolveSession 里做滑动续期：
+   * 剩余不足一半就把到期时间推满，活跃用户不用反复登录，闲置则自然过期。
+   */
+  SESSION_TTL_MS: int('SESSION_TTL_MS', 30 * 24 * 60 * 60 * 1000),
+
+  /** 会话绝对上限，默认 90 天。到点强制重新输一次密码，避免长期持有同一把钥匙 */
+  SESSION_MAX_MS: int('SESSION_MAX_MS', 90 * 24 * 60 * 60 * 1000),
 
   /** 调度器扫描间隔 */
   TICK_MS: int('TICK_MS', 1000),

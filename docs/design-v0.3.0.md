@@ -10,8 +10,8 @@ Android 与桌面共用前端和 Rust 源码，所有新能力必须按 `#[cfg(d
 | 编号 | 决定 | 备选 | 理由 |
 |---|---|---|---|
 | D1 | 锁定保留 WS，只加 `devices.locked` 标记，投递层跳过；解锁后走既有 missed 补发 | 真断 WS / 只本地遮罩 | 断 WS 会丢跨端状态同步；本地遮罩不满足「相当于离线」 |
-| D2 | PIN 账号级，服务端只存 scrypt 哈希；改 PIN 要验账号密码；没设 PIN 不允许锁 | 设备级 / 纯本地 | 多设备不用记多个 PIN；服务端可校验解锁，换设备仍能用 |
-| D3 | Windows 锁屏→自动锁定且按离线；系统解锁→自动解锁，不重复要 PIN | 解锁仍要 PIN | 系统已验过身份，再要 PIN 是纯摩擦；手动锁定仍必须 PIN |
+| D2 | ~~PIN 账号级，服务端只存 scrypt 哈希~~ → **v0.4.6 起改为设备本机**：登录后强制设 6 位，PBKDF2 加盐哈希只存 localStorage，不入库不传服务端，每台设备独立 | 设备级 / 纯本地 | 多设备不用记多个 PIN；服务端可校验解锁，换设备仍能用 |
+| D3 | Windows 锁屏→自动锁定且按离线；系统解锁→自动解锁，不重复要 PIN；手动锁定用本机 PIN 校验（不再发服务端） | 解锁仍要 PIN | 系统已验过身份，再要 PIN 是纯摩擦；手动锁定仍必须 PIN |
 | D4 | 移动端不提供锁定：切后台/锁屏照常由前台服务保活、WS 不断线；服务端也拒绝移动端锁定请求 | 切后台自动锁定 | 提醒类应用切后台是常态，锁定=离线会让手机完全收不到提醒，场景上是反的 |
 | D5 | 「本地日志策略」= 客户端日志级别 / 是否落盘 / 保留天数，Rust 写文件，前端只发关键事件 | 只存 localStorage | 用户要的是能查的本地日志，不是浏览器 console |
 | D6 | X 按钮默认改为「退出程序」，设置页可切回「隐藏到托盘」；顶栏托盘按钮和试响按钮移除 | 保持现状 | 用户明确要求；系统标题栏已有最小化 |
@@ -24,17 +24,16 @@ Android 与桌面共用前端和 Rust 源码，所有新能力必须按 `#[cfg(d
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
-| POST | `/pin` | `{pin: 4-12位数字, currentPassword?: string}` | `{ok:true}`；已有 PIN 时必须带对账号密码 |
-| DELETE | `/pin` | `{currentPassword: string}` | `{ok:true}` |
-| POST | `/devices/lock` | `{locked: boolean, pin?: string}` | `{device: Device}`；只作用于当前会话自己的设备；锁定时必须已设 PIN，解锁时 `pin` 必须正确 |
+| POST | `/pin` | `{pin: 6位数字, currentPassword?: string}` | `{ok:true}`；**v0.4.6 起废弃**，仅为兼容老客户端保留，新客户端不再调用 |
+| DELETE | `/pin` | `{currentPassword: string}` | `{ok:true}`；同上，已废弃 |
+| POST | `/devices/lock` | `{locked: boolean, pin?: string}` | `{device: Device}`；只作用于当前会话自己的设备；v0.4.6 起服务端不再校验 PIN，客户端本地验过才请求解锁 |
 | GET | `/stats/me` | — | `{streakDays, today:{due,done,missed}, week:{due,onTime,rate}, dismissed, days:[{day,due,done,missed}]}` |
 | GET | `/settings` / PATCH `/settings` | 既有 | 前端这次真正接上（原来从未调用） |
 | GET | `/admin/overview` | 既有 | 仅 admin，重构展示 |
 
-`User` 增加 `hasPin: boolean`（`/auth/whoami` 和登录响应都要带）。
-`Device` 增加 `locked: boolean`、`lastIp: string | null`。
+`User.hasPin` 保留为兼容字段但恒为 `false`（服务端不再持有 PIN）。`Device` 增加 `locked: boolean`、`lastIp: string | null`。
 
-数据库：`devices` 加 `locked boolean not null default false`、`last_ip text`；`users` 加 `pin_hash text`。用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 追加在 `schema.pg.sql` 末尾，开机 `migrate()` 幂等执行。
+数据库：`devices` 加 `locked boolean not null default false`、`last_ip text`；`users` 加 `pin_hash text`（v0.4.6 起废弃，仅为兼容老数据保留）。用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 追加在 `schema.pg.sql` 末尾，开机 `migrate()` 幂等执行。
 
 投递改动：`resolveTargets` 不改（锁定设备照样入 outbox）；`takePending` 联 `devices` 过滤 `locked = true`，使提醒堆积但不重试；解锁后 `findMissed` 自然读到这些 pending 并补发。
 
