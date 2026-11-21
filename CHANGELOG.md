@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.4.6] - 2026-11-21
+
 ### Added
-- 登录后强制设置本机 PIN（6 位数字）：加盐 PBKDF2 哈希只存本机，不入库、不传服务端；同一账号下的多台电脑各设各的。桌面设置页改成「本机 PIN」，移动端不设置 PIN。
+- 桌面端登录后强制设置本机 PIN（6 位数字）：加盐 PBKDF2 哈希只存本机，不入库、不传服务端；同一账号下的多台电脑各设各的。桌面设置页改成「本机 PIN」，移动端不设置 PIN。
 
 ### Changed
 - 登录 token 改为滑动续期：空闲 30 天过期，活跃时自动往后推，绝对上限 90 天；到期后统一回登录页并提示，不再在各按钮上报含糊的连接错误。
