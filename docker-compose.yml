@@ -32,10 +32,6 @@ services:
       DELIVERY_MAX_ATTEMPTS: "5"
       LOG_LEVEL: "info"
 
-      # Firebase。没配就走不了 FCM，Android 到点只会走 missed 补发
-      FCM_PROJECT_ID: "${FCM_PROJECT_ID:-}"
-      FCM_CLIENT_EMAIL: "${FCM_CLIENT_EMAIL:-}"
-      FCM_PRIVATE_KEY: "${FCM_PRIVATE_KEY:-}"
       # Agent 令牌由每个用户在客户端自助签发，不再有全局 MCP_TOKEN
     restart: unless-stopped
     logging:

@@ -106,7 +106,7 @@ server/
   src/repo/                entries / devices / deliveries / settings / users / agent-tokens / stats
   src/scheduler.ts         调度器 + 投递轮转器
   src/hub.ts               按用户隔离的 WS 广播
-  src/transport/           ws 与 fcm 两条投递通道
+  src/transport/           WebSocket 投递通道（注册表式，便于以后接厂商通道）
   src/mcp/                 工具集与 stdio 入口
   src/routes/              entries / devices / stream / mcp / admin / agent-tokens
   scripts/smoke.mjs        146 项冒烟测试
@@ -155,7 +155,7 @@ docker compose ps
 
 后续用户由管理员在客户端「设置 → 用户管理」里创建（用户名 + 密码 + 角色），也能禁用、删除。
 
-**设置页**：提醒参数、主题、关闭 X 的行为（退出 / 隐藏到托盘）、试响、PIN 与设备锁定、用户管理、本地日志策略都在左侧「设置」里（开机自启和锁定仅桌面端有）。PIN 存在服务端（scrypt 哈希），设了 PIN 才能锁设备；Windows 锁屏会自动锁定，系统解锁后自动解锁，手动锁定必须输 PIN。锁定设备按离线处理，到点提醒等解锁后补发。移动端不提供锁定，切后台不影响 FCM 提醒。
+**设置页**：提醒参数、主题、关闭 X 的行为（退出 / 隐藏到托盘）、试响、PIN 与设备锁定、用户管理、本地日志策略都在左侧「设置」里（开机自启和锁定仅桌面端有）。PIN 存在服务端（scrypt 哈希），设了 PIN 才能锁设备；Windows 锁屏会自动锁定，系统解锁后自动解锁，手动锁定必须输 PIN。锁定设备按离线处理，到点提醒等解锁后补发。移动端不提供锁定；切后台由常驻通知的前台服务保活，WS 不断线。
 
 **两个看板**：普通用户有「我的看板」（连续守约天数、近 7 天准时率、每日柱状图，只统计自己）；管理员额外有「系统看板」（服务端与全局业务概览）。
 
@@ -385,7 +385,6 @@ New-NetFirewallRule -DisplayName "DeskAlarm 8091" -Direction Inbound `
 
 ## 还没做的
 
-- FCM 凭据。没配的话安卓到点不会响，只会留在队列里等上线补发。服务端启动日志会打一行 `FCM 不可用`
 - Android 推送插件还没接，当前安卓到点靠「下次上线 welcome 补发」兜底
 - 代码签名。现在跑 exe 有 SmartScreen 提示
 - Windows 专注助手开启时会吞掉 Toast，所以应用内横幅是必须的，不能只依赖系统通知

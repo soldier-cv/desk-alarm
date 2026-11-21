@@ -670,13 +670,12 @@ jobs:
           done
           bad=""
           for name in $names; do
-            code="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 30 "${base}/${name}" || echo 000)"
-            if [ "$code" != "200" ]; then
-              echo "::error::镜像上 ${name} 不可下载（HTTP ${code}）"
-              bad="1"
-            else
-              echo "OK ${name}"
-            fi
+            # curl 即使拿到 200 也可能在收尾时非零退出，不能再拼一个 000 上去误判失败
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 30 "${base}/${name}" || true)"
+            case "$code" in
+              200*) echo "OK ${name}" ;;
+              *) echo "::error::镜像上 ${name} 不可下载（HTTP ${code:-000}）"; bad="1" ;;
+            esac
           done
           if [ -n "$bad" ]; then
             echo "::error::镜像附件不完整，客户端会下载失败。请重跑本 job 或手动补传。"

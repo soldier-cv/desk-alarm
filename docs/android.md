@@ -2,9 +2,9 @@
 
 Android 端的代码逻辑和 Windows 端**完全共用同一份前端和 Rust 源码**。真正只有 Android 的差异是两样：
 
-1. **推送通道**：Android 后台会杀进程，WebSocket 活不下来，靠 FCM 把进程叫醒
+1. **后台保活**：用常驻通知的前台服务把进程抬到前台优先级，让 WebSocket 在后台不断线。桌面端本来就是常驻进程，所以两端都走同一条 WS 通道，服务端不需要 FCM 之类的第二通道
 2. **机器指纹**：`machine_id()` 在 Android 上读 `ro.serialno` 等系统属性，不是 Windows 注册表
-3. **设备锁定只在桌面端提供**：Windows 用会话检测（`session.rs`，仅 `#[cfg(windows)]`）。移动端切后台、锁屏都照常接收 FCM 提醒；设置页不显示 PIN/锁定，服务端也会拒绝移动端的锁定请求
+3. **设备锁定只在桌面端提供**：Windows 用会话检测（`session.rs`，仅 `#[cfg(windows)]`）。移动端切后台、锁屏都照常接收提醒；设置页不显示 PIN/锁定，服务端也会拒绝移动端的锁定请求
 
 ## 当前状态：代码就绪，发版走 GitHub Actions
 
@@ -88,21 +88,16 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 
 > 首次跑会生成 `app/src-tauri/gen/android`，这是 Tauri 的 Android 工程骨架（Gradle 项目），由 `tauri android init` 产出，**不要手工编辑**；生成后提交到仓库，后续机器不用再 init。
 
-## Firebase 配置（FCM 推送要用）
+## 后台保活怎么工作
 
-服务端要三个环境变量，缺一个 Android 到点就不会响：
+`MainActivity` 启动时调用 `startForegroundService`，拉起 `DeskAlarmKeepAliveService`（`gen/android/app/src/main/java/.../DeskAlarmKeepAliveService.kt`）。它只做一件事：显示一条常驻通知，把进程抬到前台优先级，WebView 里的 WebSocket 因此不会被系统回收。提醒的接收、心跳、`welcome` 补发仍然全在 JS 侧，跟桌面端完全一样。
 
-```bash
-# .env
-FCM_PROJECT_ID=your-project
-FCM_CLIENT_EMAIL=firebase-adminsdk-xxxxx@your-project.iam.gserviceaccount.com
-FCM_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-```
+通知渠道是 `deskalarm_keepalive`（低重要性，不发声）。Android 13+ 首次启动会请求 `POST_NOTIFICATIONS`；不给权限服务照常运行，只是通知不进抽屉。Android 14+ 必须声明前台服务类型，这里用 `specialUse`（配合 `FOREGROUND_SERVICE_SPECIAL_USE` 权限和清单里的用途说明）——它不像 `dataSync` 那样在 Android 15+ 有 6 小时上限，适合常驻连接。不上 Play 商店，所以不需要在 Play Console 做类型声明。
 
-`FCM_PRIVATE_KEY` 里的换行写成 `\n`，代码里会还原。Android 侧还要把 `google-services.json` 放进 `gen/android/app/`，并用支持 FCM 的插件——**这部分还没接**，当前 Android 到点靠「下次上线时 welcome 补发」兜底。
+这套方案不依赖 Google 服务，大陆国产 ROM 可用。用户仍然需要在系统设置里关掉电池优化、把应用锁在最近任务里——前台服务是必要条件，不是万能豁免。极端情况下（ROM 主动清理、网络切换）WS 仍可能断，重连后 `welcome` 会把离线期间的提醒补发。
 
 ## 已知的好消息
 
-- 服务端 `transport` 是注册表式的（`server/src/transport/index.ts`），加通道不用改调度器
-- `deliveries` 表同时是跨端去重依据和 outbox，失败行带 `last_error`，排查一眼能看出是 token 失效还是网络问题
-- FCM 回执里 `UNREGISTERED` / `INVALID_ARGUMENT` 会标 `fatal`，清掉那行让设备重新注册，不会无限重试
+- 服务端 `transport` 是注册表式的（`server/src/transport/index.ts`），以后要接厂商通道（极光/个推）不用改调度器
+- `deliveries` 表同时是跨端去重依据和 outbox，失败行带 `last_error`，排查一眼能看出是网络问题还是配置问题
+- 服务端 20 秒收到一次心跳就刷新 `last_seen_at`；超过 3 分钟没心跳才标离线，不会被后台短断误判

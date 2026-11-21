@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [Unreleased]
+
+### Added
+- Android 用常驻通知的前台服务保持进程存活，WebSocket 在后台不断线；不依赖 Google 服务，国产 ROM 可用。
+
+### Removed
+- 移除未接线的 FCM 服务端通道、`FCM_*` 环境变量与相关文档。目前投递通道只有 WebSocket，断线期间的提醒仍由 `welcome` 补发。
+
 ## [v0.4.1] - 2026-11-21
 
 ### Fixed

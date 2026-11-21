@@ -1,9 +1,9 @@
 /**
  * 投递通道抽象。
  *
- * 为什么需要这个：桌面端进程常驻，WebSocket 一直活着，WS 发了就到了。
- * 手机不行，Android 会在后台杀进程，WS 随时断。手机只能靠 FCM 敲门。
- * 所以投递不能只有一个出口。
+ * 目前只有 WebSocket 一条通道：Android 用常驻前台服务维持进程和 WS 连接，
+ * 桌面端本来就是常驻进程，所以两端都走同一条实时通道。断线期间的提醒由
+ * outbox 保留，重连后 welcome 带 missed 补发。
  *
  * 契约很简单：send 成功返回 true，失败返回 false 加原因。
  * 失败不算「提醒丢了」，outbox 会重试，重试超时才降级到 missed 补发。
@@ -11,9 +11,8 @@
 import type { Entry } from '../../../shared/types.js';
 import { hub } from '../hub.js';
 import { log } from '../log.js';
-import { createFcm } from './fcm.js';
 
-export type TransportName = 'ws' | 'fcm' | 'webpush';
+export type TransportName = 'ws';
 
 export interface SendResult {
   ok: boolean;
@@ -56,17 +55,10 @@ class WebSocketTransport implements Transport {
   }
 }
 
-/* -------------------------------------------------------------- FCM */
-
-/** 没配 Firebase 凭据时是个空壳，所有投递都失败。
- *  失败会记进 deliveries.last_error，排查时一眼能看出是配置问题 */
-const fcm = createFcm();
-
 /* ------------------------------------------------------------- 注册表 */
 
 const registry = new Map<TransportName, Transport>([
   ['ws', new WebSocketTransport() as Transport],
-  ['fcm', fcm],
 ]);
 
 export function registerTransport(t: Transport) {
@@ -82,7 +74,4 @@ export function transportFor(name: TransportName | null | undefined): Transport 
 
 export function initTransports() {
   log.info('transport', `已注册通道: ${[...registry.keys()].join(', ')}`);
-  if (!fcm.available('__probe__')) {
-    log.warn('transport', 'FCM 不可用，Android 设备到点只会走 missed 补发');
-  }
 }

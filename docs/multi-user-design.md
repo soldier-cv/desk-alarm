@@ -21,7 +21,7 @@
 - 规模：几十用户以内，单 PostgreSQL 实例，单部署
 - 管理员是唯一能创建/禁用/删除用户的人
 - 会话仍是服务端签发的随机 Bearer token；WS token 仍走 query（HTTPS 反代下可接受）
-- Android 出包 / FCM 凭据 / 代码签名仍暂缓
+- Android 出包 / 后台保活 / 代码签名仍暂缓
 
 ## 决策记录
 

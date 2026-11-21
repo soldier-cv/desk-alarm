@@ -274,10 +274,10 @@ try {
 
   const phone = await api('/auth/login', {
     method: 'POST',
-    body: { username: 'admin', password: 'test-pass-123', deviceName: '小米手机', platform: 'android', machineId: 'machine-phone', transport: 'fcm', pushToken: 'fake-token' },
+    body: { username: 'admin', password: 'test-pass-123', deviceName: '小米手机', platform: 'android', machineId: 'machine-phone' },
   });
-  ok('安卓设备可注册 fcm 通道', phone.json.device?.transport === 'fcm');
-  ok('有 push token 就算配好了', phone.json.device?.pushReady === true);
+  ok('安卓设备也走 ws 通道', phone.json.device?.transport === 'ws');
+  ok('安卓设备算配好了推送', phone.json.device?.pushReady === true);
   const dphone = phone.json.device.id;
 
   /* ---------------------------------------------------------- 条目 */

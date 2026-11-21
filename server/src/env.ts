@@ -49,11 +49,6 @@ export const env = {
   DELIVERY_RETRY_MS: int('DELIVERY_RETRY_MS', 120_000),
   DELIVERY_MAX_ATTEMPTS: int('DELIVERY_MAX_ATTEMPTS', 5),
 
-  /** Firebase。没配就走不了 FCM，Android 设备会一直排队到超时 */
-  FCM_PROJECT_ID: str('FCM_PROJECT_ID', ''),
-  FCM_CLIENT_EMAIL: str('FCM_CLIENT_EMAIL', ''),
-  FCM_PRIVATE_KEY: str('FCM_PRIVATE_KEY', ''),
-
   LOG_LEVEL: str('LOG_LEVEL', 'info'),
 
   /** 额外的 CORS 源，逗号分隔。桌面端自带的那些在 cors.ts 里写死 */

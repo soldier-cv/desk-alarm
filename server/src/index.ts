@@ -179,7 +179,6 @@ async function boot() {
   log.info('deskalarm api listening', {
     url: `http://${env.HOST}:${env.PORT}`,
     setup: (await import('./repo/users.js')).countUsers().then((n) => (n === 0 ? 'required' : 'done')),
-    fcm: env.FCM_PROJECT_ID ? 'on' : 'off',
   });
 }
 

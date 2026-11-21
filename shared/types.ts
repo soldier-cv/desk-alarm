@@ -49,7 +49,7 @@ export type AckAction = 'done' | 'snooze' | 'silence';
 /** 弱提示的「忽略」。和 done 分开记，这是整套设计的关键。 */
 export type DismissAction = 'dismiss';
 
-export type TransportName = 'ws' | 'fcm' | 'webpush';
+export type TransportName = 'ws';
 
 export interface Entry {
   id: string;
@@ -146,7 +146,7 @@ export interface LoginRequest {
   /** OS 级 machine-id，不可变。Web 端不传，服务端就不建设备行 */
   machineId?: string;
   transport?: TransportName;
-  /** Android 首次注册时带 FCM token */
+  /** 兼容旧客户端上报的推送 token，当前版本不使用 */
   pushToken?: string;
 }
 
@@ -237,7 +237,7 @@ export type ServerMessage =
       serverTs: number;
       repeat: RepeatRule;
       strength: Strength;
-      /** 服务端这条走了哪条通道。桌面 ws，手机 fcm */
+      /** 投递通道，目前只有 ws */
       transport: TransportName;
     }
   /** 弱提示。客户端只弹横幅，不进接管窗口 */

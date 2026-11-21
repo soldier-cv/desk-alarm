@@ -56,9 +56,9 @@ const t = login.json.token;
 
 const phone = await call('/auth/login', {
   method: 'POST',
-  body: { username: USER, password: PASS, deviceName: '小米手机', platform: 'android', machineId: `verify-phone-${Date.now()}`, transport: 'fcm', pushToken: 'x' },
+  body: { username: USER, password: PASS, deviceName: '小米手机', platform: 'android', machineId: `verify-phone-${Date.now()}` },
 });
-ok('安卓设备能注册 fcm 通道', phone.json.device?.transport === 'fcm');
+ok('安卓设备走 ws 通道（前台服务保活）', phone.json.device?.transport === 'ws');
 ok('安卓设备标为未在线', phone.json.device?.online === false);
 
 console.log('\n强弱提示');
