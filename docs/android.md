@@ -56,7 +56,7 @@ APK 版本号由 tag 决定：`scripts/set-version.mjs` 更新 `tauri.conf.json`
 
 ```powershell
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"
-& "$sdk\cmdline-tools\latest\bin\sdkmanager.bat" "platform-tools" "build-tools;35.0.0" "ndk;26.1.10909125" "platforms;android-37"
+& "$sdk\cmdline-tools\latest\bin\sdkmanager.bat" "platform-tools" "build-tools;36.0.0" "ndk;26.1.10909125" "platforms;android-36"
 ```
 
 ### 2. 设环境变量

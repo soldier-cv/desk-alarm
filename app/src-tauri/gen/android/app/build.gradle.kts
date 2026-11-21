@@ -35,13 +35,14 @@ android {
             }
         }
     }
-    compileSdk = 37
+    // 36 是当前 sdkmanager 能装到的最高 platform；Tauri 生成的 37 在仓库里找不到包
+    compileSdk = 36
     namespace = "io.github.soldier_cv.deskalarm"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "io.github.soldier_cv.deskalarm"
         minSdk = 24
-        targetSdk = 37
+        targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }

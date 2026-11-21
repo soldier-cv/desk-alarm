@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [v0.4.1] - 2026-11-21
+
+### Fixed
+- Android 构建：compileSdk/targetSdk 与 CI 安装的 platform 从 37 降到 36（sdkmanager 当前最高只提供 36），修复 android job 在 `Install Android SDK components` 阶段失败。
+
 ## [v0.4.0] - 2026-11-20
 
 ### Added

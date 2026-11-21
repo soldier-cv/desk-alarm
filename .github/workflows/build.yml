@@ -305,7 +305,7 @@ jobs:
             SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
           fi
           yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
-          "$SDKMGR" "platform-tools" "build-tools;35.0.0" "ndk;26.1.10909125" "platforms;android-37"
+          "$SDKMGR" "platform-tools" "build-tools;36.0.0" "ndk;26.1.10909125" "platforms;android-36"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "NDK_HOME=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
 
@@ -383,7 +383,7 @@ jobs:
           [ -n "$APK" ] || { echo "::error::没找到 APK"; exit 1; }
           echo "APK=$APK"
           case "$APK" in *debug*) echo "::error::产物是 debug 签名，不能发版"; exit 1;; esac
-          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           "$APKSIGNER" verify --print-certs "$APK" | tee apk-certs.txt
           # keytool 的输出带冒号，Secret 里贴带冒号的也认，两边统一去掉冒号和空白
           actual="$(grep -im1 'SHA-256 digest' apk-certs.txt | awk '{print $NF}' | tr -d '\r: ' || true)"
