@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.4.9] - 2026-11-22
+
+### Fixed
+- 修复 v0.4.8 发布时 tag 重建导致的 Release 状态异常：本版重新走完整 CI 发布链路，确保 latest.json 与安装包一致。
+
 ## [v0.4.8] - 2026-11-22
 
 ### Added
