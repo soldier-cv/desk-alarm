@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.4.8] - 2026-11-22
+
 ### Added
 - 安卓端原生常驻推送：`DeskAlarmKeepAliveService` 在原生层持有 WebSocket + 20 秒心跳 + PARTIAL_WAKE_LOCK，锁屏后不再依赖被冻结的 WebView JS，到点即时弹通知。强/弱提醒分两个通知渠道（强=高重要度+震动+锁屏可见+重复到处理，弱=静音）。JS 侧不再重复弹系统通知。
 - 桌面端强/弱通知区分：强提醒通知标注「需要立即处理」并响铃，弱提醒静音。
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 ### Fixed
 - 到期只弹一条通知；输入框焦点只画外框一圈。
 - 手动装了新版本后桌面端「有更新」标记残留。
+- 移动端「静音」曾错误地记成一条理由为 silence 的忽略，还会误触发自动降级；现在静音只停铃、不记忽略。
 
 ## [v0.4.7] - 2026-11-22
 

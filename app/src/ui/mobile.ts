@@ -267,8 +267,12 @@ async function act(id: string, action: AckAction) {
       if (rt?.ack(id, 'snooze', to)) { /* WS 即时停铃 */ }
       await api.snooze(id, { to });
     } else if (action === 'silence') {
-      if (rt?.ack(id, 'silence')) { /* noop */ }
-      await api.dismiss(id, 'silence');
+      // 静音 = 只停这一次的铃，不写忽略记录、不计入降级。
+      // 服务端 onAck('silence') 负责停铃并广播给别的设备，别再调 dismiss。
+      if (!rt?.ack(id, 'silence')) {
+        toast('未连接，静音未生效，请稍后重试');
+        return;
+      }
     } else {
       if (rt?.ack(id, 'done')) { /* noop */ }
       await api.done(id);
