@@ -7,8 +7,8 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, getMachineId, getPlatform, hhmm, hostOf,
   loadConfig, normalizeBaseUrl, onUnauthorized, parseInput, probeServer, saveConfig, serverNow,
-  switchServer,
-  type AckAction, type Entry, type ServerMessage, type Settings, type User,
+  switchServer, urgencyOf,
+  type AckAction, type Entry, type ServerMessage, type Settings, type Urgency, type User,
 } from '../api';
 import { AlarmController, pushWeak } from '../alarm';
 import { applyTheme, loadTheme, saveTheme, THEMES } from '../theme';
@@ -63,13 +63,13 @@ function toast(msg: string) {
   toastTimer = window.setTimeout(() => el!.classList.remove('on'), 2600);
 }
 
-function urgency(e: Entry): '' | 'due' | 'close' | 'over' {
-  if (e.status === 'done' || e.remindAt === null) return '';
-  if (e.status === 'missed') return 'over';
-  const ms = e.remindAt - serverNow();
-  if (ms <= 15 * 60_000) return 'due';
-  if (ms <= 60 * 60_000) return 'close';
-  return '';
+/** 级别点：跟桌面端同一套 urgencyOf 分级，含 soon 档 */
+function udot(u: Urgency): string {
+  return u === 'none' ? '' : `<i class="udot ${u}"></i>`;
+}
+
+function urgency(e: Entry): Urgency {
+  return urgencyOf(e);
 }
 
 /* ------------------------------------------------------------ 骨架 */
@@ -181,6 +181,12 @@ function renderListHead() {
   });
 }
 
+function entryTimeText(e: Entry): string {
+  const when = e.remindAt === null ? '收集箱 · 无时间' : `${dayLabel(e.remindAt)} ${hhmm(e.remindAt)}`;
+  const late = e.status === 'missed' && e.firedAt ? ` · 迟了 ${Math.max(1, Math.round((serverNow() - e.firedAt) / 60_000))} 分钟` : '';
+  return when + late;
+}
+
 function renderEntries() {
   const box = document.getElementById('list-scroll');
   if (!box) return;
@@ -190,15 +196,13 @@ function renderEntries() {
   }
   box.innerHTML = entries.map((e) => {
     const u = urgency(e);
-    const when = e.remindAt === null ? '收集箱 · 无时间' : `${dayLabel(e.remindAt)} ${hhmm(e.remindAt)}`;
-    const late = e.status === 'missed' && e.firedAt ? ` · 迟了 ${Math.max(1, Math.round((serverNow() - e.firedAt) / 60_000))} 分钟` : '';
     const desc = e.url ? hostOf(e.url) : e.path ?? '';
-    return `<div class="entry ${u}" data-id="${esc(e.id)}">
+    return `<div class="entry ${u === 'none' ? '' : 'u-' + u}" data-id="${esc(e.id)}" data-u="${u}">
       <div class="row1">
         <div class="txt ${e.status === 'done' ? 'done' : ''}">${esc(e.text)}</div>
       </div>
       <div class="meta">
-        <span class="${u === 'due' || u === 'over' ? 'hot' : ''}">${esc(when)}${esc(late)}</span>
+        <span class="${u === 'due' || u === 'over' ? 'hot' : ''}">${udot(u)}<span class="time-text">${esc(entryTimeText(e))}</span></span>
         ${e.strength === 'strong' ? '<span>强提醒</span>' : ''}
         ${desc ? `<span>${esc(desc)}</span>` : ''}
       </div>
@@ -216,6 +220,32 @@ function renderEntries() {
       btn.onclick = () => void act(id, btn.dataset.act as AckAction);
     });
   });
+}
+
+/**
+ * 临近度随时间自己走，事件刷新不推进它，所以每 20 秒原地更新行，
+ * 不重建 innerHTML：滚动位置和正在按的按钮都不丢
+ */
+function tickUrgency() {
+  const box = document.getElementById('list-scroll');
+  if (!box || view !== 'today' || entries.length === 0) return;
+  for (const e of entries) {
+    if (e.status === 'done' || e.remindAt === null) continue;
+    const row = box.querySelector<HTMLElement>(`[data-id="${CSS.escape(e.id)}"]`);
+    if (!row) continue;
+    const u = urgencyOf(e);
+    const label = entryTimeText(e);
+    if (row.dataset.u === u && row.dataset.tl === label) continue;
+    row.dataset.u = u;
+    row.dataset.tl = label;
+    row.classList.remove('u-soon', 'u-close', 'u-due', 'u-over');
+    if (u !== 'none') row.classList.add(`u-${u}`);
+    const meta = row.querySelector<HTMLElement>('.meta > span');
+    if (meta) {
+      meta.classList.toggle('hot', u === 'due' || u === 'over');
+      meta.innerHTML = `${udot(u)}<span class="time-text">${esc(label)}</span>`;
+    }
+  }
 }
 
 async function loadList() {
@@ -500,6 +530,8 @@ async function boot() {
   setView('capture');
   connect();
   void refresh();
+  // 梯度随时间推进：20 秒原地刷新一次，和桌面端一致
+  window.setInterval(tickUrgency, 20_000);
 }
 
 onUnauthorized(() => { rt?.close(); location.reload(); });

@@ -6,6 +6,10 @@
   --line: #24262A; --line-input: #6A6E75; --line-ctrl: #6A6E75; --line-soft: #1B1D20;
   --text: #ECEDEF; --muted: #8C9097; --dim: #82868D;
   --flare: #FF5C2B; --on-flare: #140A06; --flare-tint: rgba(255,92,43,.12); --flare-line: rgba(255,92,43,.38);
+  /* 临近梯度的四档浓度。不用 color-mix：旧安卓 WebView 不支持，会整条渐变失效 */
+  --flare-05: rgba(255,92,43,.05); --flare-09: rgba(255,92,43,.09);
+  --flare-14: rgba(255,92,43,.14); --flare-19: rgba(255,92,43,.19);
+  --dot-soon: #6B5A4E; --dot-close: #B07A52;
   --ok: #6FA392; --offline-dot: #9AA0A6; --danger-text: #FF8A7C; --warn-text: #C9A186;
   --chip-hot-text: #FFB292; --scroll-thumb: #2A2D31;
   color-scheme: dark;
@@ -20,6 +24,9 @@
   --line: #D5CFC4; --line-input: #8C8477; --line-ctrl: #8C8477; --line-soft: #DDD7CC;
   --text: #3C3833; --muted: #635C53; --dim: #6A635A;
   --flare: #8C4A3F; --on-flare: #FBF8F3; --flare-tint: rgba(140,74,63,.10); --flare-line: rgba(140,74,63,.34);
+  --flare-05: rgba(140,74,63,.05); --flare-09: rgba(140,74,63,.09);
+  --flare-14: rgba(140,74,63,.14); --flare-19: rgba(140,74,63,.19);
+  --dot-soon: #9A8D7E; --dot-close: #A5764F;
   --ok: #4E6F62; --offline-dot: #8C8477; --danger-text: #8E3B30; --warn-text: #8A5A34;
   --chip-hot-text: #7C4137; --scroll-thumb: #C9C1B3;
   --shadow: 0 18px 44px rgba(60,56,51,.18);
@@ -91,14 +98,30 @@ button { cursor: pointer; }
   background: var(--surface); border: 1px solid var(--line-soft); border-left: 3px solid transparent;
   border-radius: var(--r); padding: 13px 14px; margin-bottom: 10px;
 }
-.entry.due { border-left-color: var(--flare); }
-.entry.close { border-left-color: var(--warn-text); }
-.entry.over { border-left-color: var(--danger-text); }
+/* 临近梯度：强调色从行首渗入，越近越浓。和桌面端同款四档，
+   background-color 与 background-image 是两层，互不覆盖 */
+.entry.u-soon  { background-image: linear-gradient(90deg, var(--flare-05), transparent 55%); }
+.entry.u-close { background-image: linear-gradient(90deg, var(--flare-09), transparent 62%); }
+.entry.u-due   { background-image: linear-gradient(90deg, var(--flare-14), transparent 70%); }
+.entry.u-over  { background-image: linear-gradient(90deg, var(--flare-19), transparent 70%); }
+.entry.u-soon  { border-left-color: var(--dot-soon); }
+.entry.u-close { border-left-color: var(--dot-close); }
+.entry.u-due   { border-left-color: var(--flare); }
+.entry.u-over  { border-left-color: var(--danger-text); }
 .entry .row1 { display: flex; align-items: flex-start; gap: 10px; }
 .entry .txt { flex: 1; min-width: 0; line-height: 1.5; word-break: break-word; }
 .entry .txt.done { color: var(--muted); text-decoration: line-through; }
 .entry .meta { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 10px; }
 .entry .meta .hot { color: var(--chip-hot-text); }
+.entry.u-due .meta .hot, .entry.u-over .meta .hot { color: var(--flare-text, var(--chip-hot-text)); }
+/* 时间前的级别点：颜色随梯度变暖，due 档呼吸，只动透明度 */
+.udot { width: 5px; height: 5px; border-radius: 2px; flex: none; display: inline-block; margin-right: 5px; }
+.udot.soon { background: var(--dot-soon); }
+.udot.close { background: var(--dot-close); }
+.udot.due, .udot.over { background: var(--flare); }
+.udot.due { animation: breathe 2.6s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .udot.due { animation: none; } }
 .entry .acts { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .entry .acts button { flex: 1; min-width: 72px; padding: 8px; font-size: 13px; }
 .empty { text-align: center; color: var(--muted); padding: 60px 24px; line-height: 1.7; }
