@@ -753,117 +753,13 @@ try {
   ok('试响走 ws', pingSelf.json?.via === 'ws');
   ok('试响推到 entry.fired', !!(await cb.waitFor('entry.fired', 4000, 'ping')));
 
-  /* --------------------------------------------- 账号 PIN（兼容）与设备锁定 */
-  console.log('\n账号 PIN（兼容）与设备锁定');
-  // 用一台不连 WS 的专用设备：锁定期间投递堆在 pending，解锁后走 /missed 补发，
-  // 不会被 WS 轮转成功后改写成 delivered 干扰断言
+  /* --------------------------------------------------- 设备 lastIp */
   const lockLogin = await api('/auth/login', {
     method: 'POST',
-    body: { username: 'admin', password: 'test-pass-123', deviceName: '锁定测试机', platform: 'windows', machineId: 'machine-lock' },
+    body: { username: 'admin', password: 'test-pass-123', deviceName: '测试机', platform: 'windows', machineId: 'machine-lock' },
   });
-  const tl = lockLogin.json.token, dl = lockLogin.json.device?.id;
-  ok('锁定测试设备建好', lockLogin.status === 200 && !!dl);
-  ok('登录响应 hasPin 恒为 false（服务端不持有 PIN）', lockLogin.json.user?.hasPin === false,
-    String(lockLogin.json.user?.hasPin));
   ok('登录记录了 lastIp', typeof lockLogin.json.device?.lastIp === 'string',
     String(lockLogin.json.device?.lastIp));
-
-  const lockNoPin = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: true } });
-  ok('没有账号 PIN 也能锁定（PIN 只在设备本机）', lockNoPin.status === 200, `status=${lockNoPin.status}`);
-
-  const badPinFormat = await api('/pin', { method: 'POST', token: tl, body: { pin: '12345', currentPassword: 'test-pass-123' } });
-  ok('非 6 位 PIN 被拒 400', badPinFormat.status === 400, `status=${badPinFormat.status}`);
-  const setNoPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '432189' } });
-  ok('首次设 PIN 不带账号密码也被拒 401', setNoPw.status === 401, `status=${setNoPw.status}`);
-  const setBadPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '432189', currentPassword: 'wrong-pass-123' } });
-  ok('首次设 PIN 密码错误被拒 401', setBadPw.status === 401, `status=${setBadPw.status}`);
-  const setPin = await api('/pin', { method: 'POST', token: tl, body: { pin: '432189', currentPassword: 'test-pass-123' } });
-  ok('首次设置 PIN 成功', setPin.status === 200 && setPin.json.ok === true,
-    `status=${setPin.status} ${JSON.stringify(setPin.json)}`);
-  ok('whoami 不暴露账号 PIN（恒为 false）', (await api('/auth/whoami', { token: tl })).json.user?.hasPin === false);
-  const relog = await api('/auth/login', {
-    method: 'POST',
-    body: { username: 'admin', password: 'test-pass-123', deviceName: '锁定测试机', platform: 'windows', machineId: 'machine-lock' },
-  });
-  ok('重登后 hasPin 仍为 false（PIN 在设备本机）', relog.json.user?.hasPin === false,
-    String(relog.json.user?.hasPin));
-
-  const changeNoPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '567890' } });
-  ok('改 PIN 不带账号密码被拒 401', changeNoPw.status === 401, `status=${changeNoPw.status}`);
-  const changeBadPw = await api('/pin', { method: 'POST', token: tl, body: { pin: '567890', currentPassword: 'nope' } });
-  ok('改 PIN 密码错误被拒 401', changeBadPw.status === 401, `status=${changeBadPw.status}`);
-  const changeOk = await api('/pin', { method: 'POST', token: tl, body: { pin: '567890', currentPassword: 'test-pass-123' } });
-  ok('带对账号密码改 PIN 成功', changeOk.status === 200, `status=${changeOk.status}`);
-
-  const lock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: true } });
-  ok('设了 PIN 后能锁定', lock.status === 200, `status=${lock.status} ${JSON.stringify(lock.json)}`);
-  ok('device.locked 为真', lock.json.device?.locked === true);
-  ok('默认锁定原因是 manual', lock.json.device?.lockReason === 'manual',
-    String(lock.json.device?.lockReason));
-  const listedLock = (await api('/devices', { token: tl })).json.devices?.find((d) => d.id === dl);
-  ok('设备列表也反映锁定状态', listedLock?.locked === true && listedLock?.lockReason === 'manual',
-    JSON.stringify(listedLock));
-
-  // 锁定设备照样入 outbox，但 takePending 联 devices 排除 locked=true，所以不重试也不投递
-  const lockedEntry = await api('/entries', {
-    method: 'POST', token: tl,
-    body: { text: '锁定期间该堆着不投', remindAt: Date.now() + 500, strength: 'strong', devices: [dl] },
-  });
-  const lId = lockedEntry.json.entry?.id;
-  ok('锁定期间仍能建提醒', !!lId);
-  await waitUntil(async () => {
-    const r = await c1.query(
-      'SELECT fire_key FROM deliveries WHERE entry_id = $1 AND device_id = $2', [lId, dl]);
-    return r.rowCount === 1;
-  }, '锁定设备的投递行生成');
-  await sleep(700);
-  const held = await c1.query(
-    `SELECT state, attempts, last_error FROM deliveries WHERE entry_id = $1 AND device_id = $2`,
-    [lId, dl]);
-  ok('锁定设备的投递留在 pending', held.rows[0]?.state === 'pending', JSON.stringify(held.rows[0]));
-  ok('锁定设备完全没被尝试投递', held.rows[0]?.attempts === 0 && held.rows[0]?.last_error === null,
-    JSON.stringify(held.rows[0]));
-  ok('锁定设备的提醒判为 missed',
-    (await api(`/entries/${lId}`, { token: tl })).json.entry?.status === 'missed');
-
-  // PIN 改为设备本机持有后，服务端不再校验解锁 PIN：客户端本地验过才会调这个接口
-  const noPinUnlock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false } });
-  ok('解锁不再由服务端校验 PIN', noPinUnlock.status === 200 && noPinUnlock.json.device?.locked === false,
-    `status=${noPinUnlock.status} ${JSON.stringify(noPinUnlock.json)}`);
-
-  const unlock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false, pin: '567890' } });
-  ok('带 PIN 解锁同样成功（PIN 被服务端忽略）', unlock.status === 200 && unlock.json.device?.locked === false,
-    `status=${unlock.status} ${JSON.stringify(unlock.json)}`);
-  ok('解锁清掉 lockReason', unlock.json.device?.lockReason === null,
-    String(unlock.json.device?.lockReason));
-
-  // 解锁后这些 pending 应该被 findMissed 读到。等过 MISSED_AFTER_MS
-  await sleep(1700);
-  const missed = await api('/missed', { token: tl });
-  ok('解锁后 /missed 补回锁定期间的提醒',
-    (missed.json.missed ?? []).some((m) => m.entry?.id === lId),
-    JSON.stringify((missed.json.missed ?? []).map((m) => m.entry?.id)));
-
-  const sysLock = await api('/devices/lock', {
-    method: 'POST', token: tl, body: { locked: true, reason: 'system' },
-  });
-  ok('system 原因可锁定', sysLock.status === 200 && sysLock.json.device?.lockReason === 'system',
-    `status=${sysLock.status} ${JSON.stringify(sysLock.json.device)}`);
-  const sysUnlock = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false } });
-  ok('system 锁定可无 PIN 解锁', sysUnlock.status === 200 && sysUnlock.json.device?.locked === false,
-    `status=${sysUnlock.status} ${JSON.stringify(sysUnlock.json)}`);
-  const manualAgain = await api('/devices/lock', { method: 'POST', token: tl, body: { locked: true } });
-  ok('再次 manual 锁定成功', manualAgain.status === 200);
-  ok('manual 锁定可直接解锁（本机验 PIN）',
-    (await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false } })).status === 200);
-  await api('/devices/lock', { method: 'POST', token: tl, body: { locked: false, pin: '5678' } });
-
-  const delPinBad = await api('/pin', { method: 'DELETE', token: tl, body: { currentPassword: 'nope' } });
-  ok('删 PIN 密码错误被拒 401', delPinBad.status === 401, `status=${delPinBad.status}`);
-  const delPin = await api('/pin', { method: 'DELETE', token: tl, body: { currentPassword: 'test-pass-123' } });
-  ok('带账号密码删 PIN 成功', delPin.status === 200 && delPin.json.ok === true,
-    `status=${delPin.status}`);
-  ok('删完 hasPin 回到 false', (await api('/auth/whoami', { token: tl })).json.user?.hasPin === false);
 
   /* --------------------------------------------------- 我的看板 */
   console.log('\n我的看板 /stats/me');
@@ -924,3 +820,5 @@ try {
   }
   process.exit(fail === 0 ? 0 : 1);
 }
+
+

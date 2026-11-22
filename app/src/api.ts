@@ -274,19 +274,6 @@ export const api = {
   patchSettings: (p: Partial<Settings>) =>
     req<{ settings: Settings }>('/settings', { method: 'PATCH', body: JSON.stringify(p) }),
 
-  setPin: (pin: string, currentPassword?: string) =>
-    req<{ ok: true }>('/pin', {
-      method: 'POST', body: JSON.stringify({ pin, ...(currentPassword ? { currentPassword } : {}) }),
-    }),
-
-  deletePin: (currentPassword: string) =>
-    req<{ ok: true }>('/pin', { method: 'DELETE', body: JSON.stringify({ currentPassword }) }),
-
-  lockDevice: (locked: boolean, pin?: string, reason?: 'manual' | 'system') =>
-    req<{ device: Device }>('/devices/lock', {
-      method: 'POST', body: JSON.stringify({ locked, ...(pin ? { pin } : {}), ...(reason ? { reason } : {}) }),
-    }),
-
   myStats: () => req<MyStats>('/stats/me'),
 
   missed: () => req<{ missed: MissedFire[] }>('/missed'),

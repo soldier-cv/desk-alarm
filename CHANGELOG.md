@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+- 设置页新增「测试提醒」：可实际触发一次强/弱提醒，确认响铃、接管窗口、横幅的效果。
+
+### Changed
+- 桌面端统一界面观感：时间选择、下拉选择改为自绘组件（复用日期选择器风格，与主题一致，分钟可任意选）；眼睛图标去掉方框；更新按钮与设置按钮移到左下角（更新为下载图标，有更新时变蓝，设置为齿轮图标）。
+- 移除 PIN 码与设备锁定整套功能（含 Win+L 自动锁定、服务端 `/pin` 与 `/devices/lock`、会话锁屏检测）：实测锁屏自动锁定无实用价值，PIN 解锁徒增摩擦，提醒靠 WS 通道送达。
+
 ### Fixed
 - 修复安卓端应用内更新报 `plugin:apk-installer|download_and_install not allowed by ACL`：在 build.rs 里为 apk-installer / push 两个自定义 Android 插件声明 commands 生成 ACL 权限，capability 授予 default 权限。
 

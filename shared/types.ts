@@ -29,7 +29,6 @@ export interface User {
   username: string;
   role: Role;
   disabled: boolean;
-  hasPin: boolean;
   createdAt: number;
 }
 
@@ -113,8 +112,6 @@ export interface Device {
   online: boolean;
   /** 有没有配好推送凭据。Android 上没配 token 就等于收不到 */
   pushReady: boolean;
-  locked: boolean;
-  lockReason: 'manual' | 'system' | null;
   /** 最近一次登录的 IP，只在本人设备列表展示 */
   lastIp: string | null;
   lastSeenAt: number;

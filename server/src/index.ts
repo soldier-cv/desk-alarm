@@ -14,7 +14,6 @@ import { mcpRoutes } from './routes/mcp.js';
 import { adminRoutes } from './routes/admin.js';
 import { agentTokenRoutes } from './routes/agent-tokens.js';
 import { agentApiRoutes } from './routes/agent-api.js';
-import { pinRoutes } from './routes/pin.js';
 import { statsRoutes } from './routes/stats.js';
 import { allowAppOrigins } from './cors.js';
 
@@ -99,11 +98,6 @@ await app.register(
 // entryRoutes 内部用了 app 级 preHandler，共用实例的话钩子会泄漏到 /auth/login
 await app.register(
   async (api) => { await deviceRoutes(api); },
-  { prefix: '/api/v1' },
-);
-
-await app.register(
-  async (api) => { await pinRoutes(api); },
   { prefix: '/api/v1' },
 );
 

@@ -6,7 +6,7 @@ import { hub } from '../hub.js';
 import { log } from '../log.js';
 import { one } from '../db.js';
 import {
-  deleteDevice, getDeviceOwned, listDevices, renameDevice, setLocked, setPushEnabled,
+  deleteDevice, getDeviceOwned, listDevices, renameDevice, setPushEnabled,
 } from '../repo/devices.js';
 
 export async function deviceRoutes(app: FastifyInstance) {
@@ -43,42 +43,6 @@ export async function deviceRoutes(app: FastifyInstance) {
   app.get('/devices', { preHandler: requireHuman }, async (req) => ({
     devices: await listDevices(req.session!.user.id),
   }));
-
-  // 只动当前会话自己的设备：锁的是「这一台」，不是把账号下所有设备一起锁掉
-  app.post('/devices/lock', { preHandler: requireHuman }, async (req, reply) => {
-    const session = req.session!;
-    const dev = session.device;
-    if (!dev) {
-      return reply.code(404).send({ error: 'NO_DEVICE', message: '当前会话没有关联设备' });
-    }
-    // 手机锁屏/切后台是常态，锁了就拿不到提醒；这个能力只对桌面端有意义
-    if (dev.platform === 'android' || dev.platform === 'ios') {
-      return reply.code(400).send({ error: 'UNSUPPORTED_PLATFORM', message: '移动端不支持锁定' });
-    }
-
-    const body = req.body as { locked?: boolean; pin?: string; reason?: 'manual' | 'system' };
-    if (typeof body.locked !== 'boolean') {
-      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'locked 必须是布尔值' });
-    }
-    if (body.reason !== undefined && body.reason !== 'manual' && body.reason !== 'system') {
-      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'reason 只能是 manual 或 system' });
-    }
-
-    const userId = session.user.id;
-    // PIN 现在是设备本机的屏幕锁，服务端不持有也不校验；locked 只控制投递层。
-    // 客户端本地验过 PIN 后才会请求解锁，旧的 pin 字段留着兼容但忽略。
-    await setLocked(
-      dev.id,
-      body.locked,
-      body.locked ? (body.reason ?? 'manual') : undefined,
-    );
-
-    const devices = await listDevices(userId);
-    hub.broadcastToUser(userId, { t: 'devices.changed', devices });
-    const updated = devices.find((d) => d.id === dev.id)!;
-    session.device = updated;
-    return { device: updated };
-  });
 
   app.patch('/devices/:id', { preHandler: requireHuman }, async (req, reply) => {
     const id = (req.params as { id: string }).id;

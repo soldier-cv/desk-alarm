@@ -1,6 +1,5 @@
 mod commands;
 mod logging;
-mod session;
 mod update;
 mod windows;
 
@@ -86,7 +85,6 @@ pub fn run() {
             logging::prune_on_startup(&handle);
             // 上次安装被中断留下的包，启动后清掉
             update::cleanup_installers(&handle);
-            session::start(handle.clone());
 
             #[cfg(desktop)]
             {

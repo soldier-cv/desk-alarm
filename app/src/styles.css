@@ -33,6 +33,8 @@
   /* 强调色只用于到点 / 逾期 / 主行动 */
   --flare: #FF5C2B;
   --flare-text: #FF5C2B;      /* 强调色当文字用时的值，浅色主题下和背景色不同 */
+  --update: #4a9eff;          /* 左下角更新图标：有可用更新时 */
+  --update-hover: #6fb3ff;
   --on-flare: #140A06;        /* 压在强调色实心块上的字 */
   --flare-hover: #FF7448;
   --flare-tint: rgba(255, 92, 43, .12);
@@ -83,6 +85,8 @@
   /* 陶土红。比 #FF5C2B 灰，是莫兰迪里最接近「提醒」的暖色 */
   --flare: #8C4A3F;
   --flare-text: #8C4A3F;
+  --update: #2f6fbf;          /* 莫兰迪下更沉的蓝 */
+  --update-hover: #4a86d0;
   --on-flare: #FBF8F3;
   --flare-hover: #7C4137;
   --flare-tint: rgba(140, 74, 63, .10);
@@ -441,6 +445,12 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .statusbar .sp { flex: 1; }
 .statusbar b { color: var(--muted); font-weight: 500; }
 .statusbar .skew.warn, .statusbar .skew.warn #s-skew { color: var(--flare); }
+/* 左下角图标按钮：设置 / 更新。有更新时更新图标变蓝 */
+.icon-btn { display: inline-grid; place-items: center; width: 22px; height: 20px; flex: none;
+  border: none; background: none; color: var(--dim); cursor: pointer; border-radius: var(--r-sm); }
+.icon-btn:hover { color: var(--text); background: var(--hover); }
+.icon-btn.has-update { color: var(--update); }
+.icon-btn.has-update:hover { color: var(--update-hover); }
 .mono { font-family: var(--mono); }
 
 .empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 52px 24px; text-align: center; }
@@ -545,11 +555,11 @@ select.input:focus-visible { outline: 2px solid var(--flare-line); outline-offse
 .pwd-field { position: relative; display: flex; align-items: center; }
 .pwd-field .input { width: 100%; padding-right: 40px; }
 .eye {
-  position: absolute; right: 4px; width: 28px; height: 26px;
-  border: 1px solid var(--line-ctrl); border-radius: var(--r-sm);
-  background: var(--raised); color: var(--muted); font-size: 11px; cursor: pointer;
+  position: absolute; right: 6px; width: 24px; height: 24px;
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  display: grid; place-items: center; padding: 0;
 }
-.eye:hover { color: var(--text); border-color: var(--flare); }
+.eye:hover { color: var(--flare); }
 .eye .ico-off { display: none; }
 .eye.off .ico-on { display: none; }
 .eye.off .ico-off { display: block; }
@@ -584,6 +594,35 @@ select.input:focus-visible { outline: 2px solid var(--flare-line); outline-offse
 .dp-time select { width: 88px; }
 .dp-time span { color: var(--muted); }
 .dp-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+/* ---------- 自绘下拉 / 时间选择（复用 dp-pop 外观） ---------- */
+.dd-pop { width: auto; min-width: 140px; max-width: 280px; padding: 5px; }
+.dd-item { display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  width: 100%; min-height: 30px; padding: 5px 9px; border-radius: var(--r-sm);
+  color: var(--text); font-size: 13px; text-align: left; white-space: nowrap; }
+.dd-item:hover { background: var(--hover); }
+.dd-item.on { color: var(--flare-text); }
+.dd-check { opacity: 0; color: var(--flare); }
+.dd-item.on .dd-check { opacity: 1; }
+
+.tp-pop { width: 236px; }
+.tp-head { text-align: center; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.tp-cols { display: flex; align-items: stretch; gap: 4px; height: 168px; }
+.tp-col { flex: 1; overflow-y: auto; border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  background: var(--raised); scrollbar-width: thin; }
+.tp-cell { display: block; width: 100%; height: 28px; font-size: 12px; color: var(--text);
+  font-variant-numeric: tabular-nums; border-radius: 0; }
+.tp-cell:hover { background: var(--hover); }
+.tp-cell.on { background: var(--flare); color: var(--on-flare); font-weight: 600; }
+.tp-sep { align-self: center; color: var(--muted); font-size: 16px; }
+
+/* 自绘控件触发器：外观沿用 .input，内部label+箭头/时钟 */
+.trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  text-align: left; cursor: pointer; }
+.trigger .trigger-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trigger .trigger-arrow { color: var(--muted); flex: none; font-size: 12px; }
+.trigger:hover { border-color: var(--flare); }
+.dp-time-btn { width: 100%; }
 
 /* ---------- 看板与设置：统一的 8px 节奏、明确的数字层级 ---------- */
 .dash-hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 18px; }
@@ -644,18 +683,6 @@ select.input:focus-visible { outline: 2px solid var(--flare-line); outline-offse
 .bar-done { display: block; width: 100%; background: var(--ok); }
 .bar-miss { display: block; width: 100%; background: var(--flare); }
 .bar-col span { font-family: var(--mono); font-size: 10px; color: var(--dim); }
-
-/* 设备锁定遮罩 */
-.lock-screen { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
-  background: var(--bg); backdrop-filter: blur(6px); }
-.lock-card { width: min(340px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 12px; text-align: center; }
-.lock-card .logo.lg { width: 34px; height: 34px; border-radius: 9px; margin: 0 auto;
-  background: var(--flare); display: grid; place-items: center; }
-.lock-card .logo.lg i { width: 12px; height: 12px; border-radius: 3px; background: var(--on-flare); }
-.lock-card h1 { font-size: 20px; font-weight: 650; }
-.lock-card p { font-size: 12px; color: var(--muted); line-height: 1.6; }
-.lock-card .input { text-align: center; font-family: var(--mono); letter-spacing: .2em; }
-.lock-card .btn { height: 40px; }
 
 @media (max-width: 1100px) {
   .body { grid-template-columns: 168px minmax(0, 1fr) 270px; }

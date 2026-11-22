@@ -14,9 +14,21 @@ import {
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
-import { clearDevicePin, hasDevicePin, setDevicePin, verifyDevicePin } from '../device-pin';
 import { THEMES, applyTheme, loadTheme, saveTheme } from '../theme';
+import { openDropdown, openTimePicker } from '../widgets';
 import '../styles.css';
+
+/** 自绘触发器当前值（替代原生 select/input 的 .value） */
+function trigVal(id: string): string {
+  return (document.getElementById(id) as HTMLElement | null)?.dataset.v ?? '';
+}
+function setTrig(id: string, value: string, label: string) {
+  const el = document.getElementById(id) as HTMLElement | null;
+  if (!el) return;
+  el.dataset.v = value;
+  const l = el.querySelector<HTMLElement>('.trigger-label');
+  if (l) l.textContent = label;
+}
 
 /** 与 src-tauri/src/update.rs 的 UpdateInfo 对应 */
 interface UpdateInfo {
@@ -66,15 +78,33 @@ function ringPing(args: Record<string, unknown>) {
   quiet('ping', args);
 }
 
+/** 设置页「测试提醒」：按当前设置实际弹一次，用来确认强弱提醒表现 */
+function testReminder(strength: 'weak' | 'strong') {
+  const now = serverNow();
+  const fake: Entry = {
+    id: `test-${strength}-${now}`,
+    text: strength === 'strong' ? '强提醒测试：这是一条需要立即处理的提醒' : '弱提醒测试：这是一条轻提醒',
+    kind: 'text', url: null, path: null, note: null,
+    remindAt: now, repeat: 'none', status: 'pending', strength,
+    bypassQuiet: true, hard: false, firedAt: now, doneAt: null, doneDevice: null,
+    snoozeCount: 0, dismissCount: 0, source: 'app', devices: ['*'],
+    version: 1, createdAt: now, updatedAt: now,
+  };
+  if (strength === 'strong') {
+    ringPing({ title: '需要立即处理', body: fake.text });
+    send('takeover:show', { entry: fake, stage: 'banner', muted: false });
+    flash('强提醒已触发：接管窗口 + 系统通知');
+  } else {
+    ringPing({ title: '提醒', body: fake.text });
+    pushWeak(fake);
+    flash('弱提醒已触发：系统通知 + 顶部横幅');
+  }
+}
+
 /** 跨窗口事件。浏览器里没有 Tauri 事件系统，emit 一样会同步抛，不能直接调 */
 function send(name: string, payload: unknown = {}) {
   if (!hasTauri()) return;
   void emit(name, payload).catch(() => { /* 窗口已关 */ });
-}
-
-function on<T>(name: string, fn: (payload: T) => void) {
-  if (!hasTauri()) return;
-  void listen<T>(name, (ev) => fn(ev.payload)).catch(() => { /* 窗口已关 */ });
 }
 
 /* ------------------------------------------------------------ 状态 */
@@ -220,7 +250,7 @@ function renderLogin() {
       const serverPlatform = web ? 'web' : platform === 'macos' ? 'mac' : platform;
       const r = await api.login(username, code.value, name, serverPlatform);
       saveConfig({ user: r.user, deviceName: name, token: r.token, device: r.device });
-      afterAuth();
+      boot();
       // Web 本来就故意不建设备；桌面端没拿到才需要提醒用户
       if (!web && !r.device) flash('服务端没建设备，实时提醒不可用');
     } catch (e) {
@@ -323,7 +353,7 @@ function renderSetup() {
       const machineId = await getMachineId();
       const r = await api.setup({ username, password, confirmPassword: confirm, machineId });
       saveConfig({ token: r.token, user: r.user, device: r.device });
-      afterAuth();
+      boot();
     } catch (e) {
       err.textContent = e instanceof ApiError ? e.message : '连不上服务端，确认地址和服务是否在跑';
       go.disabled = false;
@@ -373,9 +403,7 @@ function renderShell() {
       <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
       <button class="btn sm no-drag" id="btn-theme" title="切换配色"></button>
       ${isDesktop() ? `
-      <button class="btn sm no-drag" id="btn-lock" title="锁定本机">锁定</button>
-      <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>
-      <button class="btn sm no-drag" id="btn-update" title="检查更新">更新</button>` : ''}
+      <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>` : ''}
     </div>
 
     <div id="weak-host"></div>
@@ -408,6 +436,12 @@ function renderShell() {
     </div>
 
     <div class="statusbar">
+      <button class="icon-btn" id="btn-settings" title="设置" aria-label="设置">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.98 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.98a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.03Z"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-update" title="检查更新" aria-label="检查更新">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v3h16v-3"/></svg>
+      </button>
       <span id="s-server">服务端 -</span>
       <span class="skew">时钟偏差 <span class="mono" id="s-skew">0 ms</span></span>
       <div class="sp"></div>
@@ -419,10 +453,9 @@ function renderShell() {
 
   if (isDesktop()) {
     $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
-    $<HTMLButtonElement>('#btn-update')!.onclick = () => onTopUpdateClick();
   }
-  const lock = $<HTMLButtonElement>('#btn-lock');
-  if (lock) lock.onclick = () => void lockDevice('manual');
+  $<HTMLButtonElement>('#btn-update')!.onclick = () => onTopUpdateClick();
+  $<HTMLButtonElement>('#btn-settings')!.onclick = () => setView('settings');
   // 点连接状态就能换服务端地址，不用翻设置
   $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
   renderThemeButton();
@@ -572,8 +605,8 @@ function renderUpdateStatus() {
   if (status) {
     status.textContent = !r ? '尚未检查'
       : !r.available ? `上次检查 ${new Date(r.at).toLocaleString('zh-CN')}：${r.message || '已是最新'}`
-      : ready ? `v${r.version} 已下载，点「安装」开始安装`
-      : `发现 v${r.version}，点右上角「有更新」下载`;
+      : ready ? `v${r.version} 已下载，点左下角图标安装`
+      : `发现 v${r.version}，点左下角下载图标更新`;
   }
   const install = $<HTMLButtonElement>('#set-install');
   if (install) {
@@ -582,8 +615,10 @@ function renderUpdateStatus() {
   }
   const btn = $<HTMLButtonElement>('#btn-update');
   if (btn) {
-    btn.textContent = !r?.available ? '更新' : ready ? `安装 v${r.version}` : `有更新 v${r.version}`;
+    // 左下角只有图标：有更新时变蓝并提示版本号，平时普通色
     btn.classList.toggle('has-update', !!r?.available);
+    btn.title = !r?.available ? '检查更新' : ready ? `安装 v${r.version}` : `下载更新 v${r.version}`;
+    btn.setAttribute('aria-label', btn.title);
   }
 }
 
@@ -634,7 +669,7 @@ function autoCheckUpdate(force = false) {
     .then((info) => {
       if (!info) return;
       const r = rememberResult(info);
-      if (r.available) flash(`发现新版本 v${r.version}，点右上角「有更新」下载`);
+      if (r.available) flash(`发现新版本 v${r.version}，点左下角下载图标更新`);
     })
     .catch(() => { /* 后台检查失败不该打扰用户 */ });
 }
@@ -645,13 +680,13 @@ async function checkUpdate() {
   const setBtn = $<HTMLButtonElement>('#set-update');
   if (!hasTauri()) { flash('检查更新只在客户端里能用'); return; }
   const oldSet = setBtn?.textContent ?? '';
-  if (btn) { btn.disabled = true; btn.textContent = '检查中…'; }
+  if (btn) btn.disabled = true;
   if (setBtn) { setBtn.disabled = true; setBtn.textContent = '检查中…'; }
   try {
     const info = await invoke<UpdateInfo>('check_update');
     if (!info) return;
     const r = rememberResult(info);
-    flash(r.available ? `发现新版本 v${r.version}，点右上角「有更新」下载` : (info.message || '当前已是最新版本'));
+    flash(r.available ? `发现新版本 v${r.version}，点左下角下载图标更新` : (info.message || '当前已是最新版本'));
   } catch (err) {
     flash('检查更新失败：' + (err instanceof Error ? err.message : String(err)));
   } finally {
@@ -666,7 +701,7 @@ async function downloadUpdate() {
   if (!hasTauri()) return;
   const top = $<HTMLButtonElement>('#btn-update');
   const set = $<HTMLButtonElement>('#set-install');
-  if (top) { top.disabled = true; top.textContent = '下载中…'; }
+  if (top) top.disabled = true;
   if (set) { set.disabled = true; set.textContent = '下载中…'; }
   try {
     const version = await invoke<string>('download_update');
@@ -696,7 +731,7 @@ async function installUpdate() {
   if (!hasTauri()) return;
   const top = $<HTMLButtonElement>('#btn-update');
   const set = $<HTMLButtonElement>('#set-install');
-  if (top) { top.disabled = true; top.textContent = '安装中…'; }
+  if (top) top.disabled = true;
   if (set) { set.disabled = true; set.textContent = '安装中…'; }
   const prev = lastUpdateResult();
   // Windows 上插件启动安装器后就退出进程，invoke 的后续回调不一定执行，
@@ -717,7 +752,7 @@ async function installUpdate() {
   }
 }
 
-/** 右上角：没查过就检查，查到有更新先下载，下载完变成安装 */
+/** 左下角更新图标：没查过就检查，查到有更新先下载，下载完变成安装 */
 function onTopUpdateClick() {
   const r = lastUpdateResult();
   if (!r?.available) void checkUpdate();
@@ -725,7 +760,7 @@ function onTopUpdateClick() {
   else void downloadUpdate();
 }
 
-/** 设置页的按钮跟右上角走同一套两步流程 */
+/** 设置页的按钮跟左下角走同一套两步流程 */
 function onInstallClick() {
   const r = lastUpdateResult();
   if (!r?.available) return;
@@ -803,8 +838,8 @@ function renderSidebar() {
   const me = state.devices.find((d) => d.id === loadConfig().device?.id) ?? loadConfig().device;
   const others = state.devices.filter((d) => d.id !== me?.id);
   const bad = c.missed;
-  const devLabel = (d: Device) => d.locked ? '已锁定' : d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送';
-  const devDot = (d: Device) => d.locked ? 'warn' : d.online ? '' : d.pushReady ? 'off' : 'alert';
+  const devLabel = (d: Device) => d.online ? '在线' : d.pushReady ? d.transport.toUpperCase() : '未配推送';
+  const devDot = (d: Device) => d.online ? '' : d.pushReady ? 'off' : 'alert';
 
   $<HTMLElement>('#sidebar')!.innerHTML = `
     ${nav.map(([v, label, n]) => `
@@ -819,7 +854,6 @@ function renderSidebar() {
     <div class="nav-head">我的</div>
     <button class="nav ${state.view === 'mystats' ? 'on' : ''}" data-view="mystats">我的看板</button>
     <button class="nav ${state.view === 'tokens' ? 'on' : ''}" data-view="tokens">Agent 令牌</button>
-    <button class="nav ${state.view === 'settings' ? 'on' : ''}" data-view="settings">设置</button>
     <div class="nav-sep"></div>
     <div class="nav-head">推送设备</div>
     <div class="dev-list">
@@ -869,7 +903,7 @@ function renderDeviceStatus() {
   const el = $<HTMLElement>('#s-lock');
   if (!el) return;
   const me = state.devices.find((d) => d.id === loadConfig().device?.id) ?? loadConfig().device;
-  el.textContent = me?.locked ? '设备 已锁定' : me?.online === false ? '设备 离线' : '设备 在线';
+  el.textContent = me?.online === false ? '设备 离线' : '设备 在线';
 }
 
 function renderSettingsView(box: HTMLElement) {
@@ -882,9 +916,7 @@ function renderSettingsView(box: HTMLElement) {
       <div class="set-row"><div><b>主题</b><small>当前 <span id="set-theme"></span></small></div>
         <button class="btn sm" id="set-theme-btn"></button></div>
       <div class="set-row"><div><b>关闭主窗口</b><small>点标题栏 X 时做什么</small></div>
-        <select class="input sm" id="set-close">
-          <option value="quit">退出程序</option><option value="tray">隐藏到托盘</option>
-        </select></div>
+        <button type="button" class="input sm trigger" id="set-close" data-v="tray"><span class="trigger-label">隐藏到托盘</span><span class="trigger-arrow">⌄</span></button></div>
       ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随 Windows 登录，静默进托盘</small></div>
         <input type="checkbox" class="switch" id="set-auto"></div>` : ''}
       <div class="set-row"><div><b>自动检查更新</b><small>可选。开启后启动时和每 30 分钟检查一次，只提示不安装</small></div>
@@ -901,11 +933,9 @@ function renderSettingsView(box: HTMLElement) {
       <div class="set-grid">
         <label>弱提示升级秒数<input class="input" id="set-escalate" type="number" min="5" max="3600"></label>
         <label>重复间隔（秒，0 为不重复）<input class="input" id="set-repeat" type="number" min="0" max="86400"></label>
-        <label>静音开始<input class="input" id="set-quiet-start" type="time"></label>
-        <label>静音结束<input class="input" id="set-quiet-end" type="time"></label>
-        <label>声音<select class="input" id="set-sound">
-          <option value="system">系统提示音</option><option value="none">静音</option>
-        </select></label>
+        <button type="button" class="input sm trigger" id="set-quiet-start" data-v="23:30"><span class="trigger-label">23:30</span><span class="trigger-arrow">◷</span></button>
+        <button type="button" class="input sm trigger" id="set-quiet-end" data-v="07:00"><span class="trigger-label">07:00</span><span class="trigger-arrow">◷</span></button>
+        <label>声音<button type="button" class="input sm trigger" id="set-sound" data-v="system"><span class="trigger-label">系统提示音</span><span class="trigger-arrow">⌄</span></button></label>
         <label>忽略几次后降级<input class="input" id="set-downgrade" type="number" min="1" max="20"></label>
         <label>忽略几次后提示删除<input class="input" id="set-neglected" type="number" min="1" max="50"></label>
       </div>
@@ -913,29 +943,18 @@ function renderSettingsView(box: HTMLElement) {
     </section>
 
     <section class="set-card">
-      <h2>${isDesktop() ? '设备与安全' : '设备'}</h2>
-      ${isDesktop() ? `
-      <div id="pin-state" class="hint"></div>
-      <div class="set-grid">
-        <label>新 PIN（6 位数字）
-          <span class="pwd-field"><input class="input" id="pin-new" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
-          <button type="button" class="eye" data-eye="pin-new" aria-label="显示 PIN"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
-        <label>确认新 PIN
-          <span class="pwd-field"><input class="input" id="pin-confirm" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
-          <button type="button" class="eye" data-eye="pin-confirm" aria-label="显示 PIN"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
-        <label>当前 PIN（修改或移除时需要）
-          <span class="pwd-field"><input class="input" id="pin-current" type="password" inputmode="numeric" maxlength="6" autocomplete="off">
-          <button type="button" class="eye" data-eye="pin-current" aria-label="显示 PIN"><svg class="ico-on" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/></svg><svg class="ico-off" width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.6 10s3.2-5 8.4-5 8.4 5 8.4 5-3.2 5-8.4 5-8.4-5-8.4-5Z"/><circle cx="10" cy="10" r="2.4"/><path d="M3.5 3.5 16.5 16.5"/></svg></button></span></label>
-      </div>
+      <h2>测试提醒</h2>
+      <div class="hint" style="margin-bottom:10px">按当前设置实际弹一次，用来确认强/弱提醒的表现符合预期。</div>
       <div class="set-actions">
-        <button class="btn solid sm" id="pin-save">设置 PIN</button>
-        <button class="btn sm" id="pin-remove">移除 PIN</button>
-        <span id="pin-msg" class="hint"></span>
+        <button class="btn sm" id="test-weak">测试弱提醒</button>
+        <button class="btn sm" id="test-strong">测试强提醒</button>
       </div>
-      <div class="set-row"><div><b>本机</b><small id="lock-note">锁定后按离线处理，到点提醒等解锁后补发</small></div>
-        <button class="btn sm" id="set-lock">锁定</button></div>
+    </section>
+
+    <section class="set-card">
+      <h2>设备</h2>
       <div class="set-row"><div><b>试响</b><small>确认这台设备能出声</small></div>
-        <button class="btn sm" id="set-ping">试响</button></div>` : ''}
+        <button class="btn sm" id="set-ping">试响</button></div>
       <div id="set-devices" class="dev-table"></div>
     </section>
 
@@ -957,10 +976,7 @@ function renderSettingsView(box: HTMLElement) {
     <section class="set-card">
       <h2>本地日志</h2>
       <div class="set-grid">
-        <label>级别<select class="input" id="log-level">
-          <option value="debug">debug</option><option value="info" selected>info</option>
-          <option value="warn">warn</option><option value="error">error</option>
-        </select></label>
+        <label>级别<button type="button" class="input sm trigger" id="log-level" data-v="info"><span class="trigger-label">info</span><span class="trigger-arrow">⌄</span></button></label>
         <label>保留天数<input class="input" id="log-days" type="number" min="1" max="90"></label>
       </div>
       <div class="set-row"><div><b>写入本地文件</b><small>应用数据目录下的 logs 文件夹</small></div>
@@ -978,17 +994,38 @@ function renderSettingsView(box: HTMLElement) {
     $<HTMLElement>('#set-theme')!.textContent = t.label;
     $<HTMLButtonElement>('#set-theme-btn')!.textContent = `切换到${THEMES.find((x) => x.id !== loadTheme())!.label}`;
   };
-  $<HTMLSelectElement>('#set-close')!.value = closeBehavior();
-  $<HTMLSelectElement>('#set-close')!.onchange = (ev) => {
-    const v = (ev.target as HTMLSelectElement).value as 'quit' | 'tray';
-    localStorage.setItem(CLOSE_KEY, v);
-    void native('set_close_behavior', { behavior: v });
+  setTrig('set-close', closeBehavior(), closeBehavior() === 'quit' ? '退出程序' : '隐藏到托盘');
+  $<HTMLButtonElement>('#set-close')!.onclick = (ev) => {
+    openDropdown(ev.currentTarget as HTMLElement, [
+      { value: 'quit', label: '退出程序' }, { value: 'tray', label: '隐藏到托盘' },
+    ], trigVal('set-close'), (v) => {
+      setTrig('set-close', v, v === 'quit' ? '退出程序' : '隐藏到托盘');
+      localStorage.setItem(CLOSE_KEY, v);
+      void native('set_close_behavior', { behavior: v });
+    });
   };
   const autoUpdate = $<HTMLInputElement>('#set-auto-update')!;
   autoUpdate.checked = localStorage.getItem(AUTO_UPDATE_KEY) === 'on';
   autoUpdate.onchange = () => {
     localStorage.setItem(AUTO_UPDATE_KEY, autoUpdate.checked ? 'on' : 'off');
     if (autoUpdate.checked) autoCheckUpdate(true);
+  };
+  // 自绘时间选择：静音开始 / 结束
+  for (const id of ['set-quiet-start', 'set-quiet-end'] as const) {
+    $<HTMLButtonElement>(`#${id}`)!.onclick = (ev) => {
+      openTimePicker(ev.currentTarget as HTMLElement, trigVal(id) || '00:00', (v) => setTrig(id, v, v));
+    };
+  }
+  $<HTMLButtonElement>('#set-sound')!.onclick = (ev) => {
+    openDropdown(ev.currentTarget as HTMLElement, [
+      { value: 'system', label: '系统提示音' }, { value: 'none', label: '静音' },
+    ], trigVal('set-sound'), (v) => setTrig('set-sound', v, v === 'none' ? '静音' : '系统提示音'));
+  };
+  $<HTMLButtonElement>('#log-level')!.onclick = (ev) => {
+    openDropdown(ev.currentTarget as HTMLElement, [
+      { value: 'debug', label: 'debug' }, { value: 'info', label: 'info' },
+      { value: 'warn', label: 'warn' }, { value: 'error', label: 'error' },
+    ], trigVal('log-level'), (v) => setTrig('log-level', v, v));
   };
   renderUpdateStatus();
   box.querySelector<HTMLElement>('.settings')!.addEventListener('click', (ev) => {
@@ -1010,15 +1047,11 @@ function renderSettingsView(box: HTMLElement) {
   $<HTMLButtonElement>('#set-install')!.onclick = () => onInstallClick();
   const ping = $<HTMLButtonElement>('#set-ping');
   if (ping) ping.onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
-  const lock = $<HTMLButtonElement>('#set-lock');
-  if (lock) lock.onclick = () => void lockDevice('manual');
 
   $<HTMLButtonElement>('#set-save')!.onclick = () => void saveSettingsForm();
-  const pinSave = $<HTMLButtonElement>('#pin-save');
-  if (pinSave) pinSave.onclick = () => void savePin();
-  const pinRemove = $<HTMLButtonElement>('#pin-remove');
-  if (pinRemove) pinRemove.onclick = () => void removePin();
   $<HTMLButtonElement>('#log-save')!.onclick = () => void saveLogPolicy();
+  $<HTMLButtonElement>('#test-weak')!.onclick = () => testReminder('weak');
+  $<HTMLButtonElement>('#test-strong')!.onclick = () => testReminder('strong');
 
   if (admin) {
     $<HTMLButtonElement>('#usr-add')!.onclick = () => void addUser();
@@ -1042,15 +1075,15 @@ function renderSettingsView(box: HTMLElement) {
 async function saveSettingsForm() {
   const msg = $<HTMLElement>('#set-msg')!;
   const mins = (id: string) => {
-    const [h, m] = $<HTMLInputElement>(id)!.value.split(':').map(Number);
+    const [h, m] = trigVal(id).split(':').map(Number);
     return h * 60 + m;
   };
   const patch: Partial<Settings> = {
     escalateAfterSec: Number($<HTMLInputElement>('#set-escalate')!.value),
     repeatEverySec: Number($<HTMLInputElement>('#set-repeat')!.value),
-    quietStartMin: mins('#set-quiet-start'),
-    quietEndMin: mins('#set-quiet-end'),
-    sound: $<HTMLSelectElement>('#set-sound')!.value as Settings['sound'],
+    quietStartMin: mins('set-quiet-start'),
+    quietEndMin: mins('set-quiet-end'),
+    sound: trigVal('set-sound') as Settings['sound'],
     autoDowngradeAfter: Number($<HTMLInputElement>('#set-downgrade')!.value),
     neglectedAfter: Number($<HTMLInputElement>('#set-neglected')!.value),
   };
@@ -1071,58 +1104,17 @@ async function loadSettingsForm() {
     const hhmmOf = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
     $<HTMLInputElement>('#set-escalate')!.value = String(s.escalateAfterSec);
     $<HTMLInputElement>('#set-repeat')!.value = String(s.repeatEverySec);
-    $<HTMLInputElement>('#set-quiet-start')!.value = hhmmOf(s.quietStartMin);
-    $<HTMLInputElement>('#set-quiet-end')!.value = hhmmOf(s.quietEndMin);
-    $<HTMLSelectElement>('#set-sound')!.value = s.sound;
+    const q1 = hhmmOf(s.quietStartMin), q2 = hhmmOf(s.quietEndMin);
+    setTrig('set-quiet-start', q1, q1);
+    setTrig('set-quiet-end', q2, q2);
+    setTrig('set-sound', s.sound, s.sound === 'none' ? '静音' : '系统提示音');
     $<HTMLInputElement>('#set-downgrade')!.value = String(s.autoDowngradeAfter);
     $<HTMLInputElement>('#set-neglected')!.value = String(s.neglectedAfter);
   } catch { /* 读不到就保留本地缓存，不覆盖用户正在填的内容 */ }
 }
 
-function loadPinState() {
-  const el = $<HTMLElement>('#pin-state');
-  if (!el) return;
-  const has = hasDevicePin();
-  el.textContent = has
-    ? '本机 PIN 已设置，只保存在这台设备上，不上传服务端。'
-    : '尚未设置本机 PIN，登录后需要先设置才能使用。';
-  $<HTMLButtonElement>('#pin-save')!.textContent = has ? '修改 PIN' : '设置 PIN';
-  $<HTMLButtonElement>('#pin-remove')!.disabled = !has;
-  const note = $<HTMLElement>('#lock-note');
-  if (note) note.textContent = has
-    ? '锁定后按离线处理，到点提醒等解锁后补发'
-    : '请先设置本机 PIN，才能锁定本机';
-}
 
-async function savePin() {
-  const msg = $<HTMLElement>('#pin-msg')!;
-  const pin = $<HTMLInputElement>('#pin-new')!.value.trim();
-  if (!/^\d{6}$/.test(pin)) { msg.textContent = 'PIN 需要 6 位数字'; return; }
-  if (pin !== $<HTMLInputElement>('#pin-confirm')!.value.trim()) { msg.textContent = '两次输入不一致'; return; }
-  if (hasDevicePin()) {
-    const cur = $<HTMLInputElement>('#pin-current')!.value.trim();
-    if (!await verifyDevicePin(cur)) { msg.textContent = '当前 PIN 不对'; return; }
-  }
-  msg.textContent = '保存中…';
-  try {
-    await setDevicePin(pin);
-    $<HTMLInputElement>('#pin-new')!.value = '';
-    $<HTMLInputElement>('#pin-confirm')!.value = '';
-    $<HTMLInputElement>('#pin-current')!.value = '';
-    msg.textContent = 'PIN 已保存到本机';
-    loadPinState();
-  } catch (e) { msg.textContent = msgOf(e); }
-}
 
-async function removePin() {
-  const msg = $<HTMLElement>('#pin-msg')!;
-  const cur = $<HTMLInputElement>('#pin-current')!.value.trim();
-  if (!await verifyDevicePin(cur)) { msg.textContent = '当前 PIN 不对'; return; }
-  clearDevicePin();
-  $<HTMLInputElement>('#pin-current')!.value = '';
-  msg.textContent = '本机 PIN 已移除';
-  loadPinState();
-}
 
 function renderDeviceRows() {
   const box = $<HTMLElement>('#set-devices');
@@ -1131,7 +1123,7 @@ function renderDeviceRows() {
     <div class="dev-row">
       <b>${esc(d.name)}</b>
       <span class="mono">${esc(d.lastIp ?? '—')}</span>
-      <span>${d.locked ? '已锁定' : d.online ? '在线' : '离线'}</span>
+      <span>${d.online ? '在线' : '离线'}</span>
       <span class="hint">${esc(d.platform)}</span>
       ${d.id === loadConfig().device?.id ? `<button class="btn sm" data-ping="${esc(d.id)}" title="让这台设备试响">试响</button>` : ''}
     </div>`).join('');
@@ -1184,7 +1176,7 @@ async function addUser() {
 async function loadLogPolicy() {
   const p = await native<LogPolicy>('get_log_policy');
   if (!p) return;
-  $<HTMLSelectElement>('#log-level')!.value = p.level;
+  setTrig('log-level', p.level, p.level);
   $<HTMLInputElement>('#log-days')!.value = String(p.retentionDays);
   $<HTMLInputElement>('#log-enabled')!.checked = p.enabled;
   localStorage.setItem(LOG_KEY, JSON.stringify(p));
@@ -1193,7 +1185,7 @@ async function loadLogPolicy() {
 async function saveLogPolicy() {
   const msg = $<HTMLElement>('#log-msg')!;
   const p: LogPolicy = {
-    level: $<HTMLSelectElement>('#log-level')!.value as LogPolicy['level'],
+    level: trigVal('log-level') as LogPolicy['level'],
     retentionDays: Number($<HTMLInputElement>('#log-days')!.value),
     enabled: $<HTMLInputElement>('#log-enabled')!.checked,
   };
@@ -1251,91 +1243,7 @@ async function loadStats() {
 }
 
 async function reloadPageData() {
-  await Promise.allSettled([loadSettingsForm(), loadPinState(), loadLogPolicy(), loadStats(), renderDeviceRows()]);
-}
-
-/* ------------------------------------------------------------ 设备锁定 */
-
-let lockReason: 'manual' | 'system' | null = null;
-let lockInput: HTMLInputElement | null = null;
-
-function setSelfLocked(locked: boolean) {
-  const me = loadConfig().device;
-  if (me) saveConfig({ device: { ...me, locked } });
-  for (const d of state.devices) if (d.id === me?.id) d.locked = locked;
-}
-
-function renderLockScreen() {
-  if ($('#lock-screen')) return;
-  const host = document.createElement('div');
-  host.id = 'lock-screen';
-  host.className = 'lock-screen';
-  host.innerHTML = `
-    <div class="lock-card">
-      <span class="logo lg"><i></i></span>
-      <h1>DeskAlarm 已锁定</h1>
-      <p>这台设备当前按离线处理，提醒会在解锁后补发。</p>
-      <input class="input" id="lock-pin" type="password" inputmode="numeric" placeholder="输入 PIN 解锁" autocomplete="off">
-      <button class="btn solid" id="lock-go">解锁</button>
-      <div class="login-err" id="lock-err"></div>
-    </div>`;
-  document.body.appendChild(host);
-  lockInput = $<HTMLInputElement>('#lock-pin');
-  const go = () => void unlockDevice(lockInput!.value.trim());
-  $<HTMLButtonElement>('#lock-go')!.onclick = go;
-  lockInput!.onkeydown = (ev) => { if (ev.key === 'Enter') go(); };
-  lockInput!.focus();
-}
-
-async function lockDevice(reason: 'manual' | 'system') {
-  if (lockReason) return;
-  if (!hasDevicePin()) {
-    flash('请先在设置里设置本机 PIN');
-    if (state.view !== 'settings') setView('settings');
-    return;
-  }
-  try {
-    await api.lockDevice(true, undefined, reason);
-  } catch (e) { flash(msgOf(e)); return; }
-  lockReason = reason;
-  setSelfLocked(true);
-  renderLockScreen();
-  renderDeviceStatus();
-  renderSidebar();
-  renderDeviceRows();
-  void native('log_event', { level: 'info', message: `设备已锁定（${reason}）` });
-}
-
-async function unlockDevice(pin?: string) {
-  // 系统锁屏已经验过身份，自动解锁不再要 PIN；手动锁定则只在本地校验，不把 PIN 发给服务端
-  if (lockReason !== 'system' && !await verifyDevicePin(pin ?? '')) {
-    const el = $<HTMLElement>('#lock-err');
-    if (el) el.textContent = 'PIN 不对';
-    return;
-  }
-  try {
-    await api.lockDevice(false);
-  } catch (e) {
-    const el = $<HTMLElement>('#lock-err');
-    if (el) el.textContent = msgOf(e);
-    return;
-  }
-  lockReason = null;
-  setSelfLocked(false);
-  $('#lock-screen')?.remove();
-  lockInput = null;
-  renderDeviceStatus();
-  renderSidebar();
-  renderDeviceRows();
-  void native('log_event', { level: 'info', message: '设备已解锁' });
-  try {
-    const { missed } = await api.missed();
-    for (const m of missed) {
-      ringPing({ title: '补发提醒', body: `${Math.max(1, Math.round(m.lateByMs / 60_000))} 分钟前就该响：${m.entry.text}` });
-      if (!alarm.fire(m.entry)) pushWeak(m.entry);
-    }
-  } catch { /* 补发失败就让列表自己刷新出来 */ }
-  void refresh();
+  await Promise.allSettled([loadSettingsForm(), loadLogPolicy(), loadStats(), renderDeviceRows()]);
 }
 
 function renderDashboard(box: HTMLElement) {
@@ -1747,11 +1655,6 @@ function openWhenPicker(e: Entry, anchor: HTMLElement) {
       const isToday = key === dateKey(new Date(now));
       cells.push(`<button class="dp-day${on ? ' on' : ''}${isToday ? ' today' : ''}" data-day="${key}">${d}</button>`);
     }
-    const hours = Array.from({ length: 24 }, (_, i) =>
-      `<option value="${i}"${i === hh ? ' selected' : ''}>${p(i)}</option>`).join('');
-    const mins = Array.from({ length: 12 }, (_, i) => i * 5)
-      .map((m) => `<option value="${m}"${m === mm ? ' selected' : ''}>${p(m)}</option>`).join('');
-
     pop.innerHTML = `
       <div class="dp-quick">
         <button data-dp="today9">今天 9:00</button>
@@ -1771,7 +1674,7 @@ function openWhenPicker(e: Entry, anchor: HTMLElement) {
         ${cells.join('')}
       </div>
       <div class="dp-time">
-        <select class="input" id="dp-h">${hours}</select><span>:</span><select class="input" id="dp-m">${mins}</select>
+      <button type="button" class="input dp-time-btn" id="dp-time-btn" data-v="${p(hh)}:${p(mm)}"><span class="trigger-label">${p(hh)}:${p(mm)}</span><span class="trigger-arrow">◷</span></button>
       </div>
       <div class="dp-foot">
         <button class="btn sm" data-dp="cancel">取消</button>
@@ -1779,11 +1682,17 @@ function openWhenPicker(e: Entry, anchor: HTMLElement) {
       </div>`;
   };
 
-  // 时间下拉的值要即时记下来，否则一点日期重绘就退回旧时间
-  pop.addEventListener('change', (ev) => {
-    const t = ev.target as HTMLSelectElement;
-    if (t.id === 'dp-h') hh = Number(t.value);
-    if (t.id === 'dp-m') mm = Number(t.value);
+  // 点时间按钮弹出自绘时间选择（任意分钟），结果写回按钮 data-v
+  pop.addEventListener('click', (ev) => {
+    const tb = (ev.target as HTMLElement).closest<HTMLElement>('#dp-time-btn');
+    if (tb) {
+      openTimePicker(tb, trigVal('dp-time-btn'), (v) => {
+        setTrig('dp-time-btn', v, v);
+        const [h, m] = v.split(':').map(Number);
+        hh = h; mm = m;
+      });
+      return;
+    }
   });
 
   pop.addEventListener('click', (ev) => {
@@ -1808,8 +1717,6 @@ function openWhenPicker(e: Entry, anchor: HTMLElement) {
     }
     if (act === 'cancel') { closeWhenPicker(); return; }
     if (act === 'ok') {
-      hh = Number($<HTMLSelectElement>('#dp-h').value);
-      mm = Number($<HTMLSelectElement>('#dp-m').value);
       commit(atTime(selected, hh, mm).getTime());
       return;
     }
@@ -2529,47 +2436,7 @@ function wireEvents() {
  * 登录后强制设置本机 PIN。只写 localStorage，不进服务端。
  * force=true 时还没有 boot，设完才进主界面；false 时只是设置页里补设。
  */
-function renderPinSetup(force: boolean) {
-  if ($('#pin-setup')) return;
-  const host = document.createElement('div');
-  host.id = 'pin-setup';
-  host.className = 'lock-screen';
-  host.innerHTML = `
-    <div class="lock-card">
-      <span class="logo lg"><i></i></span>
-      <h1>${force ? '先设置本机 PIN' : '设置本机 PIN'}</h1>
-      <p>${force
-        ? '这台设备还没有 PIN。它只保存在本机，不上传服务端；同一账号下的其他电脑和手机可以各设各的。'
-        : 'PIN 只保存在这台设备上，不上传服务端。'}</p>
-      <input class="input" id="ps-pin" type="password" inputmode="numeric" maxlength="6" placeholder="6 位数字" autocomplete="off">
-      <input class="input" id="ps-confirm" type="password" inputmode="numeric" maxlength="6" placeholder="再输一次" autocomplete="off">
-      <button class="btn solid" id="ps-go">${force ? '设置并进入' : '保存'}</button>
-      <div class="login-err" id="ps-err"></div>
-    </div>`;
-  document.body.appendChild(host);
-  const pin = $<HTMLInputElement>('#ps-pin')!;
-  const confirm = $<HTMLInputElement>('#ps-confirm')!;
-  const err = $<HTMLElement>('#ps-err')!;
-  const submit = async () => {
-    err.textContent = '';
-    const v = pin.value.trim();
-    if (!/^\d{6}$/.test(v)) { err.textContent = 'PIN 需要 6 位数字'; return; }
-    if (v !== confirm.value.trim()) { err.textContent = '两次输入不一致'; return; }
-    try {
-      await setDevicePin(v);
-      host.remove();
-      if (force) boot(); else void loadPinState();
-    } catch (e) { err.textContent = msgOf(e); }
-  };
-  $<HTMLButtonElement>('#ps-go')!.onclick = () => void submit();
-  confirm.onkeydown = (ev) => { if (ev.key === 'Enter') void submit(); };
-  pin.focus();
-}
 
-function afterAuth() {
-  if (!hasDevicePin()) renderPinSetup(true);
-  else boot();
-}
 
 /* ------------------------------------------------------------ 启动 */
 
@@ -2582,8 +2449,6 @@ function boot() {
     if (isDesktop()) void native('set_close_behavior', { behavior: closeBehavior() });
     void native('log_event', { level: 'info', message: '客户端启动' });
   }
-  on('session:locked', () => void lockDevice('system'));
-  on('session:unlocked', () => { if (lockReason === 'system') void unlockDevice(); });
   rt = new Realtime(onRealtime, setLink);
   rt.connect();
   void refresh();
@@ -2677,7 +2542,7 @@ onUnauthorized(() => { rt?.close(); location.reload(); });
   try {
     if ((await api.setupStatus()).needed) { renderSetup(); return; }
   } catch { /* 连不上就走原来的登录/启动流程 */ }
-  if (cfg.token) afterAuth();
+  if (cfg.token) boot();
   else renderLogin();
 })();
 

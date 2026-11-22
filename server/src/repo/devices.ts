@@ -11,8 +11,6 @@ interface Row {
   push_token: string | null;
   push_enabled: boolean;
   online: boolean;
-  locked: boolean;
-  lock_reason: string | null;
   last_ip: string | null;
   last_seen_at: Date;
   created_at: Date;
@@ -29,8 +27,6 @@ function toDevice(r: Row): Device {
     pushEnabled: r.push_enabled,
     online: r.online,
     pushReady: r.transport === 'ws' || !!r.push_token,
-    locked: !!r.locked,
-    lockReason: r.lock_reason === 'manual' || r.lock_reason === 'system' ? r.lock_reason : null,
     lastIp: r.last_ip,
     lastSeenAt: new Date(r.last_seen_at).getTime(),
     createdAt: new Date(r.created_at).getTime(),
@@ -127,20 +123,6 @@ export async function markOfflineHint(id: string) {
 
 export async function renameDevice(id: string, userId: string, name: string) {
   await run('UPDATE devices SET name = $3 WHERE id = $1 AND user_id = $2', [id, userId, name]);
-}
-
-/** 锁定记原因，解锁清掉；system 解锁不查 PIN 靠的就是这个原因值 */
-export async function setLocked(
-  id: string, locked: boolean, reason?: 'manual' | 'system',
-): Promise<Device | undefined> {
-  await run(
-    `UPDATE devices
-        SET locked = $2,
-            lock_reason = CASE WHEN $2 THEN COALESCE($3, 'manual') ELSE NULL END
-      WHERE id = $1`,
-    [id, locked, reason ?? null],
-  );
-  return getDevice(id);
 }
 
 export async function setLastIp(id: string, ip: string | null) {

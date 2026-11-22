@@ -112,7 +112,7 @@ export async function login(
     token: tok,
     user: {
       id: user.id, username: user.username, role: user.role,
-      disabled: user.disabled, hasPin: false, createdAt: user.createdAt,
+      disabled: user.disabled, createdAt: user.createdAt,
     },
     device,
   };
@@ -161,8 +161,7 @@ export async function resolveSession(req: FastifyRequest): Promise<Session | nul
       token: tok,
       user: {
         id: row.user_id, username: row.username, role: row.role as Role,
-        // 账号级 PIN 已废弃：PIN 现在只存在各设备本机，服务端不持有也不校验
-        disabled: !!row.disabled, hasPin: false, createdAt: 0,
+        disabled: !!row.disabled, createdAt: 0,
       },
       device,
       kind: row.kind as Session['kind'],
