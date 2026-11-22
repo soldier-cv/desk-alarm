@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 前台服务常驻，让 WebSocket 在后台不被系统回收 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

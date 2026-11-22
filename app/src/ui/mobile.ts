@@ -27,11 +27,11 @@ let entries: Entry[] = [];
 let counts = { today: 0, up: 0, inbox: 0, all: 0, done: 0, missed: 0, dismissed: 0 };
 
 const alarm = new AlarmController({
-  onNotify: (e) => notify(e.text, '到点了'),
-  // 移动端没有接管窗口，通知已在 onNotify 出过；这里再弹一条就是重复
+  // 通知由原生常驻服务统一发（锁屏也能即时弹），JS 这边只维持界面状态，不重复弹
+  onNotify: () => {},
   onShow: () => {},
-  onEscalate: (e) => notify(e.text, '还没处理？'),
-  onRepeat: (e, n) => notify(e.text, `重复提醒 ${n}`),
+  onEscalate: () => {},
+  onRepeat: () => {},
   onDismiss: () => { void refresh(); },
 });
 
@@ -395,8 +395,7 @@ function onRealtime(msg: ServerMessage) {
     case 'welcome':
       saveConfig({ serverSkewMs: msg.serverTs - Date.now(), settings: { ...loadConfig().settings, ...msg.settings } });
       for (const m of msg.missed) {
-        notify('补发提醒', `${m.entry.text}`);
-        // 已经弹过"补发提醒"，fire 里别再弹一条"到点了"
+        // 补发通知也由原生服务统一发，这里只更新界面
         if (!alarm.fire(m.entry, true)) pushWeak(m.entry);
       }
       void refresh();
@@ -432,6 +431,16 @@ async function refresh() {
     if (ci) ci.textContent = counts.inbox ? String(counts.inbox) : '';
     if (view === 'today') await loadList();
   } catch { /* 静默 */ }
+}
+
+/** 把服务端地址和 token 交给原生常驻服务，锁屏后由它持有 WS、心跳和通知 */
+async function startNativePush() {
+  if (!hasTauri()) return;
+  const cfg = loadConfig();
+  if (!cfg.baseUrl || !cfg.token) return;
+  try {
+    await invoke('plugin:push|start', { baseUrl: cfg.baseUrl, token: cfg.token });
+  } catch { /* 保活起不来不该挡住前台使用 */ }
 }
 
 function connect() {
@@ -531,6 +540,7 @@ async function boot() {
   renderListHead();
   setView('capture');
   connect();
+  void startNativePush();
   void refresh();
   // 梯度随时间推进：20 秒原地刷新一次，和桌面端一致
   window.setInterval(tickUrgency, 20_000);

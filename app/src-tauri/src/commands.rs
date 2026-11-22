@@ -126,14 +126,15 @@ pub fn is_autostart_enabled(app: AppHandle) -> Result<bool, String> {
 /// 试响。用系统提示音，让用户确认这台设备能真的出声。
 /// dev 模式下通知图标显示成 PowerShell 是正常的，打包后才正常。
 #[tauri::command]
-pub fn ping(app: AppHandle, title: String, body: String) -> Result<(), String> {
+pub fn ping(app: AppHandle, title: String, body: String, sound: Option<String>) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
-    app.notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-        .map_err(|e| e.to_string())
+    let mut b = app.notification().builder();
+    b = b.title(title).body(body);
+    // sound='none' 时静音：弱提醒不该抢注意力
+    if sound.as_deref() == Some("none") {
+        b = b.sound("none");
+    }
+    b.show().map_err(|e| e.to_string())
 }
 
 /**

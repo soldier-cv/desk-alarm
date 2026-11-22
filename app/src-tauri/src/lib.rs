@@ -68,6 +68,17 @@ pub fn run() {
             .build(),
     );
 
+    // 原生常驻 WS + 唤醒锁：把服务端地址与 token 交给 Kotlin 服务
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<_, ()>::new("push")
+            .setup(|_app, api| {
+                api.register_android_plugin("io.github.soldier_cv.deskalarm", "PushPlugin")?;
+                Ok(())
+            })
+            .build(),
+    );
+
     builder
         .setup(|app| {
             let handle = app.handle().clone();

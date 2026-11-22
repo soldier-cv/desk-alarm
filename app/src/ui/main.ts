@@ -117,9 +117,14 @@ const isDesktop = () => platform === 'windows' || platform === 'macos' || platfo
 
 const alarm = new AlarmController({
   onNotify: (entry, attempt) => {
+    // 强提醒另有全屏接管窗口，这里只补一条醒目的系统通知兜底；弱提醒则是安静的一条
+    const strong = entry.strength === 'strong';
     ringPing({
-      title: attempt === 1 ? (entry.strength === 'weak' ? '提醒' : 'DeskAlarm') : `DeskAlarm（第 ${attempt} 次）`,
+      title: attempt > 1
+        ? `DeskAlarm（第 ${attempt} 次）`
+        : strong ? '需要立即处理' : '提醒',
       body: entry.text,
+      ...(strong ? {} : { sound: 'none' }),
     });
   },
 
