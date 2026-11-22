@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Fixed
+- 修复安卓端应用内更新报 `plugin:apk-installer|download_and_install not allowed by ACL`：在 build.rs 里为 apk-installer / push 两个自定义 Android 插件声明 commands 生成 ACL 权限，capability 授予 default 权限。
+
 ## [v0.4.9] - 2026-11-22
 
 ### Fixed
