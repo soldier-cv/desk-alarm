@@ -298,6 +298,7 @@ try {
   ok('收到 welcome', !!welcome);
   ok('welcome 带服务端权威时间', typeof welcome?.serverTs === 'number');
   ok('welcome 带全局设置', typeof welcome?.settings?.escalateAfterSec === 'number');
+  ok('welcome 带重复上限设置', typeof welcome?.settings?.maxRepeatCount === 'number');
   const seenDb = await db();
   const seenBefore = await seenDb.query('SELECT last_seen_at FROM devices WHERE id = $1', [da]);
   await sleep(1100);

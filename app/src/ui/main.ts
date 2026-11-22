@@ -172,6 +172,14 @@ const alarm = new AlarmController({
     ringPing({ title: `DeskAlarm（第 ${attempt} 次）`, body: entry.text });
   },
 
+  onAutoMute: (entry) => {
+    // 重复到上限：收起接管窗口，留一条静默弱提示，别一直抢注意力
+    send('takeover:dismiss');
+    pushWeak(entry);
+    ringPing({ title: 'DeskAlarm', body: `已重复多次，转为静默提醒：${entry.text}`, sound: 'none' });
+    void refresh();
+  },
+
   onDismiss: (entry, reason) => {
     send('takeover:dismiss');
     if (reason === 'elsewhere') {
@@ -933,6 +941,7 @@ function renderSettingsView(box: HTMLElement) {
       <div class="set-grid">
         <label>弱提示升级秒数<input class="input" id="set-escalate" type="number" min="5" max="3600"></label>
         <label>重复间隔（秒，0 为不重复）<input class="input" id="set-repeat" type="number" min="0" max="86400"></label>
+        <label>最多重复几次后转静默（0 不限）<input class="input" id="set-maxrepeat" type="number" min="0" max="100"></label>
         <button type="button" class="input sm trigger" id="set-quiet-start" data-v="23:30"><span class="trigger-label">23:30</span><span class="trigger-arrow">◷</span></button>
         <button type="button" class="input sm trigger" id="set-quiet-end" data-v="07:00"><span class="trigger-label">07:00</span><span class="trigger-arrow">◷</span></button>
         <label>声音<button type="button" class="input sm trigger" id="set-sound" data-v="system"><span class="trigger-label">系统提示音</span><span class="trigger-arrow">⌄</span></button></label>
@@ -1081,6 +1090,7 @@ async function saveSettingsForm() {
   const patch: Partial<Settings> = {
     escalateAfterSec: Number($<HTMLInputElement>('#set-escalate')!.value),
     repeatEverySec: Number($<HTMLInputElement>('#set-repeat')!.value),
+    maxRepeatCount: Number($<HTMLInputElement>('#set-maxrepeat')!.value),
     quietStartMin: mins('set-quiet-start'),
     quietEndMin: mins('set-quiet-end'),
     sound: trigVal('set-sound') as Settings['sound'],
@@ -1104,6 +1114,7 @@ async function loadSettingsForm() {
     const hhmmOf = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
     $<HTMLInputElement>('#set-escalate')!.value = String(s.escalateAfterSec);
     $<HTMLInputElement>('#set-repeat')!.value = String(s.repeatEverySec);
+    $<HTMLInputElement>('#set-maxrepeat')!.value = String(s.maxRepeatCount);
     const q1 = hhmmOf(s.quietStartMin), q2 = hhmmOf(s.quietEndMin);
     setTrig('set-quiet-start', q1, q1);
     setTrig('set-quiet-end', q2, q2);
@@ -1813,7 +1824,7 @@ function renderEditor() {
           <button data-s="strong" class="${e.strength === 'strong' ? 'on hot' : ''}">强提示</button>
         </div>
         <div class="hint">${e.strength === 'strong'
-          ? `会弹全屏接管窗口，${s.escalateAfterSec} 秒不处理就关不掉，之后每 ${Math.max(1, Math.round(s.repeatEverySec / 60))} 分钟再响一次`
+          ? `会弹接管窗口，${s.escalateAfterSec} 秒不处理就关不掉，之后每 ${Math.max(1, Math.round(s.repeatEverySec / 60))} 分钟再响一次${s.maxRepeatCount > 0 ? `，最多 ${s.maxRepeatCount} 次后转静默` : '，直到处理为止'}`
           : '只出通知和顶部细横幅，可以「忽略」并写理由。不会打断手上的事'}</div>
         ${e.dismissCount >= s.autoDowngradeAfter && e.strength === 'weak'
           ? `<div class="hint warn">已经被忽略 ${e.dismissCount} 次${e.dismissCount >= s.neglectedAfter ? '，建议直接删掉' : ''}</div>`

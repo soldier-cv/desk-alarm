@@ -33,6 +33,7 @@ const alarm = new AlarmController({
   onShow: () => {},
   onEscalate: () => {},
   onRepeat: () => {},
+  onAutoMute: () => { void refresh(); },
   onDismiss: () => { void refresh(); },
 });
 
@@ -313,6 +314,7 @@ function renderSettings() {
       <h3>提醒偏好（一端改，所有设备生效）</h3>
       <div class="set-field"><label>强提醒升级等待（秒）</label><input id="pf-escalate" type="number" min="5" max="3600" value="${s.escalateAfterSec}"></div>
       <div class="set-field"><label>重复间隔（秒，0 不重复）</label><input id="pf-repeat" type="number" min="0" max="86400" value="${s.repeatEverySec}"></div>
+      <div class="set-field"><label>最多重复几次后转静默（0 不限）</label><input id="pf-maxrepeat" type="number" min="0" max="100" value="${s.maxRepeatCount}"></div>
       <div class="set-field"><label>静音开始</label><input id="pf-quiet-start" type="time" value="${mm(s.quietStartMin)}"></div>
       <div class="set-field"><label>静音结束</label><input id="pf-quiet-end" type="time" value="${mm(s.quietEndMin)}"></div>
       <div class="set-field"><label>提示音</label>
@@ -366,6 +368,7 @@ function renderSettings() {
     const patch = {
       escalateAfterSec: Number(tf('pf-escalate').value),
       repeatEverySec: Number(tf('pf-repeat').value),
+      maxRepeatCount: Number(tf('pf-maxrepeat').value),
       quietStartMin: toMin(tf('pf-quiet-start').value),
       quietEndMin: toMin(tf('pf-quiet-end').value),
       sound: (document.getElementById('pf-sound') as HTMLSelectElement).value as 'system' | 'none',

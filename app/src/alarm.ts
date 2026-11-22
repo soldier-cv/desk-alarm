@@ -1,6 +1,6 @@
 /**
  * 强提示升级阶梯：0 秒亮接管窗口，30 秒加抖动，5 分钟后重复。
- * 停止条件只有「用户处理了」或「别的设备处理了」。完整见 docs/requirements.md
+ * 停止条件：用户处理、别的设备处理，或重复次数达到上限自动降级。完整见 docs/requirements.md
  */
 import { inQuietHours, loadConfig, shouldRing, type AckAction, type Entry, type Settings } from './api';
 
@@ -13,6 +13,8 @@ export interface AlarmCallbacks {
   onEscalate: (entry: Entry) => void;
   /** 重复提醒一次 */
   onRepeat: (entry: Entry, attempt: number) => void;
+  /** 重复达到上限，自动降级为静默提醒 */
+  onAutoMute: (entry: Entry) => void;
   /** 处理完了，收起窗口 */
   onDismiss: (entry: Entry, reason: 'self' | 'elsewhere' | 'muted') => void;
 }
@@ -79,9 +81,25 @@ export class AlarmController {
 
   private scheduleRepeat(ms: number) {
     if (!this.active || ms <= 0) return;
+    // 升级时会改用更密的间隔，不清掉旧定时器会留下两条重复链，越响越快
+    if (this.active.repeatTimer !== null) clearTimeout(this.active.repeatTimer);
     const id = this.active.entry.id;
+    const entry = this.active.entry;
     this.active.repeatTimer = window.setTimeout(() => {
       if (!this.active || this.active.entry.id !== id) return;
+      const s = loadConfig().settings;
+      // 静音时段只压住重复，不关闭已有窗口；出时段后从下一次 tick 继续
+      if (inQuietHours(s) && !entry.bypassQuiet) {
+        this.scheduleRepeat(ms);
+        return;
+      }
+      // attempt 1 是首次提示，之后每多一次算一次重复
+      const repeats = this.active.attempt - 1;
+      if (s.maxRepeatCount > 0 && repeats >= s.maxRepeatCount) {
+        this.stop();
+        this.cb.onAutoMute(entry);
+        return;
+      }
       this.active.attempt += 1;
       this.cb.onRepeat(this.active.entry, this.active.attempt);
       this.scheduleRepeat(ms);

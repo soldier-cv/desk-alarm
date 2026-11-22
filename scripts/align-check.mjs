@@ -80,6 +80,9 @@ ok('strength 与 bypassQuiet 是两个字段', /bypass_quiet/.test(src.sql) && /
 ok('弱提示不升级（弱队列独立）', /weak/i.test(src.alarm));
 ok('takeover 关不掉', /takeover:close-blocked/.test(src.takeover));
 ok('Esc 不结束强提醒', /takeover:close-blocked/.test(src.takeover));
+ok('重复次数可配置上限', /maxRepeatCount/.test(src.alarm) && /maxRepeatCount/.test(src.api));
+ok('重复到上限自动转静默', /onAutoMute/.test(src.alarm) && /onAutoMute/.test(src.main));
+ok('静音时段暂停重复', /inQuietHours\(s\)/.test(src.alarm));
 
 console.log('\nMCP 防呆');
 ok('有 plan_changes', /plan_changes/.test(src.tools));

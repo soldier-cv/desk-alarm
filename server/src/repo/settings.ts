@@ -4,6 +4,7 @@ import { rows, run } from '../db.js';
 const DEFAULTS: Settings = {
   escalateAfterSec: 30,
   repeatEverySec: 120,
+  maxRepeatCount: 5,
   quietStartMin: 23 * 60 + 30,
   quietEndMin: 7 * 60,
   sound: 'system',
@@ -43,6 +44,7 @@ export async function getSettings(userId: string): Promise<Settings> {
   const out: Settings = {
     escalateAfterSec: num(map.get('escalateAfterSec'), DEFAULTS.escalateAfterSec),
     repeatEverySec: num(map.get('repeatEverySec'), DEFAULTS.repeatEverySec),
+    maxRepeatCount: num(map.get('maxRepeatCount'), DEFAULTS.maxRepeatCount),
     quietStartMin: num(map.get('quietStartMin'), DEFAULTS.quietStartMin),
     quietEndMin: num(map.get('quietEndMin'), DEFAULTS.quietEndMin),
     sound: sound === 'system' || sound === 'custom' || sound === 'none' ? sound : DEFAULTS.sound,

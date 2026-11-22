@@ -123,6 +123,8 @@ export interface Settings {
   escalateAfterSec: number;
   /** 重复提醒间隔（秒），0 表示不重复 */
   repeatEverySec: number;
+  /** 强提醒最多重复几次后自动降级为静默提醒（0 = 不限制） */
+  maxRepeatCount: number;
   /** 静音时段，分钟数。跨零点时 end < start */
   quietStartMin: number;
   quietEndMin: number;

@@ -244,6 +244,7 @@ async function todayDigest(userId: string, includeInbox: boolean) {
     升级策略: {
       多少秒后升级全屏: settings.escalateAfterSec,
       多少秒重复一次: settings.repeatEverySec,
+      最多重复几次后转静默: settings.maxRepeatCount,
       忽略几次自动降级: settings.autoDowngradeAfter,
     },
   };

@@ -4,7 +4,7 @@ Android 端的 Rust 源码和 Windows 端共用，协议、解析、提醒逻辑
 
 Android 端的差异：
 
-1. **后台保活与锁屏即时到达**：`DeskAlarmKeepAliveService` 是常驻前台服务，在**原生层**持有 WebSocket、20 秒心跳和 `PARTIAL_WAKE_LOCK`。锁屏后 WebView 的 JS 会被系统冻结，若连接和通知留在 JS 里就会断心跳、到点弹不出，开屏才补发一串——所以原生服务自己连 `/stream`、自己弹通知。登录成功后 JS 通过 `plugin:push|start` 把服务端地址和 token 交给它。JS 侧仍保留一条 WS 只用于界面同步，但**不再弹系统通知**（避免和原生重复）。两个通知渠道：强提醒 `deskalarm_strong`（高重要度、震动、锁屏可见，按 `repeatEverySec` 重复到被处理）、弱提醒 `deskalarm_weak`（低重要度静音）。不依赖 Google 服务，国产 ROM 可用
+1. **后台保活与锁屏即时到达**：`DeskAlarmKeepAliveService` 是常驻前台服务，在**原生层**持有 WebSocket、20 秒心跳和 `PARTIAL_WAKE_LOCK`。锁屏后 WebView 的 JS 会被系统冻结，若连接和通知留在 JS 里就会断心跳、到点弹不出，开屏才补发一串——所以原生服务自己连 `/stream`、自己弹通知。登录成功后 JS 通过 `plugin:push|start` 把服务端地址和 token 交给它。JS 侧仍保留一条 WS 只用于界面同步，但**不再弹系统通知**（避免和原生重复）。两个通知渠道：强提醒 `deskalarm_strong`（高重要度、震动、锁屏可见，按 `repeatEverySec` 重复，达到 `maxRepeatCount` 或被处理才停，静音时段暂停）、弱提醒 `deskalarm_weak`（低重要度静音）。不依赖 Google 服务，国产 ROM 可用
 2. **机器指纹**：`machine_id()` 在 Android 上读 `ro.serialno` 等系统属性，不是 Windows 注册表
 3. **无设备锁定 / PIN**：桌面和移动端都不提供设备锁定与 PIN，锁屏后照常接收提醒。
 4. **图标**：`icons/android/` 的 launcher 图标由桌面 `icon.png` 直接生成（无 Tauri 默认的黑色外框），`gen/android/.../res/` 里是同一份拷贝

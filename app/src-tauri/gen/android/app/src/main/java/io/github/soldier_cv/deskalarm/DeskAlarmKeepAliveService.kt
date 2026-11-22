@@ -28,7 +28,8 @@ import java.util.concurrent.TimeUnit
 /**
  * 常驻前台服务：在原生层持有 WebSocket 与心跳，锁屏后 WebView 的 JS 被冻结也不受影响。
  * 到点由原生直接弹通知，不再等 JS——这是锁屏即时到达的关键。
- * 提醒逻辑从 JS 的 alarm.ts 搬过来：强提示按 repeatEverySec 重复，收到 entry.acked 才停。
+ * 提醒逻辑从 JS 的 alarm.ts 搬过来：强提示按 repeatEverySec 重复，
+ * 达到 maxRepeatCount 或收到 entry.acked 才停；静音时段暂停重复。
  */
 class DeskAlarmKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -47,6 +48,9 @@ class DeskAlarmKeepAliveService : Service() {
     private var running = false
     private var escalateSec = 30
     private var repeatSec = 120
+    private var maxRepeat = 5
+    private var quietStartMin = 23 * 60 + 30
+    private var quietEndMin = 7 * 60
 
     override fun onCreate() {
         super.onCreate()
@@ -134,6 +138,9 @@ class DeskAlarmKeepAliveService : Service() {
                 msg.optJSONObject("settings")?.let {
                     escalateSec = it.optInt("escalateAfterSec", 30)
                     repeatSec = it.optInt("repeatEverySec", 120)
+                    maxRepeat = it.optInt("maxRepeatCount", 5)
+                    quietStartMin = it.optInt("quietStartMin", 23 * 60 + 30)
+                    quietEndMin = it.optInt("quietEndMin", 7 * 60)
                 }
                 val missed = msg.optJSONArray("missed") ?: JSONArray()
                 for (i in 0 until missed.length()) {
@@ -187,10 +194,29 @@ class DeskAlarmKeepAliveService : Service() {
         if (strong) scheduleRepeat(nid, id, text)
     }
 
-    /** 强提示：升级点后按 repeatEverySec 重复，直到别处确认 */
+    /** 与前端 inQuietHours 一致：静音时段暂停重复，跨零点同样处理 */
+    private fun inQuiet(): Boolean {
+        if (quietStartMin == quietEndMin) return false
+        val cal = java.util.Calendar.getInstance()
+        val m = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+        return if (quietStartMin < quietEndMin) m >= quietStartMin && m < quietEndMin
+        else m >= quietStartMin || m < quietEndMin
+    }
+
+    /** 强提示：升级点后按 repeatEverySec 重复，达到上限或别处确认才停 */
     private fun scheduleRepeat(nid: Int, entryId: String, text: String) {
         repeatTasks[entryId]?.cancel(false)
+        // 周期为 0 时 scheduleAtFixedRate 会抛异常，这种情况只留首条通知
+        if (repeatSec <= 0) return
+        val done = java.util.concurrent.atomic.AtomicInteger(0)
         val task = executor.scheduleAtFixedRate({
+            if (inQuiet()) return@scheduleAtFixedRate
+            val n = done.incrementAndGet()
+            if (maxRepeat > 0 && n > maxRepeat) {
+                repeatTasks.remove(entryId)?.cancel(false)
+                main.post { postMuted(nid, text) }
+                return@scheduleAtFixedRate
+            }
             main.post {
                 val open = Intent(this, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -210,6 +236,25 @@ class DeskAlarmKeepAliveService : Service() {
             }
         }, escalateSec.toLong(), repeatSec.toLong(), TimeUnit.SECONDS)
         repeatTasks[entryId] = task
+    }
+
+    /** 重复到上限：撤掉 ongoing 的强通知，改成一条不持续的静默通知 */
+    private fun postMuted(nid: Int, text: String) {
+        val open = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pi = PendingIntent.getActivity(
+            this, 0, open,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val n = NotificationCompat.Builder(this, CH_WEAK)
+            .setSmallIcon(R.drawable.ic_stat_notify)
+            .setContentTitle("已转静默提醒")
+            .setContentText(text)
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .build()
+        try { nm.notify(nid, n) } catch (_: Exception) {}
     }
 
     private fun cancel(entryId: String) {

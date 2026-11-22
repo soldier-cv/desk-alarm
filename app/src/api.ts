@@ -68,6 +68,7 @@ export interface Config {
 const DEFAULT_SETTINGS: Settings = {
   escalateAfterSec: 30,
   repeatEverySec: 120,
+  maxRepeatCount: 5,
   quietStartMin: 23 * 60 + 30,
   quietEndMin: 7 * 60,
   sound: 'system',
@@ -88,9 +89,10 @@ export const DEFAULT_CONFIG: Config = {
 export function loadConfig(): Config {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    return raw
-      ? { ...DEFAULT_CONFIG, ...(JSON.parse(raw) as Partial<Config>) }
-      : { ...DEFAULT_CONFIG };
+    if (!raw) return { ...DEFAULT_CONFIG };
+    const parsed = JSON.parse(raw) as Partial<Config>;
+    // 旧缓存或旧服务端可能没有新字段，这里补齐，避免读到 undefined
+    return { ...DEFAULT_CONFIG, ...parsed, settings: { ...DEFAULT_SETTINGS, ...(parsed.settings ?? {}) } };
   } catch {
     return { ...DEFAULT_CONFIG };
   }
