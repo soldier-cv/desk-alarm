@@ -306,6 +306,8 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .capture-in:focus-within { border-color: var(--flare); }
 .capture-in .prompt { color: var(--dim); font-family: var(--mono); flex: none; }
 .capture-in input { flex: 1; min-width: 0; background: none; border: none; font-size: 14px; color: var(--text); }
+/* 焦点反馈只留外层这一圈，别让内层 input 再画一遍 outline（否则是两个框） */
+.capture-in input:focus, .capture-in input:focus-visible { outline: none; }
 .capture-in input::placeholder { color: var(--muted); }
 .parse { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .parse .lb { font-size: 11px; color: var(--dim); }

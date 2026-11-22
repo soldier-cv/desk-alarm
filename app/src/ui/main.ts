@@ -2605,7 +2605,8 @@ function onRealtime(msg: ServerMessage) {
           title: '补发提醒',
           body: `${Math.max(1, Math.round(m.lateByMs / 60_000))} 分钟前就该响：${m.entry.text}`,
         });
-        if (!alarm.fire(m.entry)) pushWeak(m.entry);
+        // 已经 ringPing 过补发提醒，别让 fire 再弹一条"到点了"
+        if (!alarm.fire(m.entry, true)) pushWeak(m.entry);
       }
       void refresh();
       break;

@@ -28,7 +28,8 @@ let counts = { today: 0, up: 0, inbox: 0, all: 0, done: 0, missed: 0, dismissed:
 
 const alarm = new AlarmController({
   onNotify: (e) => notify(e.text, '到点了'),
-  onShow: (e) => notify(e.text, '提醒 · 需要处理'),
+  // 移动端没有接管窗口，通知已在 onNotify 出过；这里再弹一条就是重复
+  onShow: () => {},
   onEscalate: (e) => notify(e.text, '还没处理？'),
   onRepeat: (e, n) => notify(e.text, `重复提醒 ${n}`),
   onDismiss: () => { void refresh(); },
@@ -395,7 +396,8 @@ function onRealtime(msg: ServerMessage) {
       saveConfig({ serverSkewMs: msg.serverTs - Date.now(), settings: { ...loadConfig().settings, ...msg.settings } });
       for (const m of msg.missed) {
         notify('补发提醒', `${m.entry.text}`);
-        if (!alarm.fire(m.entry)) pushWeak(m.entry);
+        // 已经弹过"补发提醒"，fire 里别再弹一条"到点了"
+        if (!alarm.fire(m.entry, true)) pushWeak(m.entry);
       }
       void refresh();
       break;
