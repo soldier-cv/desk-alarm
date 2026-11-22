@@ -669,7 +669,16 @@ async function downloadUpdate() {
     downloadedVersion = version;
     flash(`v${version} 下载完成，点「安装」开始安装`);
   } catch (err) {
-    flash('下载失败：' + (err instanceof Error ? err.message : String(err)));
+    const msg = err instanceof Error ? err.message : String(err);
+    // 本地已是最新但缓存标记没清（手动装过新包）：借这次失败自愈，别一直挂着「有更新」
+    if (msg.includes('已是最新')) {
+      const prev = lastUpdateResult();
+      if (prev) localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify({
+        ...prev, available: false, message: msg,
+      }));
+      downloadedVersion = null;
+    }
+    flash('下载失败：' + msg);
   } finally {
     if (top) top.disabled = false;
     if (set) set.disabled = false;
