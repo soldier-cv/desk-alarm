@@ -12,6 +12,7 @@ import {
   type MyStats, type Overview, type ServerMessage, type Settings,
 } from '../api';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { getVersion } from '@tauri-apps/api/app';
 import { AlarmController, dropWeakByEntry, onWeakChange, pushWeak } from '../alarm';
 import { clearDevicePin, hasDevicePin, setDevicePin, verifyDevicePin } from '../device-pin';
 import { THEMES, applyTheme, loadTheme, saveTheme } from '../theme';
@@ -579,6 +580,33 @@ function renderUpdateStatus() {
     btn.textContent = !r?.available ? '更新' : ready ? `安装 v${r.version}` : `有更新 v${r.version}`;
     btn.classList.toggle('has-update', !!r?.available);
   }
+}
+
+/** 手动装了新包后，localStorage 里可能残留旧的「有更新」标记，启动时按真实版本清掉 */
+async function invalidateStaleUpdateResult() {
+  const r = lastUpdateResult();
+  if (!r?.available || !hasTauri()) return;
+  try {
+    const cur = await getVersion();
+    if (!versionNewer(r.version, cur)) {
+      localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify({
+        ...r, available: false, message: `当前已是最新版本 v${cur}`,
+      }));
+      downloadedVersion = null;
+    }
+  } catch { /* 拿不到版本就保留原样，避免误清 */ }
+}
+
+/** a 是否比 b 新。与 update.rs 的 is_newer 一致，只按点分段比数字 */
+function versionNewer(a: string, b: string): boolean {
+  const parse = (s: string) => s.replace(/^[vV]/, '').split('.').map((p) => parseInt(p, 10) || 0);
+  const x = parse(a), y = parse(b);
+  const n = Math.max(x.length, y.length);
+  for (let i = 0; i < n; i++) {
+    const l = x[i] ?? 0, r = y[i] ?? 0;
+    if (l !== r) return l > r;
+  }
+  return false;
 }
 
 function rememberResult(info: UpdateInfo) {
@@ -2530,6 +2558,7 @@ function afterAuth() {
 function boot() {
   renderShell();
   wireEvents();
+  void invalidateStaleUpdateResult().then(renderUpdateStatus);
   setLink('connecting');
   if (hasTauri()) {
     if (isDesktop()) void native('set_close_behavior', { behavior: closeBehavior() });

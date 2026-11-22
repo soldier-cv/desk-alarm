@@ -132,16 +132,24 @@ export function switchServer(baseUrl: string) {
 export async function probeServer(baseUrl: string): Promise<{ ok: boolean; reason: string; skewMs: number }> {
   const norm = normalizeBaseUrl(baseUrl);
   if (!norm) return { ok: false, reason: '地址格式不对，需要 http:// 或 https:// 开头', skewMs: 0 };
+  // AbortSignal.timeout 是 Chrome 103 才有的，安卓系统 WebView 常低于这个版本。
+  // 缺失时直接调用会抛 TypeError，被下面的 catch 误报成「连不上」，登录页就永远进不去。
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
   try {
     const started = Date.now();
-    const r = await fetch(`${norm}/healthz`, { signal: AbortSignal.timeout(6000) });
+    const r = await fetch(`${norm}/healthz`, { signal: ctrl.signal });
     if (!r.ok) return { ok: false, reason: `服务端返回 ${r.status}`, skewMs: 0 };
     const j = await r.json();
     if (!j?.ok) return { ok: false, reason: '那个地址上没有 DeskAlarm 服务', skewMs: 0 };
     // 单程时延的一半是估算，只用来让倒计时别差太多
     return { ok: true, reason: '', skewMs: j.serverTs - (Date.now() + (Date.now() - started) / 2) };
   } catch (e) {
-    return { ok: false, reason: e instanceof Error && e.name === 'TimeoutError' ? '连接超时' : '连不上', skewMs: 0 };
+    const timedOut = ctrl.signal.aborted || (e instanceof Error && e.name === 'AbortError');
+    const detail = e instanceof Error ? e.message : String(e);
+    return { ok: false, reason: timedOut ? '连接超时，确认手机和服务端在同一网络' : `连不上：${detail}`, skewMs: 0 };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

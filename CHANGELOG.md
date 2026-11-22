@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Fixed
+- 安卓端登录一直显示「连不上」：连接探测用了旧安卓 WebView 不支持的 `AbortSignal.timeout()`，会直接抛异常被误判为连不上；改用兼容的 AbortController 实现，并保留具体错误原因。
+- 手动装了新版本后，桌面端顶栏「有更新」标记残留、点下载却提示「已是最新」：启动时按真实版本清理过期标记。
+
+### Added
+- 安卓登录页新增独立的「测试连接」按钮，填好服务端地址即可先验证连通性再登录。
+
 ## [v0.4.6] - 2026-11-21
 
 ### Added

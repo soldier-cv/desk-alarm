@@ -422,6 +422,7 @@ function renderAuth(needed: boolean) {
       <div class="fld"><label>服务端地址</label>
         <input id="base" value="${esc(cfg.baseUrl || 'http://192.168.1.10:8091')}" autocomplete="off" spellcheck="false"></div>
       <div class="probe" id="probe"></div>
+      <button class="btn" id="test-conn" style="margin-bottom:16px">测试连接</button>
       <div class="fld"><label>用户名</label><input id="user" autocomplete="username"></div>
       <div class="fld"><label>密码</label><input id="pass" type="password" autocomplete="${needed ? 'new-password' : 'current-password'}"></div>
       ${needed ? '<div class="fld"><label>确认密码</label><input id="confirm" type="password" autocomplete="new-password"></div>' : ''}
@@ -434,7 +435,23 @@ function renderAuth(needed: boolean) {
 
   const err = document.getElementById('err')!;
   const base = document.getElementById('base') as HTMLInputElement;
+  const probeEl = document.getElementById('probe')!;
   document.getElementById('to-login')?.addEventListener('click', () => renderAuth(false));
+
+  const testConn = async () => {
+    const norm = normalizeBaseUrl(base.value);
+    if (!norm) { probeEl.textContent = '地址格式不对，需要 http:// 或 https:// 开头'; probeEl.className = 'probe bad'; return; }
+    probeEl.textContent = '测试中…'; probeEl.className = 'probe';
+    const r = await probeServer(norm);
+    probeEl.textContent = r.ok
+      ? `已连上（时钟差 ${Math.round(r.skewMs)} ms），可以登录`
+      : r.reason;
+    probeEl.className = 'probe ' + (r.ok ? 'ok' : 'bad');
+    if (r.ok) saveConfig({ serverSkewMs: r.skewMs });
+    return r.ok;
+  };
+  document.getElementById('test-conn')!.onclick = () => { void testConn(); };
+
   document.getElementById('go')!.onclick = async () => {
     err.textContent = '';
     const norm = normalizeBaseUrl(base.value);
@@ -444,7 +461,6 @@ function renderAuth(needed: boolean) {
     const deviceName = (document.getElementById('dev') as HTMLInputElement).value.trim() || '我的手机';
     if (!username) { err.textContent = '请填用户名'; return; }
     if (password.length < 8) { err.textContent = '密码至少 8 位'; return; }
-    const probeEl = document.getElementById('probe')!;
     probeEl.textContent = '连接中…'; probeEl.className = 'probe';
     const pr = await probeServer(norm);
     probeEl.textContent = pr.ok ? '已连上' : pr.reason;
