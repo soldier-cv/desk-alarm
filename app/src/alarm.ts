@@ -39,9 +39,8 @@ export class AlarmController {
   }
 
   /**
-   * 响铃。返回是否真的进了强提醒队列。
-   * weak 的条目只弹通知就返回 false，由调用方走弱提示横幅
-   * silent：补发场景调用方已经弹过「补发提醒」，这里别再弹第二条
+   * 响铃。weak 只弹通知就返回 false，由调用方走弱提示横幅。
+   * silent：补发场景已弹过「补发提醒」，这里别再弹第二条。
    */
   fire(entry: Entry, silent = false): boolean {
     const settings = loadConfig().settings;

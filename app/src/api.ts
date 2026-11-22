@@ -419,6 +419,29 @@ export interface Parsed {
   strength: Strength;
 }
 
+/** 中文数目字 → 数值。相对时间里「一分钟后」「两小时后」「半小时」都要能认 */
+const CN_DIGIT: Record<string, number> = {
+  零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
+  六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
+};
+
+function cnNumber(s: string): number | null {
+  if (!s) return null;
+  if (/^\d+$/.test(s)) return Number(s);
+  if (s === '半') return 0.5;
+  if (s === '两') return 2;
+  if (s === '十') return 10;
+  if (/^十[一二三四五六七八九]$/.test(s)) return 10 + CN_DIGIT[s[1]];
+  if (/^[二三四五六七八九]十$/.test(s)) return CN_DIGIT[s[0]] * 10;
+  if (/^[二三四五六七八九]十[一二三四五六七八九]$/.test(s)) {
+    return CN_DIGIT[s[0]] * 10 + CN_DIGIT[s[2]];
+  }
+  return CN_DIGIT[s] ?? null;
+}
+
+/** 强提示关键词。只有明确要求才强提示，默认弱。见 docs/requirements.md */
+const URGENT_RE = /一定要|必须|别忘|不要忘|别忘了|务必|千万|记得|重要|紧急|马上|立刻|立即|尽快|截止|deadline/i;
+
 export function parseInput(raw: string, now = serverNow()): Parsed {
   const s = raw.trim();
   const out: Parsed = {
@@ -446,18 +469,21 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
     return past;
   };
   const dated = pickDate(explicit, true) ?? pickDate(shortDate, false);
-  const rel = s.match(/(\d+)\s*(分钟|分|小时|时)后/);
+  // 相对时间：阿拉伯数字和中文数字都要认（3分钟后 / 三小时后 / 半小时后 / 二十分钟后）
+  const rel = s.match(/(半|\d+|[零〇一二两三四五六七八九十]+)\s*(分钟|分|小时|时|钟头)\s*(之?后)?/);
   const abs = s.match(/(今天|明天|后天|大后天|周[一二三四五六日天])[^\d]{0,4}(\d{1,2})\s*[:：点]\s*(\d{2})?/);
   const clock = s.match(/^\s*(\d{1,2})[:：](\d{2})\s*$/);
-  const urgent = /(一定要|必须|别忘|不要忘|重要|紧急|马上|立刻)/.test(s);
+  const urgent = URGENT_RE.test(s);
 
   if (dated) {
     const p = (n: number) => String(n).padStart(2, '0');
     out.remindAt = dated.getTime();
     out.timeLabel = `${dated.getFullYear()}-${p(dated.getMonth() + 1)}-${p(dated.getDate())} ${p(dated.getHours())}:${p(dated.getMinutes())}`;
   } else if (rel) {
-    const n = Number(rel[1]);
-    const mins = /小时|时/.test(rel[2]) ? n * 60 : n;
+    const raw = cnNumber(rel[1]) ?? NaN;
+    // 「半」配「分钟」是半小时=30分，配「小时/钟头」是30分，配「时」也是
+    const unitIsHour = /小时|时|钟头/.test(rel[2]);
+    const mins = Math.round(raw * (unitIsHour ? 60 : 1));
     out.remindAt = now + mins * 60_000;
     out.timeLabel = mins >= 60 ? `${(mins / 60).toFixed(mins % 60 ? 1 : 0)} 小时后` : `${mins} 分钟后`;
   } else if (abs) {

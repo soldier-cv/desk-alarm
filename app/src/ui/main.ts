@@ -2219,10 +2219,9 @@ async function toggleDone(id: string) {
   } catch { /* 列表会自己同步回来 */ }
 }
 
-/**
- * 行上的「推迟」。按钮叫推迟就该让用户选推迟多久，
- * 原来点一下直接跳到明天同一时间，和按钮上的字对不上
- */
+type SnoozePick = 'rearm' | { minutes: number } | { to: number } | null;
+
+// 行上的「推迟」：相对档传 minutes 让服务端按 max(提醒时间,现在) 算，绝对档传 to
 const SNOOZE_CHOICES: Array<[string, number]> = [
   ['10 分钟后', 10],
   ['30 分钟后', 30],
@@ -2241,25 +2240,30 @@ async function promptSnooze(id: string) {
     return;
   }
 
+  // 服务端收到 minutes 时用 max(remindAt, now) 作基准；绝对时刻用 to
+  const body = 'minutes' in pick ? { minutes: pick.minutes } : { to: pick.to };
   try {
-    await api.snooze(id, { to: pick });
+    const r = await api.snooze(id, body);
+    const at = r.entry?.remindAt;
+    flash(at ? `已推迟到 ${dayLabel(at)} ${hhmm(at)}` : '已推迟');
     void refresh();
   } catch {
     flash('推迟失败，检查服务端连接');
   }
 }
 
-function chooseSnooze(base: Entry | undefined): Promise<'rearm' | number | null> {
+function chooseSnooze(base: Entry | undefined): Promise<SnoozePick> {
   return new Promise((resolve) => {
     // 已完成/被忽略过的条目，先给一个「重新提醒」的入口
     const canRearm = base?.status === 'done' || (base?.dismissCount ?? 0) > 0;
+    const relativeBase = Math.max(base?.remindAt ?? 0, serverNow());
     const whenLabel = (min: number) => {
       if (min < 0) {
         const d = new Date(base?.remindAt ?? serverNow());
         d.setDate(d.getDate() + 1);
         return `明天 ${hhmm(d.getTime())}`;
       }
-      return hhmm(serverNow() + min * 60_000);
+      return hhmm(relativeBase + min * 60_000);
     };
     const host = document.createElement('div');
     host.className = 'panel-mask';
@@ -2276,7 +2280,7 @@ function chooseSnooze(base: Entry | undefined): Promise<'rearm' | number | null>
       </div>`;
     document.body.appendChild(host);
 
-    const done = (v: 'rearm' | number | null) => {
+    const done = (v: SnoozePick) => {
       host.remove();
       document.removeEventListener('keydown', onKey);
       resolve(v);
@@ -2292,9 +2296,9 @@ function chooseSnooze(base: Entry | undefined): Promise<'rearm' | number | null>
       if (min < 0) {
         const d = new Date(base?.remindAt ?? serverNow());
         d.setDate(d.getDate() + 1);
-        done(d.getTime());
+        done({ to: d.getTime() });
       } else {
-        done(serverNow() + min * 60_000);
+        done({ minutes: min });
       }
     });
     host.querySelector<HTMLElement>('.snooze-opts .nav')!.focus();
