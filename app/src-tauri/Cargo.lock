@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "deskalarm"
-version = "0.4.10"
+version = "0.4.11"
 dependencies = [
  "log",
  "reqwest 0.12.28",
