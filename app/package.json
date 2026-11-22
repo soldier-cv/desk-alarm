@@ -1,6 +1,6 @@
 {
   "name": "@deskalarm/app",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "license": "MIT",
   "description": "DeskAlarm desktop client (Tauri 2)",
   "scripts": {

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v0.4.10] - 2026-11-22
+
 ### Added
 - 设置页新增「测试提醒」：可实际触发一次强/弱提醒，确认响铃、接管窗口、横幅的效果。
 
