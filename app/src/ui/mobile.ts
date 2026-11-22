@@ -4,6 +4,7 @@
  * 桌面那套三栏布局在窄屏上被挤烂，所以单独出这一份。
  */
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, getMachineId, getPlatform, hhmm, hostOf,
   loadConfig, normalizeBaseUrl, onUnauthorized, parseInput, probeServer, saveConfig, serverNow,
@@ -305,16 +306,20 @@ function renderSettings() {
       <button class="btn block" id="test">测试连接</button>
     </div>
     <div class="set-group">
-      <h3>提醒偏好</h3>
-      <div class="set-row"><div><div class="lbl">强提醒升级等待</div><div class="sub">多久没处理就升级</div></div>
-        <span class="set-val">${s.escalateAfterSec} 秒</span></div>
-      <div class="set-row"><div><div class="lbl">重复提醒间隔</div><div class="sub">0 表示不重复</div></div>
-        <span class="set-val">${s.repeatEverySec} 秒</span></div>
-      <div class="set-row"><div><div class="lbl">静音时段</div><div class="sub">强提醒也不响</div></div>
-        <span class="set-val">${mm(s.quietStartMin)} – ${mm(s.quietEndMin)}</span></div>
-      <div class="set-row"><div><div class="lbl">提示音</div></div>
-        <span class="set-val">${s.sound === 'none' ? '关闭' : s.sound === 'custom' ? '自定义' : '系统'}</span></div>
-      <button class="btn block" id="reload" style="margin-top:12px">保存并重新加载偏好</button>
+      <h3>提醒偏好（一端改，所有设备生效）</h3>
+      <div class="set-field"><label>强提醒升级等待（秒）</label><input id="pf-escalate" type="number" min="5" max="3600" value="${s.escalateAfterSec}"></div>
+      <div class="set-field"><label>重复间隔（秒，0 不重复）</label><input id="pf-repeat" type="number" min="0" max="86400" value="${s.repeatEverySec}"></div>
+      <div class="set-field"><label>静音开始</label><input id="pf-quiet-start" type="time" value="${mm(s.quietStartMin)}"></div>
+      <div class="set-field"><label>静音结束</label><input id="pf-quiet-end" type="time" value="${mm(s.quietEndMin)}"></div>
+      <div class="set-field"><label>提示音</label>
+        <select id="pf-sound" class="m-select">
+          <option value="system" ${s.sound === 'system' ? 'selected' : ''}>系统提示音</option>
+          <option value="none" ${s.sound === 'none' ? 'selected' : ''}>静音</option>
+        </select></div>
+      <div class="set-field"><label>忽略几次后降级</label><input id="pf-downgrade" type="number" min="1" max="20" value="${s.autoDowngradeAfter}"></div>
+      <div class="set-field"><label>忽略几次后提示删除</label><input id="pf-neglected" type="number" min="1" max="50" value="${s.neglectedAfter}"></div>
+      <div class="probe" id="pf-msg"></div>
+      <button class="btn solid block" id="pf-save">保存偏好</button>
     </div>
     <div class="set-group">
       <h3>外观</h3>
@@ -346,10 +351,40 @@ function renderSettings() {
     probe.className = 'probe ' + (r.ok ? 'ok' : 'bad');
     if (r.ok) saveConfig({ serverSkewMs: r.skewMs });
   };
-  document.getElementById('reload')!.onclick = async () => {
-    try { const r = await api.settings(); saveConfig({ settings: r.settings }); toast('偏好已更新'); }
-    catch { toast('读取失败'); }
+  const tf = (id: string) => document.getElementById(id) as HTMLInputElement;
+  const toMin = (v: string) => {
+    const [h, m] = v.split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
   };
+  const pfMsg = document.getElementById('pf-msg')!;
+  document.getElementById('pf-save')!.onclick = async () => {
+    pfMsg.className = 'probe'; pfMsg.textContent = '';
+    const patch = {
+      escalateAfterSec: Number(tf('pf-escalate').value),
+      repeatEverySec: Number(tf('pf-repeat').value),
+      quietStartMin: toMin(tf('pf-quiet-start').value),
+      quietEndMin: toMin(tf('pf-quiet-end').value),
+      sound: (document.getElementById('pf-sound') as HTMLSelectElement).value as 'system' | 'none',
+      autoDowngradeAfter: Number(tf('pf-downgrade').value),
+      neglectedAfter: Number(tf('pf-neglected').value),
+    };
+    if (Object.values(patch).some((v) => typeof v === 'number' && (!Number.isFinite(v) || v < 0))) {
+      pfMsg.textContent = '请填写有效的数字'; pfMsg.className = 'probe bad'; return;
+    }
+    pfMsg.textContent = '保存中…';
+    try {
+      const r = await api.patchSettings(patch);
+      saveConfig({ settings: r.settings });
+      pfMsg.textContent = '已保存，所有设备同步生效'; pfMsg.className = 'probe ok';
+    } catch {
+      pfMsg.textContent = '保存失败，检查服务端连接'; pfMsg.className = 'probe bad';
+    }
+  };
+  // 当前版本直接显示，不必等「检查更新」
+  if (hasTauri()) void getVersion().then((v) => {
+    const el = document.getElementById('curver');
+    if (el) el.textContent = 'v' + v;
+  }).catch(() => {});
   document.getElementById('theme')!.onchange = (ev) => {
     saveTheme((ev.target as HTMLSelectElement).value as 'dark' | 'morandi');
   };
@@ -417,6 +452,12 @@ function onRealtime(msg: ServerMessage) {
       break;
     case 'devices.changed':
       void refresh();
+      break;
+    case 'settings.changed':
+      saveConfig({ settings: msg.settings });
+      // 设置页正开着就重绘，让别处的改动立刻可见
+      if (view === 'settings') renderSettings();
+      toast('提醒偏好已在别的设备更新');
       break;
     default:
       break;

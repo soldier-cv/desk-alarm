@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ### Changed
 - 推迟改由服务端按 max(提醒时间, 现在) 计算：未到点的条目基于原时间推，已到点的贪睡基于现在推。
+- 移动端设置页的提醒偏好改为可编辑，保存后走服务端按用户下发，一端改所有设备生效；当前版本号进入设置页即显示。
 
 ### Fixed
 - 到期只弹一条通知；输入框焦点只画外框一圈。
