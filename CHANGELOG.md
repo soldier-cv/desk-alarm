@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+- 安卓端条目补齐随时间渐变特效，与桌面端一致：四档临近梯度从行首渗入、due 档级别点呼吸、时间文字随档位变色；每 20 秒原地推进，滚动位置不丢。
+
 ## [v0.4.7] - 2026-11-22
 
 ### Fixed
