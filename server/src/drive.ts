@@ -5,7 +5,7 @@ import { log } from './log.js';
 import {
   focusReason, inQuietHours, levelFor, nextOccurrence, stalenessOf, suggestNextStep, weightOf,
 } from './policy.js';
-import { countStrongToday, createNudge, markDelivered } from './repo/nudges.js';
+import { countStrongToday, createNudge, markAcked, markDelivered } from './repo/nudges.js';
 import { insertFollowup } from './repo/followups.js';
 import {
   getPursuit, listActiveUserIds, listPursuits, setDueAt, setImportance, setStatus,
@@ -76,16 +76,36 @@ export async function pushFocus(userId: string): Promise<FocusResult> {
 
 async function driveUser(userId: string, nowMs: number): Promise<{ active: number; stalled: number }> {
   const settings = await getSettings(userId);
-  const pursuits = await listPursuits(userId, { status: 'active' });
+  const pursuits = (await listPursuits(userId, { status: 'active' }))
+    .sort((a, b) => weightOf(b, nowMs) - weightOf(a, nowMs));
   let strongLeft = Math.max(0, settings.dailyStrongBudget - await countStrongToday(userId));
   let stalled = 0;
   const key = dayKey(nowMs);
+  const quiet = inQuietHours(settings, nowMs);
+  const dueCount = pursuits.filter((p) => p.dueAt !== null && p.dueAt <= nowMs).length;
+  let dueDeliveredThisTick = false;
 
   for (const p of pursuits) {
     const staleness = stalenessOf(p.lastActivityAt, nowMs);
     if (staleness >= settings.escalateAfterMs.l3) stalled++;
 
-    if (p.nature === 'recurring' && p.dueAt !== null && p.dueAt <= nowMs && p.recurrence) {
+    // 到点提醒只认用户自己写下的时间，fireKey 绑住 dueAt，改天后才再响一次。
+    // 静音时段整批跳过，下一 tick（静音结束）自然补发；它不算强打扰，不占额度。
+    let dueFired = false;
+    if (p.dueAt !== null && p.dueAt <= nowMs && !quiet) {
+      const deviceId = p.deviceIds.find((id) => hub.isOnline(id)) ?? null;
+      const reason = dueCount > 1 ? `到点了，还有 ${dueCount - 1} 件等着你` : '到点了，点开处理';
+      const dueNudge = await createNudge(
+        userId, p.id, deviceId, 2, 'notification', reason, `due-${p.id}-${p.dueAt}`,
+      );
+      dueFired = dueNudge !== null;
+      // 同一 tick 到点的多条只推权重最高那条，其余记占位：合并了通知，也挡住下一 tick 重复触发
+      if (dueNudge && dueDeliveredThisTick) await markAcked(dueNudge.id, 'coalesced');
+      if (dueNudge && !dueDeliveredThisTick) dueDeliveredThisTick = true;
+    }
+
+    // 静音里别推进循环的到期日，否则静音结束后原截止已被改掉，补发就丢了
+    if (p.nature === 'recurring' && p.dueAt !== null && p.dueAt <= nowMs && p.recurrence && !quiet) {
       const next = nextOccurrence(Math.max(p.dueAt, nowMs), p.recurrence);
       if (next !== null) {
         await setDueAt(p.id, userId, next);
@@ -114,6 +134,9 @@ async function driveUser(userId: string, nowMs: number): Promise<{ active: numbe
       await setStatus(p.id, userId, 'archived');
       continue;
     }
+
+    // 到点已经通知过，别再叠一条同级的停滞通知
+    if (dueFired && level === 2) continue;
 
     const deviceId = p.deviceIds.find((id) => hub.isOnline(id)) ?? null;
     const reason = focusReason(p);

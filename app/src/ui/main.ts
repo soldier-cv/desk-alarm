@@ -91,13 +91,14 @@ let editingLocal = false;
 let platform: 'web' | 'windows' | 'macos' | 'linux' | 'android' = 'web';
 const isDesktop = () => platform === 'windows' || platform === 'macos' || platform === 'linux';
 let captureImportance: Importance = 0;
+const IMP_TITLE = ['不标：按默认权重排期', '★ 低：略微优先', '★★ 中：优先推进', '★★★ 高：最优先推进'];
 
 const control = new FollowupController({
   onSilent: () => { void refresh(); },
-  onNotify: (p, level, reason, attempt) => {
+  onNotify: (p, _level, reason, attempt) => {
     ringPing({
-      title: `需要推进 L${level}${attempt > 1 ? `（第 ${attempt} 次）` : ''}`,
-      body: `${p.text}${reason ? ` · ${reason}` : ''}`,
+      title: p.text,
+      body: `${reason}${attempt > 1 ? ` · 第 ${attempt} 次` : ''}`,
     });
   },
   onBanner: (p, level, reason) => pushBanner(p, reason, level),
@@ -387,7 +388,7 @@ function renderShell() {
       <span class="chip ${p.kind === 'text' ? '' : 'hot'}">${esc(p.kindLabel)}</span>
       <span class="chip ${p.remindAt ? 'hot' : ''}">${esc(p.remindAt ? `截止：${p.timeLabel}` : '进收件箱')}</span>
       ${([0, 1, 2, 3] as Importance[]).map((n) =>
-        `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}">${['不标', '★', '★★', '★★★'][n]}</button>`,
+        `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${['不标', '★', '★★', '★★★'][n]}</button>`,
       ).join('')}`;
   };
   cap.addEventListener('input', preview);
@@ -845,7 +846,7 @@ function renderEditor() {
 
       <div class="fld"><label>重要性</label>
         <div class="seg">${([0, 1, 2, 3] as Importance[]).map((n) =>
-          `<button data-imp="${n}" class="${p.importance === n ? 'on' : ''}">${n === 0 ? '不标' : '★'.repeat(n)}</button>`,
+          `<button data-imp="${n}" class="${p.importance === n ? 'on' : ''}" title="${IMP_TITLE[n]}">${n === 0 ? '不标' : '★'.repeat(n)}</button>`,
         ).join('')}</div></div>
 
       <div class="fld"><label>启动精力</label>

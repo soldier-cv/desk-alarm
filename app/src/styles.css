@@ -355,7 +355,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .group.hot { color: var(--flare); }
 
 .item { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: start;
-  padding: 9px 10px; border-radius: var(--r); border: 1px solid transparent; cursor: pointer;
+  margin: 0 10px; padding: 9px 10px; border-radius: var(--r); border: 1px solid transparent; cursor: pointer;
   transition: background-color .1s, border-color .1s; }
 .item:hover { background-color: var(--surface); }
 .item.on { background-color: var(--raised); border-color: var(--line); }

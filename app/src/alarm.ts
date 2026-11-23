@@ -27,10 +27,14 @@ interface Active {
   timer: number | null;
 }
 
-const REPEAT_MS: Record<NudgeLevel, number> = {
-  1: 0, 2: 5 * 60_000, 3: 10 * 60_000, 4: 60_000, 5: 0,
+/** 重复间隔先密后疏；不设次数上限，停由用户动作或等级升级决定 */
+const REPEAT_LADDER: Record<NudgeLevel, number[]> = {
+  1: [],
+  2: [60_000, 3 * 60_000, 10 * 60_000, 30 * 60_000, 60 * 60_000],
+  3: [2 * 60_000, 10 * 60_000, 30 * 60_000, 60 * 60_000],
+  4: [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000],
+  5: [],
 };
-const MAX_ATTEMPTS: Record<NudgeLevel, number> = { 1: 0, 2: 6, 3: 3, 4: 0, 5: 0 };
 
 export class FollowupController {
   private active: Active | null = null;
@@ -97,19 +101,15 @@ export class FollowupController {
   private scheduleRepeat() {
     const a = this.active;
     if (!a) return;
-    const ms = REPEAT_MS[a.level];
-    if (ms <= 0) return;
+    const ladder = REPEAT_LADDER[a.level];
+    if (!ladder.length) return;
+    const ms = ladder[Math.min(a.attempt - 1, ladder.length - 1)];
     a.timer = window.setTimeout(() => {
       const cur = this.active;
       if (!cur || cur.pursuit.id !== a.pursuit.id) return;
+      // 静音时段只顺延，不消耗次数；静音结束后接着原来的节奏提醒
       if (inQuietHours(loadConfig().settings)) {
         this.scheduleRepeat();
-        return;
-      }
-      const cap = MAX_ATTEMPTS[cur.level];
-      if (cap > 0 && cur.attempt >= cap) {
-        this.stop();
-        this.cb.onStop(cur.pursuit, 'aged');
         return;
       }
       cur.attempt += 1;

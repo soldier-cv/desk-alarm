@@ -26,10 +26,9 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
- * 常驻前台服务：在原生层持有 WebSocket 与心跳，锁屏后 WebView 的 JS 被冻结也不受影响。
- * 到点由原生直接弹通知，不再等 JS——这是锁屏即时到达的关键。
- * 提醒逻辑从 JS 的 alarm.ts 搬过来：强提示按 repeatEverySec 重复，
- * 达到 maxRepeatCount 或收到 entry.acked 才停；静音时段暂停重复。
+ * 常驻前台服务：原生层持有 WebSocket 与心跳，锁屏后 WebView 的 JS 被冻结也不受影响。
+ * v2 只认 pursuit.nudge：L1 静默，L2+ 弹通知并按等级阶梯重复，直到用户处理。
+ * 重复间隔与 app/src/alarm.ts 的 REPEAT_LADDER 一致，没有次数上限。
  */
 class DeskAlarmKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -43,12 +42,10 @@ class DeskAlarmKeepAliveService : Service() {
     private var pingTask: ScheduledFuture<*>? = null
     private var reconnectTask: ScheduledFuture<*>? = null
     private val repeatTasks = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    private val cancelled = ConcurrentHashMap<String, Boolean>()
 
     @Volatile
     private var running = false
-    private var escalateSec = 30
-    private var repeatSec = 120
-    private var maxRepeat = 5
     private var quietStartMin = 23 * 60 + 30
     private var quietEndMin = 7 * 60
 
@@ -77,6 +74,7 @@ class DeskAlarmKeepAliveService : Service() {
 
     override fun onDestroy() {
         running = false
+        cancelled.clear()
         pingTask?.cancel(false)
         reconnectTask?.cancel(false)
         repeatTasks.values.forEach { it.cancel(false) }
@@ -136,62 +134,74 @@ class DeskAlarmKeepAliveService : Service() {
         when (msg.optString("t")) {
             "welcome" -> {
                 msg.optJSONObject("settings")?.let {
-                    escalateSec = it.optInt("escalateAfterSec", 30)
-                    repeatSec = it.optInt("repeatEverySec", 120)
-                    maxRepeat = it.optInt("maxRepeatCount", 5)
-                    quietStartMin = it.optInt("quietStartMin", 23 * 60 + 30)
-                    quietEndMin = it.optInt("quietEndMin", 7 * 60)
+                    quietStartMin = it.optInt("quietStartMin", quietStartMin)
+                    quietEndMin = it.optInt("quietEndMin", quietEndMin)
                 }
+                // missed 是 Nudge，没有事项正文；合成一条汇总，不按条数连轰
                 val missed = msg.optJSONArray("missed") ?: JSONArray()
-                for (i in 0 until missed.length()) {
-                    val entry = missed.optJSONObject(i)?.optJSONObject("entry") ?: continue
-                    post(entry, msg.missedStrong(entry))
+                val strong = (0 until missed.length()).any {
+                    (missed.optJSONObject(it)?.optInt("level", 0) ?: 0) >= 2
                 }
+                if (strong) postMissed(missed.length())
             }
-            "entry.fired" -> {
-                val entry = msg.optJSONObject("entry") ?: return
-                post(entry, entry.optString("strength") == "strong")
+            "pursuit.nudge" -> {
+                val pursuit = msg.optJSONObject("pursuit") ?: return
+                val id = pursuit.optString("id")
+                val text = pursuit.optString("text")
+                if (id.isEmpty() || text.isEmpty()) return
+                val level = msg.optInt("level", 1)
+                // L1 只进聚焦列表，不弹通知；L2+ 才提醒
+                if (level < 2) return
+                val reason = msg.optString("reason")
+                cancelled[id] = false
+                post(id, text, reason, level)
+                scheduleRepeat(id, text, reason, level)
             }
-            "entry.weak" -> {
-                val entry = msg.optJSONObject("entry") ?: return
-                post(entry, false)
-            }
-            "entry.acked" -> cancel(msg.optString("entryId"))
+            "pursuit.followed" -> cancel(msg.optJSONObject("pursuit")?.optString("id") ?: "")
+            "pursuit.deleted" -> cancel(msg.optString("pursuitId"))
         }
     }
 
-    /** MissedFire 里强度从 entry 本身取 */
-    private fun JSONObject.missedStrong(entry: JSONObject): Boolean =
-        entry.optString("strength") == "strong"
+    private fun notifyId(pursuitId: String): Int =
+        (pursuitId.hashCode() and 0x7fffffff).let { if (it == 0) 1 else it }
 
-    private fun notifyId(entryId: String): Int =
-        (entryId.hashCode() and 0x7fffffff).let { if (it == 0) 1 else it }
+    private fun openIntent(): PendingIntent {
+        val open = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        return PendingIntent.getActivity(
+            this, 0, open,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
 
-    private fun post(entry: JSONObject, strong: Boolean) {
-        val id = entry.optString("id")
-        val text = entry.optString("text")
-        if (id.isEmpty() || text.isEmpty()) return
-        val nid = notifyId(id)
-        val channel = if (strong) CH_STRONG else CH_WEAK
+    private fun post(pursuitId: String, text: String, reason: String, level: Int, attempt: Int = 1) {
+        val nid = notifyId(pursuitId)
         main.post {
-            val open = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-            }
-            val pi = PendingIntent.getActivity(
-                this, 0, open,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            val n = NotificationCompat.Builder(this, channel)
+            val body = if (attempt > 1) "$reason · 第 $attempt 次" else reason
+            val n = NotificationCompat.Builder(this, CH_STRONG)
                 .setSmallIcon(R.drawable.ic_stat_notify)
-                .setContentTitle(if (strong) "提醒 · 需要处理" else "提醒")
-                .setContentText(text)
-                .setContentIntent(pi)
-                .setAutoCancel(!strong)
-                .setOngoing(strong)
+                .setContentTitle(text)
+                .setContentText(body)
+                .setContentIntent(openIntent())
+                .setAutoCancel(level < 4)
+                .setOngoing(level >= 4)
                 .build()
             try { nm.notify(nid, n) } catch (_: Exception) {}
         }
-        if (strong) scheduleRepeat(nid, id, text)
+    }
+
+    private fun postMissed(count: Int) {
+        main.post {
+            val n = NotificationCompat.Builder(this, CH_STRONG)
+                .setSmallIcon(R.drawable.ic_stat_notify)
+                .setContentTitle("有 $count 条跟进等你处理")
+                .setContentText("点开看看哪些到点了")
+                .setContentIntent(openIntent())
+                .setAutoCancel(true)
+                .build()
+            try { nm.notify(MISSED_NOTIFICATION_ID, n) } catch (_: Exception) {}
+        }
     }
 
     /** 与前端 inQuietHours 一致：静音时段暂停重复，跨零点同样处理 */
@@ -203,65 +213,44 @@ class DeskAlarmKeepAliveService : Service() {
         else m >= quietStartMin || m < quietEndMin
     }
 
-    /** 强提示：升级点后按 repeatEverySec 重复，达到上限或别处确认才停 */
-    private fun scheduleRepeat(nid: Int, entryId: String, text: String) {
-        repeatTasks[entryId]?.cancel(false)
-        // 周期为 0 时 scheduleAtFixedRate 会抛异常，这种情况只留首条通知
-        if (repeatSec <= 0) return
-        val done = java.util.concurrent.atomic.AtomicInteger(0)
-        val task = executor.scheduleAtFixedRate({
-            if (inQuiet()) return@scheduleAtFixedRate
-            val n = done.incrementAndGet()
-            if (maxRepeat > 0 && n > maxRepeat) {
-                repeatTasks.remove(entryId)?.cancel(false)
-                main.post { postMuted(nid, text) }
-                return@scheduleAtFixedRate
-            }
-            main.post {
-                val open = Intent(this, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+    /** 秒；与 alarm.ts 的 REPEAT_LADDER 对齐，最后一级保持重复直到用户处理 */
+    private fun ladderFor(level: Int): LongArray = when (level) {
+        2 -> longArrayOf(60, 180, 600, 1800, 3600)
+        3 -> longArrayOf(120, 600, 1800, 3600)
+        4 -> longArrayOf(60, 300, 900, 3600)
+        else -> longArrayOf()
+    }
+
+    private fun scheduleRepeat(pursuitId: String, text: String, reason: String, level: Int) {
+        repeatTasks[pursuitId]?.cancel(false)
+        val ladder = ladderFor(level)
+        if (ladder.isEmpty()) return
+
+        fun step(index: Int) {
+            if (cancelled[pursuitId] == true || !running) return
+            val delay = ladder[minOf(index, ladder.size - 1)]
+            val future = executor.schedule({
+                if (cancelled[pursuitId] == true || !running) return@schedule
+                // 静音只顺延，不消耗次数；结束后接着原来的节奏
+                if (inQuiet()) {
+                    step(index)
+                    return@schedule
                 }
-                val pi = PendingIntent.getActivity(
-                    this, 0, open,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-                val n = NotificationCompat.Builder(this, CH_STRONG)
-                    .setSmallIcon(R.drawable.ic_stat_notify)
-                    .setContentTitle("还没处理？")
-                    .setContentText(text)
-                    .setContentIntent(pi)
-                    .setOngoing(true)
-                    .build()
-                try { nm.notify(nid, n) } catch (_: Exception) {}
-            }
-        }, escalateSec.toLong(), repeatSec.toLong(), TimeUnit.SECONDS)
-        repeatTasks[entryId] = task
-    }
-
-    /** 重复到上限：撤掉 ongoing 的强通知，改成一条不持续的静默通知 */
-    private fun postMuted(nid: Int, text: String) {
-        val open = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                val attempt = index + 1
+                main.post { post(pursuitId, text, reason, level, attempt) }
+                step(index + 1)
+            }, delay, TimeUnit.SECONDS)
+            repeatTasks[pursuitId] = future
         }
-        val pi = PendingIntent.getActivity(
-            this, 0, open,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val n = NotificationCompat.Builder(this, CH_WEAK)
-            .setSmallIcon(R.drawable.ic_stat_notify)
-            .setContentTitle("已转静默提醒")
-            .setContentText(text)
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-            .build()
-        try { nm.notify(nid, n) } catch (_: Exception) {}
+        step(0)
     }
 
-    private fun cancel(entryId: String) {
-        if (entryId.isEmpty()) return
-        repeatTasks.remove(entryId)?.cancel(false)
+    private fun cancel(pursuitId: String) {
+        if (pursuitId.isEmpty()) return
+        cancelled[pursuitId] = true
+        repeatTasks.remove(pursuitId)?.cancel(false)
         main.post {
-            try { nm.cancel(notifyId(entryId)) } catch (_: Exception) {}
+            try { nm.cancel(notifyId(pursuitId)) } catch (_: Exception) {}
         }
     }
 
@@ -290,21 +279,15 @@ class DeskAlarmKeepAliveService : Service() {
     }
 
     private fun buildRunningNotification(): Notification {
-        val open = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val pi = PendingIntent.getActivity(
-            this, 0, open,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, CH_RUNNING)
+        val n = NotificationCompat.Builder(this, CH_RUNNING)
             .setSmallIcon(R.drawable.ic_stat_notify)
             .setContentTitle("DeskAlarm 正在后台运行")
             .setContentText("保持提醒连接，锁屏也能收到，点此返回应用")
-            .setContentIntent(pi)
+            .setContentIntent(openIntent())
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+        return n
     }
 
     companion object {
@@ -315,6 +298,7 @@ class DeskAlarmKeepAliveService : Service() {
         private const val CH_STRONG = "deskalarm_strong"
         private const val CH_WEAK = "deskalarm_weak"
         private const val NOTIFICATION_ID = 1001
+        private const val MISSED_NOTIFICATION_ID = 1002
         @Volatile
         var INSTANCE: DeskAlarmKeepAliveService? = null
     }

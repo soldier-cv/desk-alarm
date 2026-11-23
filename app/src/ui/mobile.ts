@@ -31,12 +31,13 @@ let followups: Followup[] = [];
 let counts: Partial<Record<PursuitStatus, number>> = {};
 let selectedId: string | null = null;
 let captureImportance: Importance = 0;
+const IMP_TITLE = ['不标：按默认权重排期', '★ 低：略微优先', '★★ 中：优先推进', '★★★ 高：最优先推进'];
 const localHandled = new Map<string, number>();
 
 const control = new FollowupController({
   onSilent: () => { void refresh(); },
-  onNotify: (p, level, reason) => {
-    void notify(`需要推进 L${level}`, `${p.text}${reason ? ` · ${reason}` : ''}`);
+  onNotify: (p, _level, reason, attempt) => {
+    void notify(p.text, `${reason}${attempt > 1 ? ` · 第 ${attempt} 次` : ''}`);
     toast(`${p.text} · ${reason}`);
   },
   onBanner: (p, _level, reason) => toast(`${p.text} · ${reason}`),
@@ -139,7 +140,7 @@ function renderCapture() {
       <div class="cap-imp" id="cap-imp">
         <span>重要性</span>
         ${([0, 1, 2, 3] as Importance[]).map((n) =>
-          `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}">${['不标', '★', '★★', '★★★'][n]}</button>`,
+          `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${['不标', '★', '★★', '★★★'][n]}</button>`,
         ).join('')}
       </div>
       <div class="cap-row"><button class="btn solid block" id="save">记一条</button></div>
@@ -346,7 +347,7 @@ function renderDetail() {
       <div class="set-group">
         <h3>重要性</h3>
         <div class="imp-row">${([0, 1, 2, 3] as Importance[]).map((n) =>
-          `<button class="btn ${p.importance === n ? 'solid' : ''}" data-imp="${n}">${['不标', '★', '★★', '★★★'][n]}</button>`,
+          `<button class="btn ${p.importance === n ? 'solid' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${['不标', '★', '★★', '★★★'][n]}</button>`,
         ).join('')}</div>
       </div>
 

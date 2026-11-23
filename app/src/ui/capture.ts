@@ -20,6 +20,7 @@ let picked: Parsed = parseInput('');
 let importance: Importance = 0;
 
 const IMP_LABEL = ['不标', '★', '★★', '★★★'];
+const IMP_TITLE = ['不标：按默认权重排期', '★ 低：略微优先', '★★ 中：优先推进', '★★★ 高：最优先推进'];
 
 function esc(s: string): string {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
@@ -39,7 +40,7 @@ function renderParse(raw: string) {
     )}</span>
     <span class="chip">重要性</span>
     ${([0, 1, 2, 3] as Importance[]).map((n) =>
-      `<button type="button" class="chip ${importance === n ? 'hot' : ''}" data-imp="${n}">${IMP_LABEL[n]}</button>`,
+      `<button type="button" class="chip ${importance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${IMP_LABEL[n]}</button>`,
     ).join('')}`;
 }
 

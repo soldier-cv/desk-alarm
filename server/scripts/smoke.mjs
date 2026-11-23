@@ -77,6 +77,15 @@ function connect(token) {
       }
       return null;
     },
+    waitForMatch: async (t, pred, ms = 8000) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        const hit = inbox.find((m) => m.t === t && pred(m));
+        if (hit) return hit;
+        await sleep(60);
+      }
+      return null;
+    },
   };
 }
 
@@ -308,6 +317,37 @@ try {
   ok('outbox 有记录', nRows.rowCount >= 1);
   ok('高等级走 takeover 通道', nRows.rows.some((r) => r.level >= 4 ? r.channel === 'takeover' : true));
   await c1.end();
+
+  /* ------------------------------------------------------ 到点通知 */
+  console.log('\n到点通知');
+  // 关掉静音时段，否则夜间跑冒烟会跳过到点通知，测试就不稳了
+  await api('/settings', { method: 'PATCH', token: ta, body: {
+    quietStartMin: 0, quietEndMin: 0,
+  } });
+  const cd = await db();
+  const due = await api('/pursuits', { method: 'POST', token: ta, body: {
+    text: '到点了要做的事', dueAt: Date.now() - 1000,
+  } });
+  const dueId = due.json.pursuit.id;
+  // 同一条会先收到 L1 聚焦 nudge；另外多条同时到点时只会推权重最高那条，
+  // 所以这里等的是「任意一条到点 L2」，具体条目在下面用 outbox 精确校验。
+  const dueNudge = await ca.waitForMatch('pursuit.nudge', (m) =>
+    m.level === 2 && String(m.reason).includes('到点了'));
+  ok('到点收到 L2 通知', !!dueNudge);
+  ok('到点是 notification 通道', dueNudge?.channel === 'notification');
+  ok('到点文案不说内部等级', typeof dueNudge?.reason === 'string' && dueNudge.reason.includes('到点了'));
+  await waitUntil(async () => {
+    const r = await cd.query(
+      `SELECT count(*)::int n FROM nudges WHERE pursuit_id = $1 AND fire_key LIKE 'due-%'`, [dueId],
+    );
+    return r.rows[0].n >= 1;
+  }, '到点 nudge 落 outbox');
+  await sleep(700);
+  const dueRows = await cd.query(
+    `SELECT fire_key FROM nudges WHERE pursuit_id = $1 AND fire_key LIKE 'due-%'`, [dueId],
+  );
+  ok('到点只触发一次', dueRows.rowCount === 1, `${dueRows.rowCount} 条`);
+  await cd.end();
 
   /* ---------------------------------------------------------- 重复 */
   console.log('\n重复规则');
