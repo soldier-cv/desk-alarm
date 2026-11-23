@@ -605,16 +605,40 @@ select.input:focus-visible { outline: 2px solid var(--flare-line); outline-offse
 .dd-check { opacity: 0; color: var(--flare); }
 .dd-item.on .dd-check { opacity: 1; }
 
-.tp-pop { width: 236px; }
-.tp-head { text-align: center; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
-.tp-cols { display: flex; align-items: stretch; gap: 4px; height: 168px; }
-.tp-col { flex: 1; overflow-y: auto; border: 1px solid var(--line-soft); border-radius: var(--r-sm);
-  background: var(--raised); scrollbar-width: thin; }
-.tp-cell { display: block; width: 100%; height: 28px; font-size: 12px; color: var(--text);
-  font-variant-numeric: tabular-nums; border-radius: 0; }
-.tp-cell:hover { background: var(--hover); }
-.tp-cell.on { background: var(--flare); color: var(--on-flare); font-weight: 600; }
-.tp-sep { align-self: center; color: var(--muted); font-size: 16px; }
+/* 时间选择：一个滚轮，两根轴共享中央选中带，靠渐隐表达「可滚」而不是画滚动条 */
+.tp-pop { width: 280px; padding: 16px; }
+.tp-top { text-align: center; }
+.tp-read { display: inline-flex; align-items: baseline; gap: 8px; background: transparent;
+  border: 0; color: var(--text); cursor: pointer; padding: 2px 8px; border-radius: var(--r-sm); }
+.tp-read:hover { background: var(--hover); }
+.tp-time { font-size: 34px; font-weight: 600; line-height: 1.1; letter-spacing: .5px;
+  font-variant-numeric: tabular-nums; }
+.tp-colon { color: var(--flare); }
+.tp-ampm { font-size: 11px; font-weight: 400; color: var(--muted); }
+.tp-hint { font-size: 11px; color: var(--dim); margin: 2px 0 14px; }
+.tp-edit { margin-bottom: 12px; }
+.tp-input { width: 100%; height: 34px; }
+.tp-edit-tip { font-size: 10.5px; color: var(--dim); margin-top: 6px; }
+.tp-wheel-wrap { position: relative; height: 170px; overflow: hidden; }
+.tp-band { position: absolute; left: -8px; right: -8px; top: 68px; height: 34px;
+  background: var(--flare-tint); border-top: 1px solid var(--flare-line);
+  border-bottom: 1px solid var(--flare-line); border-radius: 6px; pointer-events: none; z-index: 0; }
+.tp-cols { display: flex; height: 100%; position: relative; z-index: 1;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, var(--text) 26%, var(--text) 74%, transparent);
+  mask-image: linear-gradient(to bottom, transparent, var(--text) 26%, var(--text) 74%, transparent); }
+.tp-col { flex: 1; height: 100%; overflow: hidden; cursor: pointer; }
+.tp-track { transition: transform .16s cubic-bezier(.2, .8, .2, 1); will-change: transform; }
+.tp-cv { height: 34px; line-height: 34px; text-align: center; font-size: 13px;
+  color: var(--dim); font-variant-numeric: tabular-nums; }
+.tp-cv.near { font-size: 14px; color: var(--muted); }
+.tp-cv.on { font-size: 19px; font-weight: 600; color: var(--text); }
+.tp-sep { width: 30px; align-self: center; text-align: center; color: var(--flare);
+  font-size: 18px; font-weight: 600; }
+.tp-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
+.tp-chip { height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 99px;
+  background: var(--raised); color: var(--muted); font-size: 11px; }
+.tp-chip:hover { border-color: var(--flare); color: var(--flare-text); }
+.tp-pop .dp-foot { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
 
 /* 自绘控件触发器：外观沿用 .input，内部label+箭头/时钟 */
 .trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px;
