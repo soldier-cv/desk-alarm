@@ -27,7 +27,7 @@ export async function mcpRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'name 必填' });
     }
 
-    const READ_TOOLS = new Set(['today_digest', 'list_entries', 'search_entries', 'device_health']);
+    const READ_TOOLS = new Set(['today_digest', 'list_pursuits', 'get_pursuit']);
     if (req.session!.scope === 'read' && !READ_TOOLS.has(body.name)) {
       return reply.code(403).send({
         error: 'SCOPE_DENIED', message: '这个 Agent 令牌只有只读权限，写操作需要签发 write 范围的令牌',
@@ -38,6 +38,7 @@ export async function mcpRoutes(app: FastifyInstance) {
       source: 'mcp',
       deviceName: `${req.session!.device?.name ?? req.session!.user.username} (agent)`,
       userId: req.session!.user.id,
+      scope: req.session!.scope,
     };
 
     try {

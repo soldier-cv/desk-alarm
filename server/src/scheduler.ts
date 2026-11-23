@@ -1,77 +1,71 @@
-import type { ServerMessage, Settings } from '../../shared/types.js';
+import { driveTick, engineStats } from './drive.js';
 import { env } from './env.js';
-import { hub } from './hub.js';
 import { log } from './log.js';
-import { findDue, markFired } from './repo/entries.js';
-import {
-  deliverBatch, makeFireKey, purgeSettled, sweepStale, takePending,
-} from './repo/deliveries.js';
-import { listDevices, sweepOffline, touchDevice } from './repo/devices.js';
-import { invalidateTransport } from './repo/deliveries.js';
+import { getPursuit } from './repo/pursuits.js';
+import { markDelivered, markFailed, takePending, type PendingNudge } from './repo/nudges.js';
+import { send as sendNudge } from './transport/index.js';
+import { hub } from './hub.js';
 
 let tickTimer: NodeJS.Timeout | null = null;
 let rotateTimer: NodeJS.Timeout | null = null;
 let ticks = 0;
 let rotating = false;
 let lastTickAt: number | null = null;
-let lastRotateAt: number | null = null;
 
-async function tick() {
+async function tick(): Promise<void> {
+  lastTickAt = Date.now();
   try {
-    lastTickAt = Date.now();
-    const due = await findDue();
-    for (const { entry, userId } of due) {
-      const { entry: fired, repeat } = await markFired(entry, userId);
-      log.info('fired', {
-        id: fired.id,
-        text: fired.text.slice(0, 40),
-        strength: fired.strength,
-        repeat,
-        bypassQuiet: fired.bypassQuiet,
-      });
-    }
-
-    if (++ticks % 60 === 0) {
-      const offline = await sweepOffline();
-      const byUser = new Map<string, string[]>();
-      for (const d of offline) {
-        await touchDevice(d.id, false);
-        if (!byUser.has(d.user_id)) byUser.set(d.user_id, []);
-        byUser.get(d.user_id)!.push(d.id);
-      }
-      for (const userId of byUser.keys()) {
-        hub.broadcastToUser(userId, { t: 'devices.changed', devices: await listDevices(userId) });
-      }
-      for (const d of offline) log.info('device offline', { id: d.id });
-      await purgeSettled();
-    }
+    await driveTick();
+    ticks++;
   } catch (err) {
-    log.error('scheduler tick failed', err);
+    log.error('drive tick failed', err);
   }
 }
 
-async function rotate() {
+async function rotate(): Promise<void> {
   if (rotating) return;
   rotating = true;
-  lastRotateAt = Date.now();
   try {
-    const batch = await takePending();
-    if (batch.length === 0) {
-      if (++ticks % 30 === 0) await sweepStale();
-      return;
-    }
-    const r = await deliverBatch(batch);
-    if (r.ok > 0) {
-      log.info('delivered', { ok: r.ok, fail: r.fail, by: r.byTransport });
+    const batch = await takePending(100) as PendingNudge[];
+    for (const n of batch) {
+      const deviceId = n.device_id;
+      try {
+        const pursuit = await getPursuit(n.pursuitId, n.userId);
+        if (!pursuit) {
+          await markFailed(n.id, '推进项已不存在');
+          continue;
+        }
+        // device_id 为 null 表示「推送范围=全部在线设备」，不是「没人收」。
+        // 直接广播到该用户所有在线设备，避免默认事项的提醒被静默丢弃
+        if (!deviceId) {
+          hub.broadcastToUser(n.userId, {
+            t: 'pursuit.nudge', pursuit,
+            level: n.level, channel: n.channel, reason: n.reason, serverTs: Date.now(),
+          });
+          await markDelivered(n.id);
+          continue;
+        }
+        const result = await sendNudge(deviceId, {
+          pursuit,
+          level: n.level,
+          channel: n.channel,
+          reason: n.reason,
+          serverTs: Date.now(),
+        });
+        if (result.ok) await markDelivered(n.id);
+        else await markFailed(n.id, result.error ?? '投递失败');
+      } catch (err) {
+        await markFailed(n.id, (err as Error).message);
+      }
     }
   } catch (err) {
-    log.error('rotate failed', err);
+    log.error('nudge rotate failed', err);
   } finally {
     rotating = false;
   }
 }
 
-export function startScheduler() {
+export function startScheduler(): void {
   if (tickTimer) return;
   log.info('scheduler', { tickMs: env.TICK_MS, rotateMs: env.ROTATE_MS });
   tickTimer = setInterval(() => void tick(), env.TICK_MS);
@@ -81,24 +75,21 @@ export function startScheduler() {
   void tick();
 }
 
-export function stopScheduler() {
+export function stopScheduler(): void {
   if (tickTimer) clearInterval(tickTimer);
   if (rotateTimer) clearInterval(rotateTimer);
   tickTimer = null;
   rotateTimer = null;
 }
 
-export function schedulerStats() {
+export function schedulerStats(): {
+  tickMs: number; ticks: number; lastTickAt: number | null; active: number; stalled: number;
+} {
   return {
-    connections: hub.connectionCount,
     tickMs: env.TICK_MS,
-    rotateMs: env.ROTATE_MS,
     ticks,
     lastTickAt,
-    lastRotateAt,
-    rotating,
+    active: engineStats.active,
+    stalled: engineStats.stalled,
   };
 }
-
-export { makeFireKey, invalidateTransport };
-export type { ServerMessage, Settings };

@@ -5,7 +5,6 @@ import { now, run, one } from './db.js';
 import { getByMachineId, getDevice, machineOwner, upsertDeviceByMachine } from './repo/devices.js';
 import { getUser, getUserByUsername, verifyPassword } from './repo/users.js';
 import { resolveToken as resolveAgentToken, touchToken, type AgentScope } from './repo/agent-tokens.js';
-import { invalidateTransport, setPushToken } from './repo/deliveries.js';
 import { ensureSettings } from './repo/settings.js';
 
 interface SessionRow {
@@ -89,7 +88,6 @@ export async function login(
       name: req.deviceName || '未命名设备',
       platform: req.platform,
       transport: req.transport,
-      pushToken: req.pushToken ?? null,
       ip,
     });
     // 设备随用户走：同机换人登录，旧用户的会话立即失效
@@ -97,8 +95,6 @@ export async function login(
       `DELETE FROM sessions WHERE device_id = $1 AND user_id <> $2`,
       [device.id, user.id],
     );
-    invalidateTransport(device.id);
-    if (req.pushToken) await setPushToken(device.id, req.transport ?? null, req.pushToken);
   }
 
   await run(
@@ -245,5 +241,3 @@ export async function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
     await reply.code(403).send({ error: 'FORBIDDEN', message: '需要管理员权限' });
   }
 }
-
-export { setPushToken, invalidateTransport };

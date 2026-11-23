@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
-import type { AckAction, ClientMessage, DismissAction, ServerMessage } from '../../../shared/types.js';
+import type { ClientMessage, Nudge, ServerMessage } from '../../../shared/types.js';
 import { resolveSession } from '../auth.js';
+import { followUp } from '../drive.js';
 import { hub } from '../hub.js';
 import { log } from '../log.js';
-import { findMissed, markAcked } from '../repo/deliveries.js';
-import { ackEntry, dismissEntry, getEntry } from '../repo/entries.js';
-import { listDevices, markOfflineHint, markOnline, touch } from '../repo/devices.js';
+import { listMissed } from '../repo/nudges.js';
+import { getPursuit } from '../repo/pursuits.js';
+import { updateStep } from '../repo/steps.js';
+import { markOfflineHint, markOnline, touch } from '../repo/devices.js';
 import { getSettings } from '../repo/settings.js';
 
 export async function streamRoutes(app: FastifyInstance) {
@@ -18,7 +20,7 @@ export async function streamRoutes(app: FastifyInstance) {
         query: { token: url.searchParams.get('token') },
       } as never);
 
-      // Agent 令牌只走 MCP；Web / 看板没有设备行，也不建立实时通道
+      // Agent 令牌只走 MCP；看板没有设备行，也不建立实时通道
       if (!session || session.kind === 'agent' || !session.device) {
         socket.close(4401, 'unauthorized');
         return;
@@ -27,24 +29,27 @@ export async function streamRoutes(app: FastifyInstance) {
       const userId = session.user.id;
       const device = session.device;
       const client = hub.add(userId, device.id, socket);
+      // listMissed 取的是「截止到现在仍未投递」的 nudge，不依赖设备上次在线时间
+      const missed = await listMissed(userId, Date.now());
       await markOnline(device.id);
       log.info('ws connected', {
         user: session.user.username, device: device.name, connections: hub.connectionCount,
       });
 
-      hub.send(client, {
+      // ServerMessage 的 welcome 不带 missed；作为兼容字段发给客户端做离线补发
+      const welcome: ServerMessage & { missed: Nudge[] } = {
         t: 'welcome',
         serverTs: Date.now(),
         deviceId: device.id,
-        missed: await findMissed(userId, device.id),
         settings: await getSettings(userId),
-      });
-      hub.broadcastToUser(userId, { t: 'devices.changed', devices: await listDevices(userId) });
+        missed,
+      };
+      hub.send(client, welcome);
 
       socket.on('message', (buf) => {
         let msg: ClientMessage;
         try {
-          msg = JSON.parse(String(buf));
+          msg = JSON.parse(String(buf)) as ClientMessage;
         } catch {
           return;
         }
@@ -60,74 +65,50 @@ export async function streamRoutes(app: FastifyInstance) {
             await touch(device.id);
             hub.send(client, { t: 'pong', at: msg.at });
             break;
-          case 'entry.ack':
-            await onAck(msg.entryId, msg.action, msg.snoozeTo);
+          case 'pursuit.followup':
+            await onFollowup(msg.pursuitId, msg.action, msg.note, msg.version);
             break;
-          case 'entry.dismiss':
-            await onDismiss(msg.entryId, msg.reason);
+          case 'pursuit.step':
+            await onStep(msg.stepId, msg.state);
             break;
           default:
             break;
         }
       }
 
-      async function onAck(entryId: string, action: AckAction, snoozeToMs?: number) {
-        const cur = await getEntry(entryId, userId);
-        if (!cur) return;
-
-        await markAcked(entryId, device.id, action);
-
-        if (action === 'silence') {
-          hub.broadcastToUser(userId, {
-            t: 'entry.acked', entryId,
-            deviceId: device.id, deviceName: device.name, action,
-          });
-          return;
-        }
-
-        let updated;
+      async function onFollowup(
+        pursuitId: string,
+        action: Extract<ClientMessage, { t: 'pursuit.followup' }>['action'],
+        note: string | undefined,
+        version: number,
+      ) {
+        await touch(device.id);
         try {
-          updated = await ackEntry(entryId, userId, action, device.name, snoozeToMs);
-        } catch {
-          return;
+          const pursuit = await followUp(pursuitId, userId, { action, note, version });
+          hub.broadcastToUser(userId, { t: 'pursuit.followed', pursuit, action });
+          log.info('ws followup', { pursuitId, action, by: device.name });
+        } catch (err) {
+          log.warn('ws followup failed', { pursuitId, error: (err as Error).message });
         }
-
-        hub.broadcastToUser(userId, { t: 'entry.updated', entry: updated });
-        hub.broadcastToUser(userId, {
-          t: 'entry.acked', entryId,
-          deviceId: device.id, deviceName: device.name, action,
-        });
-        log.info('ws ack', { entryId, action, by: device.name });
       }
 
-      async function onDismiss(entryId: string, reason?: string) {
-        const cur = await getEntry(entryId, userId);
-        if (!cur) return;
+      async function onStep(stepId: string, state: Extract<ClientMessage, { t: 'pursuit.step' }>['state']) {
+        await touch(device.id);
         try {
-          const r = await dismissEntry(entryId, userId, device.id, device.name, reason);
-          await markAcked(entryId, device.id, 'dismiss');
-          hub.broadcastToUser(userId, { t: 'entry.updated', entry: r.entry });
-          hub.broadcastToUser(userId, {
-            t: 'entry.acked', entryId,
-            deviceId: device.id, deviceName: device.name, action: 'dismiss' as DismissAction,
-          });
-          if (r.suggestion && r.entry.strength === 'weak') {
-            hub.broadcastToUser(userId, {
-              t: 'entry.downgraded', entry: r.entry,
-              dismissCount: r.dismissCount, reason: r.suggestion,
-            });
-          }
-          log.info('ws dismiss', { entryId, count: r.dismissCount, by: device.name });
-        } catch { /* 条目可能已经删了 */ }
+          const step = await updateStep(stepId, userId, { state });
+          if (!step) return;
+          const pursuit = await getPursuit(step.pursuitId, userId);
+          if (pursuit) hub.broadcastToUser(userId, { t: 'pursuit.stepped', pursuit });
+          log.info('ws step', { stepId, state, by: device.name });
+        } catch (err) {
+          log.warn('ws step failed', { stepId, error: (err as Error).message });
+        }
       }
 
       socket.on('close', () => {
         hub.remove(client);
         // 同一设备还留着别的连接时不能标离线
         if (!hub.isOnline(device.id)) void markOfflineHint(device.id);
-        void (async () => {
-          hub.broadcastToUser(userId, { t: 'devices.changed', devices: await listDevices(userId) });
-        })();
         log.info('ws closed', { device: device.name, connections: hub.connectionCount });
       });
 

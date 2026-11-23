@@ -1,40 +1,55 @@
 /**
- * 安卓端专用界面。和桌面端共用 api / alarm / theme / 解析规则，
- * 只是布局按手机重做：顶部状态 + 三个页签（随手记 / 今天 / 设置）。
- * 桌面那套三栏布局在窄屏上被挤烂，所以单独出这一份。
+ * 安卓端界面。和桌面端共用 api / 跟进控制器 / 主题 / 解析规则，
+ * 布局按手机重做：顶部状态 + 随手记 / 今天 / 设置，点推进项进详情页。
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import {
-  ApiError, Realtime, api, clearToken, dayLabel, getMachineId, getPlatform, hhmm, hostOf,
-  loadConfig, normalizeBaseUrl, onUnauthorized, parseInput, probeServer, saveConfig, serverNow,
-  switchServer, urgencyOf,
-  type AckAction, type Entry, type ServerMessage, type Settings, type Urgency, type User,
+  ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
+  loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer, saveConfig,
+  serverNow, staleLabel, switchServer, versionOf, warmthOf, ENERGY_LABEL, NATURE_LABEL,
+  type Followup, type FollowupAction, type FocusResult, type Importance,
+  type NudgeLevel, type Pursuit, type PursuitStatus, type RecurrenceRule,
+  type ServerMessage, type Settings, type StepState,
 } from '../api';
-import { AlarmController, pushWeak } from '../alarm';
+import { FollowupController, dropBannerByPursuit } from '../alarm';
 import { applyTheme, loadTheme, saveTheme, THEMES } from '../theme';
 import '../styles-mobile.css';
 
 const app = document.getElementById('app')!;
 
-type View = 'capture' | 'today' | 'settings';
+type View = 'capture' | 'today' | 'detail' | 'settings';
 type ListKind = 'today' | 'inbox' | 'all';
 
 let platform = 'android';
 let view: View = 'capture';
 let listKind: ListKind = 'today';
 let rt: Realtime | null = null;
-let entries: Entry[] = [];
-let counts = { today: 0, up: 0, inbox: 0, all: 0, done: 0, missed: 0, dismissed: 0 };
+let focus: FocusResult | null = null;
+let pursuits: Pursuit[] = [];
+let followups: Followup[] = [];
+let counts: Partial<Record<PursuitStatus, number>> = {};
+let selectedId: string | null = null;
+let captureImportance: Importance = 0;
+const localHandled = new Map<string, number>();
 
-const alarm = new AlarmController({
-  // 通知由原生常驻服务统一发（锁屏也能即时弹），JS 这边只维持界面状态，不重复弹
-  onNotify: () => {},
-  onShow: () => {},
-  onEscalate: () => {},
-  onRepeat: () => {},
-  onAutoMute: () => { void refresh(); },
-  onDismiss: () => { void refresh(); },
+const control = new FollowupController({
+  onSilent: () => { void refresh(); },
+  onNotify: (p, level, reason) => {
+    void notify(`需要推进 L${level}`, `${p.text}${reason ? ` · ${reason}` : ''}`);
+    toast(`${p.text} · ${reason}`);
+  },
+  onBanner: (p, _level, reason) => toast(`${p.text} · ${reason}`),
+  onTakeover: (p, level, reason) => showMobileTakeover(p, level, reason),
+  onArchive: (p) => { toast(`长期停滞，已自动归档：${p.text}`); void refresh(); },
+  onStop: (p, reason) => {
+    document.getElementById('m-takeover')?.remove();
+    dropBannerByPursuit(p.id);
+    if (reason === 'elsewhere' && Date.now() - (localHandled.get(p.id) ?? 0) > 3000) {
+      toast('这条已在别的设备上处理掉了');
+    }
+    void refresh();
+  },
 });
 
 function hasTauri(): boolean {
@@ -63,16 +78,11 @@ function toast(msg: string) {
   el.textContent = msg;
   el.classList.add('on');
   if (toastTimer !== null) clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => el!.classList.remove('on'), 2600);
+  toastTimer = window.setTimeout(() => el!.classList.remove('on'), 3200);
 }
 
-/** 级别点：跟桌面端同一套 urgencyOf 分级，含 soon 档 */
-function udot(u: Urgency): string {
-  return u === 'none' ? '' : `<i class="udot ${u}"></i>`;
-}
-
-function urgency(e: Entry): Urgency {
-  return urgencyOf(e);
+function natureIcon(n: Pursuit['nature']): string {
+  return n === 'project' ? '◫' : n === 'recurring' ? '↻' : '·';
 }
 
 /* ------------------------------------------------------------ 骨架 */
@@ -81,12 +91,13 @@ function shell(): string {
   return `
   <div class="m-top">
     <span class="logo"><i></i></span>
-    <b>DeskAlarm</b>
+    <b>今日推进</b>
     <span class="sp"></span>
     <span class="m-conn" id="conn"><span class="dot"></span><span id="conn-txt">未连接</span></span>
   </div>
   <section class="m-view" id="v-capture"></section>
   <section class="m-view" id="v-today"></section>
+  <section class="m-view" id="v-detail"></section>
   <section class="m-view" id="v-settings"></section>
   <nav class="m-nav">
     <button data-view="capture" class="on"><span class="ico">✎</span>随手记</button>
@@ -102,7 +113,8 @@ function setView(v: View) {
   document.querySelectorAll<HTMLElement>('.m-nav button').forEach((b) => {
     b.classList.toggle('on', b.dataset.view === v);
   });
-  if (v === 'today') void loadList();
+  if (v === 'today') { renderEntries(); void refresh(); }
+  if (v === 'detail') renderDetail();
   if (v === 'settings') renderSettings();
 }
 
@@ -121,13 +133,17 @@ function renderCapture() {
   host.innerHTML = `
   <div class="cap-wrap">
     <div class="cap-card">
-      <label>写一句话、链接或目录。带时间就提醒，不带就进收集箱</label>
-      <textarea class="cap-input" id="cap" placeholder="例如：明天 15:00 交周报&#10;例如：记得买牛奶&#10;例如：https://example.com" autocomplete="off"></textarea>
+      <label>写一句话、链接或目录。带时间就设截止，不带就进收件箱</label>
+      <textarea class="cap-input" id="cap" placeholder="例如：明天 15:00 交周报&#10;例如：把驾照考试拆成几步&#10;例如：https://example.com" autocomplete="off"></textarea>
       <div class="cap-parse" id="parse"></div>
-      <div class="cap-row">
-        <button class="btn solid block" id="save">存为提醒</button>
+      <div class="cap-imp" id="cap-imp">
+        <span>重要性</span>
+        ${([0, 1, 2, 3] as Importance[]).map((n) =>
+          `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}">${['不标', '★', '★★', '★★★'][n]}</button>`,
+        ).join('')}
       </div>
-      <div class="cap-tip">识别规则：明确时间（明天 15:00 / 3 小时后 / 10-1 15点）→ 到点提醒；写「一定要」才用强提醒，否则只在通知栏轻提醒。</div>
+      <div class="cap-row"><button class="btn solid block" id="save">记一条</button></div>
+      <div class="cap-tip">重要性别靠措辞猜：觉得重要就点一下星。时间解析只做提示，以服务端存下来的为准。</div>
     </div>
   </div>`;
 
@@ -138,10 +154,17 @@ function renderCapture() {
     if (!input.value.trim()) { parse.innerHTML = ''; return; }
     parse.innerHTML = `
       <span class="chip ${p.kind === 'text' ? '' : 'hot'}">${esc(p.kindLabel)}</span>
-      <span class="chip ${p.remindAt !== null ? 'hot' : ''}">${esc(p.timeLabel)}</span>
-      <span class="chip ${p.strength === 'strong' ? 'hot' : ''}">${p.strength === 'strong' ? '强提醒' : '轻提醒'}</span>`;
+      <span class="chip ${p.remindAt !== null ? 'hot' : ''}">${esc(p.timeLabel)}</span>`;
   };
   input.addEventListener('input', preview);
+  document.getElementById('cap-imp')!.addEventListener('click', (ev) => {
+    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-imp]');
+    if (!b) return;
+    captureImportance = Number(b.dataset.imp) as Importance;
+    document.querySelectorAll<HTMLElement>('#cap-imp .chip').forEach((c) => {
+      c.classList.toggle('hot', c.dataset.imp === String(captureImportance));
+    });
+  });
   document.getElementById('save')!.onclick = () => void saveCapture();
 }
 
@@ -155,12 +178,15 @@ async function saveCapture() {
       text, kind: p.kind,
       url: p.kind === 'link' ? text : null,
       path: p.kind === 'path' ? text : null,
-      remindAt: p.remindAt,
-      strength: p.strength,
+      dueAt: p.remindAt,
+      importance: captureImportance,
+      nature: 'one_off',
     });
     input.value = '';
     document.getElementById('parse')!.innerHTML = '';
-    toast(p.remindAt !== null ? '已设提醒' : '已存进收集箱');
+    captureImportance = 0;
+    document.querySelectorAll<HTMLElement>('#cap-imp .chip').forEach((c) => c.classList.toggle('hot', c.dataset.imp === '0'));
+    toast(p.remindAt !== null ? '已设截止' : '已存进收件箱');
     void refresh();
     if (p.remindAt !== null) setView('today');
   } catch (e) {
@@ -168,14 +194,14 @@ async function saveCapture() {
   }
 }
 
-/* ------------------------------------------------------------ 列表 */
+/* ------------------------------------------------------------ 推进列表 */
 
 function renderListHead() {
   const host = document.getElementById('v-today')!;
   host.innerHTML = `
   <div class="list-tabs">
     <button data-kind="today" class="${listKind === 'today' ? 'on' : ''}">今天</button>
-    <button data-kind="inbox" class="${listKind === 'inbox' ? 'on' : ''}">收集箱 <span id="ci">${counts.inbox || ''}</span></button>
+    <button data-kind="inbox" class="${listKind === 'inbox' ? 'on' : ''}">收件箱 <span id="ci">${counts.inbox || ''}</span></button>
     <button data-kind="all" class="${listKind === 'all' ? 'on' : ''}">全部</button>
   </div>
   <div class="list-scroll" id="list-scroll"></div>`;
@@ -184,146 +210,338 @@ function renderListHead() {
   });
 }
 
-function entryTimeText(e: Entry): string {
-  const when = e.remindAt === null ? '收集箱 · 无时间' : `${dayLabel(e.remindAt)} ${hhmm(e.remindAt)}`;
-  const late = e.status === 'missed' && e.firedAt ? ` · 迟了 ${Math.max(1, Math.round((serverNow() - e.firedAt) / 60_000))} 分钟` : '';
-  return when + late;
+function focusHtml(): string {
+  if (listKind !== 'today') return '';
+  if (!focus || !focus.items.length) {
+    return `<div class="focus-card"><div class="focus-head"><b>今日聚焦</b></div>
+      <div class="focus-empty">今天没有需要强推的事。</div></div>`;
+  }
+  return `<div class="focus-card">
+    <div class="focus-head"><b>今日聚焦</b><span>剩余强打扰 <b>${focus.budgetLeft}</b></span></div>
+    ${focus.items.map((it) => `
+      <div class="focus-item">
+        <div class="fi-title">${esc(it.pursuit.text)}</div>
+        <div class="fi-reason">${esc(it.reason)}</div>
+        ${it.suggestedNextStep ? `<div class="fi-next">下一步：${esc(it.suggestedNextStep)}</div>` : ''}
+        <div class="acts">
+          <button class="btn" data-follow="done" data-id="${esc(it.pursuit.id)}">推进</button>
+          <button class="btn" data-follow="smaller" data-id="${esc(it.pursuit.id)}">拆小</button>
+          <button class="btn" data-follow="later" data-id="${esc(it.pursuit.id)}">改天</button>
+          <button class="btn" data-follow="archive" data-id="${esc(it.pursuit.id)}">归档</button>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function entryHtml(p: Pursuit): string {
+  const u = warmthOf(p);
+  const total = p.steps.length;
+  const done = p.steps.filter((s) => s.state === 'done').length;
+  return `<div class="entry u-${u}" data-id="${esc(p.id)}">
+    <div class="row1" data-open="${esc(p.id)}">
+      <div class="txt">${esc(p.text)}</div>
+    </div>
+    <div class="meta">
+      <span class="${u === 'due' || u === 'over' ? 'hot' : ''}">${esc(dueLabel(p))} · ${esc(staleLabel(p))}</span>
+      <span>${'●'.repeat(p.importance)}${'○'.repeat(3 - p.importance)}</span>
+      <span>${natureIcon(p.nature)} ${NATURE_LABEL[p.nature]}</span>
+      <span>步骤 ${done}/${total}</span>
+    </div>
+    <div class="prog"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></div>
+    <div class="acts">
+      <button class="btn" data-follow="done" data-id="${esc(p.id)}">推进</button>
+      <button class="btn" data-follow="later" data-id="${esc(p.id)}">改天</button>
+      <button class="btn" data-follow="archive" data-id="${esc(p.id)}">归档</button>
+    </div>
+  </div>`;
 }
 
 function renderEntries() {
   const box = document.getElementById('list-scroll');
   if (!box) return;
-  if (!entries.length) {
-    box.innerHTML = `<div class="empty">这里还没有条目。<br>去「随手记」写一条吧。</div>`;
-    return;
-  }
-  box.innerHTML = entries.map((e) => {
-    const u = urgency(e);
-    const desc = e.url ? hostOf(e.url) : e.path ?? '';
-    return `<div class="entry ${u === 'none' ? '' : 'u-' + u}" data-id="${esc(e.id)}" data-u="${u}">
-      <div class="row1">
-        <div class="txt ${e.status === 'done' ? 'done' : ''}">${esc(e.text)}</div>
-      </div>
-      <div class="meta">
-        <span class="${u === 'due' || u === 'over' ? 'hot' : ''}">${udot(u)}<span class="time-text">${esc(entryTimeText(e))}</span></span>
-        ${e.strength === 'strong' ? '<span>强提醒</span>' : ''}
-        ${desc ? `<span>${esc(desc)}</span>` : ''}
-      </div>
-      ${e.status !== 'done' ? `<div class="acts">
-        <button class="btn" data-act="done">完成</button>
-        <button class="btn" data-act="snooze">稍后</button>
-        <button class="btn" data-act="silence">静音</button>
-      </div>` : ''}
-    </div>`;
-  }).join('');
-
-  box.querySelectorAll<HTMLElement>('.entry').forEach((row) => {
-    const id = row.dataset.id!;
-    row.querySelectorAll<HTMLElement>('.acts button').forEach((btn) => {
-      btn.onclick = () => void act(id, btn.dataset.act as AckAction);
-    });
+  const list = pursuits.length
+    ? pursuits.map(entryHtml).join('')
+    : '<div class="empty">这里还没有推进项。<br>去「随手记」写一条吧。</div>';
+  box.innerHTML = focusHtml() + list;
+  bindFollowButtons(box);
+  box.querySelectorAll<HTMLElement>('[data-open]').forEach((el) => {
+    el.onclick = () => openDetail(el.dataset.open!);
   });
 }
 
-/**
- * 临近度随时间自己走，事件刷新不推进它，所以每 20 秒原地更新行，
- * 不重建 innerHTML：滚动位置和正在按的按钮都不丢
- */
-function tickUrgency() {
-  const box = document.getElementById('list-scroll');
-  if (!box || view !== 'today' || entries.length === 0) return;
-  for (const e of entries) {
-    if (e.status === 'done' || e.remindAt === null) continue;
-    const row = box.querySelector<HTMLElement>(`[data-id="${CSS.escape(e.id)}"]`);
-    if (!row) continue;
-    const u = urgencyOf(e);
-    const label = entryTimeText(e);
-    if (row.dataset.u === u && row.dataset.tl === label) continue;
-    row.dataset.u = u;
-    row.dataset.tl = label;
-    row.classList.remove('u-soon', 'u-close', 'u-due', 'u-over');
-    if (u !== 'none') row.classList.add(`u-${u}`);
-    const meta = row.querySelector<HTMLElement>('.meta > span');
-    if (meta) {
-      meta.classList.toggle('hot', u === 'due' || u === 'over');
-      meta.innerHTML = `${udot(u)}<span class="time-text">${esc(label)}</span>`;
-    }
-  }
+function bindFollowButtons(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>('[data-follow]').forEach((b) => {
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      void mobileFollowup(b.dataset.id!, b.dataset.follow as FollowupAction);
+    };
+  });
 }
 
 async function loadList() {
   try {
-    const r = await api.entries(listKind);
-    entries = r.entries ?? [];
+    const [list, f] = await Promise.all([api.pursuits(listKind), api.focus()]);
+    pursuits = [...list.pursuits].sort((a, b) => b.weight - a.weight);
+    focus = f;
     renderEntries();
   } catch {
     toast('加载失败，请检查服务端连接');
   }
 }
 
-async function act(id: string, action: AckAction) {
+/* ------------------------------------------------------------ 详情 */
+
+function findPursuit(id: string | null): Pursuit | undefined {
+  if (!id) return undefined;
+  return pursuits.find((p) => p.id === id);
+}
+
+function openDetail(id: string) {
+  const p = findPursuit(id);
+  if (!p) return;
+  selectedId = id;
+  followups = [];
+  setView('detail');
+  void api.followups(id).then((r) => {
+    if (selectedId !== id) return;
+    followups = r.followups;
+    if (view === 'detail') renderDetail();
+  }).catch(() => { /* 历史读不到不影响其它操作 */ });
+}
+
+function renderDetail() {
+  const host = document.getElementById('v-detail');
+  const p = findPursuit(selectedId);
+  if (!host) return;
+  if (!p) {
+    host.innerHTML = `<div class="detail-wrap"><button class="btn" id="back">返回</button>
+      <div class="empty">这条已经不在了。</div></div>`;
+    host.querySelector('#back')!.addEventListener('click', () => setView('today'));
+    return;
+  }
+  host.innerHTML = `
+  <div class="detail-wrap">
+    <div class="detail-top"><button class="btn sm" id="back">‹ 返回</button><b>推进详情</b></div>
+    <div class="detail-scroll">
+      <h2 class="detail-title">${esc(p.text)}</h2>
+      <div class="detail-meta">${esc(dueLabel(p))} · ${esc(staleLabel(p))} · ${NATURE_LABEL[p.nature]}</div>
+
+      <div class="set-group">
+        <h3>步骤清单</h3>
+        ${p.steps.length ? p.steps.map((s) => `
+          <label class="step ${s.state === 'done' ? 'done' : ''}">
+            <input type="checkbox" data-step="${esc(s.id)}" ${s.state === 'done' ? 'checked' : ''}>
+            <span>${esc(s.text)}</span></label>`).join('')
+          : '<div class="set-val">还没有步骤。</div>'}
+        <div class="add-step"><input class="input" id="new-step" placeholder="加一个步骤，回车">
+          <button class="btn" id="add-step">添加</button></div>
+      </div>
+
+      <div class="set-group">
+        <h3>备注</h3>
+        <textarea class="cap-input" id="note" rows="3">${esc(p.note ?? '')}</textarea>
+        <button class="btn block" id="save-note" style="margin-top:10px">保存备注</button>
+      </div>
+
+      <div class="set-group">
+        <h3>重要性</h3>
+        <div class="imp-row">${([0, 1, 2, 3] as Importance[]).map((n) =>
+          `<button class="btn ${p.importance === n ? 'solid' : ''}" data-imp="${n}">${['不标', '★', '★★', '★★★'][n]}</button>`,
+        ).join('')}</div>
+      </div>
+
+      <div class="set-group">
+        <h3>启动精力 / 性质</h3>
+        <div class="imp-row">
+          ${(['low', 'medium', 'high'] as const).map((e) =>
+            `<button class="btn ${p.energy === e ? 'solid' : ''}" data-energy="${e}">${ENERGY_LABEL[e]}</button>`).join('')}
+        </div>
+        <div class="imp-row" style="margin-top:8px">
+          ${(['one_off', 'recurring', 'project'] as const).map((n) =>
+            `<button class="btn ${p.nature === n ? 'solid' : ''}" data-nature="${n}">${NATURE_LABEL[n]}</button>`).join('')}
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h3>重复规则</h3>
+        <select id="rule-freq" class="m-select">
+          ${(['none', 'daily', 'weekly', 'monthly', 'yearly', 'workdays', 'interval'] as const).map((f) =>
+            `<option value="${f}" ${(p.recurrence?.freq ?? 'none') === f ? 'selected' : ''}>${f === 'none' ? '不重复' : f}</option>`).join('')}
+        </select>
+        <input class="input" id="rule-interval" type="number" min="1" value="${p.recurrence?.interval ?? 1}" placeholder="间隔天数">
+        <button class="btn block" id="save-rule" style="margin-top:10px">保存重复</button>
+      </div>
+
+      <div class="set-group">
+        <h3>跟进历史</h3>
+        ${followups.length ? followups.map((f) => `
+          <div class="set-val" style="padding:6px 0">${esc(new Date(f.at).toLocaleString('zh-CN'))} · L${f.level} · ${esc(f.action)}${f.note ? ` · ${esc(f.note)}` : ''}</div>`).join('')
+          : '<div class="set-val">还没有跟进记录。</div>'}
+      </div>
+
+      <div class="set-group">
+        <button class="btn solid block" data-follow="done" data-id="${esc(p.id)}">推进</button>
+        <button class="btn block" data-follow="partial" data-id="${esc(p.id)}" style="margin-top:8px">推了一点</button>
+        <button class="btn block" data-follow="archive" data-id="${esc(p.id)}" style="margin-top:8px">归档</button>
+      </div>
+    </div>`;
+
+  host.querySelector('#back')!.addEventListener('click', () => setView('today'));
+  bindFollowButtons(host);
+  host.querySelectorAll<HTMLInputElement>('[data-step]').forEach((box) => {
+    box.onchange = () => {
+      const stateName: StepState = box.checked ? 'done' : 'todo';
+      void api.updateStep(box.dataset.step!, { state: stateName }).then(r => {
+        const i = pursuits.findIndex((x) => x.id === p.id);
+        if (i >= 0) pursuits[i] = r.pursuit;
+        renderDetail();
+      }).catch((e) => toast(msgOf(e)));
+    };
+  });
+  host.querySelector('#add-step')!.addEventListener('click', () => void addMobileStep(p));
+  host.querySelector<HTMLInputElement>('#new-step')!.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') void addMobileStep(p);
+  });
+  host.querySelector('#save-note')!.addEventListener('click', () => {
+    const note = (host.querySelector('#note') as HTMLTextAreaElement).value;
+    void api.update(p.id, { note: note || null, version: versionOf(p) })
+      .then(() => toast('备注已保存')).catch((e) => toast(msgOf(e)));
+  });
+  host.querySelectorAll<HTMLElement>('[data-imp]').forEach((b) => {
+    b.onclick = () => void patchPursuit(p, { importance: Number(b.dataset.imp) });
+  });
+  host.querySelectorAll<HTMLElement>('[data-energy]').forEach((b) => {
+    b.onclick = () => void patchPursuit(p, { energy: b.dataset.energy });
+  });
+  host.querySelectorAll<HTMLElement>('[data-nature]').forEach((b) => {
+    b.onclick = () => void patchPursuit(p, { nature: b.dataset.nature });
+  });
+  host.querySelector('#save-rule')!.addEventListener('click', () => {
+    const freq = (host.querySelector('#rule-freq') as HTMLSelectElement).value;
+    const interval = Number((host.querySelector('#rule-interval') as HTMLInputElement).value) || 1;
+    let rule: RecurrenceRule | null = null;
+    if (freq !== 'none') rule = { freq: freq as RecurrenceRule['freq'], interval };
+    void patchPursuit(p, { recurrence: rule });
+  });
+}
+
+async function addMobileStep(p: Pursuit) {
+  const input = document.getElementById('new-step') as HTMLInputElement;
+  const text = input.value.trim();
+  if (!text) return;
   try {
-    if (action === 'snooze') {
-      const to = serverNow() + 10 * 60_000;
-      if (rt?.ack(id, 'snooze', to)) { /* WS 即时停铃 */ }
-      await api.snooze(id, { to });
-    } else if (action === 'silence') {
-      // 静音 = 只停这一次的铃，不写忽略记录、不计入降级。
-      // 服务端 onAck('silence') 负责停铃并广播给别的设备，别再调 dismiss。
-      if (!rt?.ack(id, 'silence')) {
-        toast('未连接，静音未生效，请稍后重试');
-        return;
-      }
-    } else {
-      if (rt?.ack(id, 'done')) { /* noop */ }
-      await api.done(id);
-    }
-    toast(action === 'done' ? '已完成' : action === 'snooze' ? '10 分钟后再提醒' : '已静音');
+    const r = await api.addStep(p.id, { text });
+    const i = pursuits.findIndex((x) => x.id === p.id);
+    if (i >= 0) pursuits[i] = r.pursuit;
+    renderDetail();
+  } catch (e) { toast(msgOf(e)); }
+}
+
+async function patchPursuit(p: Pursuit, patch: Record<string, unknown>) {
+  try {
+    const r = await api.update(p.id, { ...patch, version: versionOf(p) });
+    const i = pursuits.findIndex((x) => x.id === p.id);
+    if (i >= 0) pursuits[i] = r.pursuit;
+    renderDetail();
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) toast('刚在别的设备上改过，已刷新');
+    else toast(msgOf(e));
+  }
+}
+
+/* -------------------------------------------------------- 跟进动作 */
+
+async function mobileFollowup(id: string, action: FollowupAction, extra: Record<string, unknown> = {}) {
+  const p = findPursuit(id);
+  if (!p) { toast('这条已经不在了'); return; }
+  if (action === 'smaller' && !extra.steps) {
+    const value = window.prompt('拆成 2-3 个能立刻动手的小步骤，用换行分隔', p.text);
+    if (value === null) return;
+    const steps = value.split(/\r?\n|；|;/).map((s) => s.trim()).filter(Boolean);
+    if (!steps.length) return;
+    extra.steps = steps;
+  }
+  if (action === 'later' && !extra.to) {
+    const d = new Date(serverNow());
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    extra.to = d.getTime();
+  }
+  try {
+    localHandled.set(id, Date.now());
+    if (!extra.steps && !extra.to) rt?.followup(id, action, versionOf(p));
+    await api.followup(id, {
+      action, version: versionOf(p),
+      ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),
+      ...(extra.to ? { to: Number(extra.to) } : {}),
+    });
+    noteFollowup(id, action);
+    control.acknowledge(action);
+    dropBannerByPursuit(id);
+    document.getElementById('m-takeover')?.remove();
+    toast(action === 'done' ? '已推进' : action === 'archive' ? '已归档' : '已记下');
+    if (view === 'detail') setView('today');
     void refresh();
   } catch (e) {
-    toast('操作失败：' + (e instanceof Error ? e.message : '请重试'));
+    toast('操作失败：' + msgOf(e));
   }
+}
+
+function showMobileTakeover(p: Pursuit, level: NudgeLevel, reason: string) {
+  document.getElementById('m-takeover')?.remove();
+  const host = document.createElement('div');
+  host.id = 'm-takeover';
+  host.className = 'm-takeover';
+  host.innerHTML = `
+    <div class="mt-card">
+      <div class="mt-lv">L${level} 接管 · 关不掉</div>
+      <h2>${esc(p.text)}</h2>
+      <div class="mt-reason">${esc(reason)}</div>
+      <div class="acts">
+        <button class="btn solid" data-follow="done" data-id="${esc(p.id)}">推进</button>
+        <button class="btn" data-follow="smaller" data-id="${esc(p.id)}">拆小</button>
+        <button class="btn" data-follow="later" data-id="${esc(p.id)}">改天</button>
+        <button class="btn" data-follow="archive" data-id="${esc(p.id)}">归档</button>
+      </div>
+    </div>`;
+  document.body.appendChild(host);
+  bindFollowButtons(host);
 }
 
 /* ------------------------------------------------------------ 设置 */
 
 function renderSettings() {
   const host = document.getElementById('v-settings')!;
-  const cfg = loadConfig();
-  const u = cfg.user;
-  const s = cfg.settings;
-  const mm = (n: number) => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+  const u = loadConfig().user;
+  const s = loadConfig().settings;
   host.innerHTML = `<div class="set-scroll">
     <div class="set-group">
-      <div class="who">
-        <div class="avatar">${esc((u?.username ?? '?').slice(0, 1).toUpperCase())}</div>
+      <div class="who"><div class="avatar">${esc((u?.username ?? '?').slice(0, 1).toUpperCase())}</div>
         <div><div style="font-weight:600">${esc(u?.username ?? '未登录')}</div>
-        <div class="set-val">${u?.role === 'admin' ? '管理员' : '普通用户'}</div></div>
-      </div>
+        <div class="set-val">${u?.role === 'admin' ? '管理员' : '普通用户'}</div></div></div>
     </div>
     <div class="set-group">
       <h3>连接</h3>
-      <div class="set-field">
-        <label>服务端地址</label>
-        <input id="base" value="${esc(cfg.baseUrl)}" placeholder="http://192.168.1.10:8091" autocomplete="off">
-        <div class="probe" id="probe"></div>
-      </div>
+      <div class="set-field"><label>服务端地址</label>
+        <input id="base" value="${esc(loadConfig().baseUrl)}" placeholder="http://192.168.1.10:8091" autocomplete="off">
+        <div class="probe" id="probe"></div></div>
       <button class="btn block" id="test">测试连接</button>
     </div>
     <div class="set-group">
-      <h3>提醒偏好（一端改，所有设备生效）</h3>
-      <div class="set-field"><label>强提醒升级等待（秒）</label><input id="pf-escalate" type="number" min="5" max="3600" value="${s.escalateAfterSec}"></div>
-      <div class="set-field"><label>重复间隔（秒，0 不重复）</label><input id="pf-repeat" type="number" min="0" max="86400" value="${s.repeatEverySec}"></div>
-      <div class="set-field"><label>最多重复几次后转静默（0 不限）</label><input id="pf-maxrepeat" type="number" min="0" max="100" value="${s.maxRepeatCount}"></div>
-      <div class="set-field"><label>静音开始</label><input id="pf-quiet-start" type="time" value="${mm(s.quietStartMin)}"></div>
-      <div class="set-field"><label>静音结束</label><input id="pf-quiet-end" type="time" value="${mm(s.quietEndMin)}"></div>
+      <h3>推进节奏（一端改，所有设备生效）</h3>
+      <div class="set-field"><label>每日强打扰额度</label><input id="pf-budget" type="number" min="0" max="20" value="${s.dailyStrongBudget}"></div>
+      <div class="set-field"><label>L2 停滞阈值（小时）</label><input id="pf-l2" type="number" min="0" value="${Math.round(s.escalateAfterMs.l2 / 3600000)}"></div>
+      <div class="set-field"><label>L3 停滞阈值（小时）</label><input id="pf-l3" type="number" min="0" value="${Math.round(s.escalateAfterMs.l3 / 3600000)}"></div>
+      <div class="set-field"><label>L4 停滞阈值（小时）</label><input id="pf-l4" type="number" min="0" value="${Math.round(s.escalateAfterMs.l4 / 3600000)}"></div>
+      <div class="set-field"><label>L5 停滞阈值（小时）</label><input id="pf-l5" type="number" min="0" value="${Math.round(s.escalateAfterMs.l5 / 3600000)}"></div>
+      <div class="set-field"><label>每日聚焦时刻</label><input id="pf-focus" type="time" value="${minText(s.focusAtMin)}"></div>
+      <div class="set-field"><label>静音开始</label><input id="pf-quiet-start" type="time" value="${minText(s.quietStartMin)}"></div>
+      <div class="set-field"><label>静音结束</label><input id="pf-quiet-end" type="time" value="${minText(s.quietEndMin)}"></div>
       <div class="set-field"><label>提示音</label>
         <select id="pf-sound" class="m-select">
-          <option value="system" ${s.sound === 'system' ? 'selected' : ''}>系统提示音</option>
-          <option value="none" ${s.sound === 'none' ? 'selected' : ''}>静音</option>
+          ${(['system', 'custom', 'none'] as const).map((v) =>
+            `<option value="${v}" ${s.sound === v ? 'selected' : ''}>${v === 'none' ? '静音' : v === 'custom' ? '自定义' : '系统提示音'}</option>`).join('')}
         </select></div>
-      <div class="set-field"><label>忽略几次后降级</label><input id="pf-downgrade" type="number" min="1" max="20" value="${s.autoDowngradeAfter}"></div>
-      <div class="set-field"><label>忽略几次后提示删除</label><input id="pf-neglected" type="number" min="1" max="50" value="${s.neglectedAfter}"></div>
       <div class="probe" id="pf-msg"></div>
       <button class="btn solid block" id="pf-save">保存偏好</button>
     </div>
@@ -343,7 +561,7 @@ function renderSettings() {
       <button class="btn solid block" id="do-upd" style="margin-top:8px;display:none">下载并安装</button>
     </div>
     <div class="set-group">
-      <button class="btn block" id="ping">试响一次（确认能通知）</button>
+      <button class="btn block" id="ping">测试通知（确认能提醒）</button>
       <button class="btn block" id="logout" style="margin-top:10px">退出登录</button>
     </div>
   </div>`;
@@ -358,22 +576,17 @@ function renderSettings() {
     if (r.ok) saveConfig({ serverSkewMs: r.skewMs });
   };
   const tf = (id: string) => document.getElementById(id) as HTMLInputElement;
-  const toMin = (v: string) => {
-    const [h, m] = v.split(':').map(Number);
-    return (h || 0) * 60 + (m || 0);
-  };
   const pfMsg = document.getElementById('pf-msg')!;
   document.getElementById('pf-save')!.onclick = async () => {
     pfMsg.className = 'probe'; pfMsg.textContent = '';
-    const patch = {
-      escalateAfterSec: Number(tf('pf-escalate').value),
-      repeatEverySec: Number(tf('pf-repeat').value),
-      maxRepeatCount: Number(tf('pf-maxrepeat').value),
+    const hrs = (id: string) => Math.max(0, Number(tf(id).value)) * 3_600_000;
+    const patch: Partial<Settings> = {
+      dailyStrongBudget: Math.max(0, Number(tf('pf-budget').value)),
+      escalateAfterMs: { l2: hrs('pf-l2'), l3: hrs('pf-l3'), l4: hrs('pf-l4'), l5: hrs('pf-l5') },
       quietStartMin: toMin(tf('pf-quiet-start').value),
       quietEndMin: toMin(tf('pf-quiet-end').value),
-      sound: (document.getElementById('pf-sound') as HTMLSelectElement).value as 'system' | 'none',
-      autoDowngradeAfter: Number(tf('pf-downgrade').value),
-      neglectedAfter: Number(tf('pf-neglected').value),
+      focusAtMin: toMin(tf('pf-focus').value),
+      sound: (document.getElementById('pf-sound') as HTMLSelectElement).value as Settings['sound'],
     };
     if (Object.values(patch).some((v) => typeof v === 'number' && (!Number.isFinite(v) || v < 0))) {
       pfMsg.textContent = '请填写有效的数字'; pfMsg.className = 'probe bad'; return;
@@ -387,7 +600,6 @@ function renderSettings() {
       pfMsg.textContent = '保存失败，检查服务端连接'; pfMsg.className = 'probe bad';
     }
   };
-  // 当前版本直接显示，不必等「检查更新」
   if (hasTauri()) void getVersion().then((v) => {
     const el = document.getElementById('curver');
     if (el) el.textContent = 'v' + v;
@@ -410,7 +622,7 @@ function renderSettings() {
       };
       (document.getElementById('do-upd') as HTMLElement).style.display = 'flex';
     } catch (e) {
-      statusEl.textContent = '检查失败：' + (e instanceof Error ? e.message : String(e));
+      statusEl.textContent = '检查失败：' + msgOf(e);
     }
   };
   document.getElementById('do-upd')!.onclick = async () => {
@@ -420,7 +632,7 @@ function renderSettings() {
       await invoke('plugin:apk-installer|download_and_install', pendingApk);
       statusEl.textContent = '下载完成，请在系统安装器中确认安装';
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = msgOf(e);
       statusEl.textContent = msg === 'NEED_INSTALL_PERMISSION' ? '请先允许「安装未知应用」后重试' : '安装失败：' + msg;
     }
   };
@@ -430,41 +642,54 @@ function renderSettings() {
   };
 }
 
+function minText(m: number): string {
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+function toMin(v: string): number {
+  const [h, m] = v.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+function msgOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 /* ------------------------------------------------------------ 实时 / 刷新 */
 
 function onRealtime(msg: ServerMessage) {
   switch (msg.t) {
     case 'welcome':
-      saveConfig({ serverSkewMs: msg.serverTs - Date.now(), settings: { ...loadConfig().settings, ...msg.settings } });
-      for (const m of msg.missed) {
-        // 补发通知也由原生服务统一发，这里只更新界面
-        if (!alarm.fire(m.entry, true)) pushWeak(m.entry);
-      }
+      if (msg.missed.length) toast(`上线补发 ${msg.missed.length} 条跟进`);
       void refresh();
       break;
-    case 'entry.fired':
-      if (!alarm.fire(msg.entry)) pushWeak(msg.entry);
+    case 'pursuit.created':
+    case 'pursuit.updated':
+    case 'pursuit.stepped':
+      control.dismissedElsewhere(msg.pursuit.id);
+      dropBannerByPursuit(msg.pursuit.id);
       void refresh();
       break;
-    case 'entry.weak':
-      pushWeak(msg.entry);
-      break;
-    case 'entry.created':
-    case 'entry.updated':
-    case 'entry.deleted':
-    case 'entry.acked':
-    case 'entry.downgraded':
-      alarm.dismissedElsewhere();
+    case 'pursuit.followed':
+      noteFollowup(msg.pursuit.id, msg.action);
+      control.dismissedElsewhere(msg.pursuit.id);
+      dropBannerByPursuit(msg.pursuit.id);
       void refresh();
       break;
-    case 'devices.changed':
+    case 'pursuit.deleted':
+      dropBannerByPursuit(msg.pursuitId);
+      void refresh();
+      break;
+    case 'pursuit.focused':
+      focus = { serverTs: serverNow(), items: msg.items, budgetLeft: msg.budgetLeft };
+      if (view === 'today') renderEntries();
+      break;
+    case 'pursuit.nudge':
+      control.fire(msg.pursuit, msg.level, msg.reason, msg.channel);
       void refresh();
       break;
     case 'settings.changed':
       saveConfig({ settings: msg.settings });
-      // 设置页正开着就重绘，让别处的改动立刻可见
       if (view === 'settings') renderSettings();
-      toast('提醒偏好已在别的设备更新');
+      toast('推进偏好已在别的设备更新');
       break;
     default:
       break;
@@ -481,7 +706,6 @@ async function refresh() {
   } catch { /* 静默 */ }
 }
 
-/** 把服务端地址和 token 交给原生常驻服务，锁屏后由它持有 WS、心跳和通知 */
 async function startNativePush() {
   if (!hasTauri()) return;
   const cfg = loadConfig();
@@ -507,7 +731,7 @@ function renderAuth(needed: boolean) {
     <div class="auth-card">
       <div class="mark"><i></i></div>
       <h1>${needed ? '初始化管理员' : 'DeskAlarm'}</h1>
-      <p>${needed ? '这个服务端还没有管理员。创建第一个账号后即可登录使用，此入口只显示一次。' : '用账号连接你的服务端。每台设备用自己的身份登录，提醒按用户隔离。'}</p>
+      <p>${needed ? '这个服务端还没有管理员。创建第一个账号后即可登录使用，此入口只显示一次。' : '用账号连接你的服务端。每台设备用自己的身份登录，推进项按用户隔离。'}</p>
       <div class="fld"><label>服务端地址</label>
         <input id="base" value="${esc(cfg.baseUrl || 'http://192.168.1.10:8091')}" autocomplete="off" spellcheck="false"></div>
       <div class="probe" id="probe"></div>
@@ -532,9 +756,7 @@ function renderAuth(needed: boolean) {
     if (!norm) { probeEl.textContent = '地址格式不对，需要 http:// 或 https:// 开头'; probeEl.className = 'probe bad'; return; }
     probeEl.textContent = '测试中…'; probeEl.className = 'probe';
     const r = await probeServer(norm);
-    probeEl.textContent = r.ok
-      ? `已连上（时钟差 ${Math.round(r.skewMs)} ms），可以登录`
-      : r.reason;
+    probeEl.textContent = r.ok ? `已连上（时钟差 ${Math.round(r.skewMs)} ms），可以登录` : r.reason;
     probeEl.className = 'probe ' + (r.ok ? 'ok' : 'bad');
     if (r.ok) saveConfig({ serverSkewMs: r.skewMs });
     return r.ok;
@@ -565,20 +787,20 @@ function renderAuth(needed: boolean) {
         const r = await api.setup({ username, password, confirmPassword: confirm, machineId });
         saveConfig({ token: r.token, user: r.user, device: r.device });
       } else {
-        const r = await api.login(username, password, deviceName, platform);
+        const r = await api.login(username, password, deviceName, platform === 'android' ? 'android' : 'web');
         saveConfig({ token: r.token, user: r.user, device: r.device });
       }
       boot();
     } catch (e) {
       if (e instanceof ApiError && e.code === 'ALREADY_SETUP') { renderAuth(false); return; }
-      err.textContent = '登录失败：' + (e instanceof Error ? e.message : '请重试');
+      err.textContent = '登录失败：' + (msgOf(e));
     }
   };
 }
 
 /* ------------------------------------------------------------ 启动 */
 
-async function boot() {
+function boot() {
   app.innerHTML = shell();
   applyTheme(loadTheme());
   document.querySelectorAll<HTMLElement>('.m-nav button').forEach((b) => {
@@ -590,8 +812,9 @@ async function boot() {
   connect();
   void startNativePush();
   void refresh();
-  // 梯度随时间推进：20 秒原地刷新一次，和桌面端一致
-  window.setInterval(tickUrgency, 20_000);
+  window.setInterval(() => {
+    if (view === 'today') renderEntries();
+  }, 20_000);
 }
 
 onUnauthorized(() => { rt?.close(); location.reload(); });
@@ -605,7 +828,6 @@ onUnauthorized(() => { rt?.close(); location.reload(); });
       const s = await api.setupStatus();
       renderAuth(s.needed);
     } catch {
-      // 没填地址或连不上：渲染一个带默认地址的初始化页，让用户先填
       renderAuth(true);
     }
     return;

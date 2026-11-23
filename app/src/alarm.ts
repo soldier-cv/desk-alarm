@@ -1,187 +1,203 @@
 /**
- * 强提示升级阶梯：0 秒亮接管窗口，30 秒加抖动，5 分钟后重复。
- * 停止条件：用户处理、别的设备处理，或重复次数达到上限自动降级。完整见 docs/requirements.md
+ * 跟进控制器。等级来自服务端 nudge：L1 静默入列表、L2 通知、L3 横幅、L4 接管、L5 归档。
+ * 停止条件：用户处理、别的设备处理、等级降级；静音时段把 L4 压回 L2。
  */
-import { inQuietHours, loadConfig, shouldRing, type AckAction, type Entry, type Settings } from './api';
+import {
+  inQuietHours, loadConfig,
+  type FollowupAction, type NudgeChannel, type NudgeLevel, type Pursuit,
+} from './api';
 
-export interface AlarmCallbacks {
-  /** 到点了，需要弹 Toast */
-  onNotify: (entry: Entry, attempt: number) => void;
-  /** 需要显示接管窗口（只有 strong 才会走到这） */
-  onShow: (entry: Entry) => void;
-  /** 升级到第 2 步，开始抖 */
-  onEscalate: (entry: Entry) => void;
-  /** 重复提醒一次 */
-  onRepeat: (entry: Entry, attempt: number) => void;
-  /** 重复达到上限，自动降级为静默提醒 */
-  onAutoMute: (entry: Entry) => void;
-  /** 处理完了，收起窗口 */
-  onDismiss: (entry: Entry, reason: 'self' | 'elsewhere' | 'muted') => void;
+export type FollowupStopReason = 'self' | 'elsewhere' | 'lowered' | 'aged';
+
+export interface FollowupCallbacks {
+  onSilent: (pursuit: Pursuit, level: NudgeLevel) => void;
+  onNotify: (pursuit: Pursuit, level: NudgeLevel, reason: string, attempt: number) => void;
+  onBanner: (pursuit: Pursuit, level: NudgeLevel, reason: string) => void;
+  onTakeover: (pursuit: Pursuit, level: NudgeLevel, reason: string) => void;
+  onArchive: (pursuit: Pursuit, reason: string) => void;
+  onStop: (pursuit: Pursuit, reason: FollowupStopReason) => void;
 }
 
 interface Active {
-  entry: Entry;
-  startedAt: number;
+  pursuit: Pursuit;
+  level: NudgeLevel;
+  reason: string;
+  channel: NudgeChannel;
   attempt: number;
-  escalTimer: number | null;
-  repeatTimer: number | null;
+  timer: number | null;
 }
 
-export class AlarmController {
+const REPEAT_MS: Record<NudgeLevel, number> = {
+  1: 0, 2: 5 * 60_000, 3: 10 * 60_000, 4: 60_000, 5: 0,
+};
+const MAX_ATTEMPTS: Record<NudgeLevel, number> = { 1: 0, 2: 6, 3: 3, 4: 0, 5: 0 };
+
+export class FollowupController {
   private active: Active | null = null;
 
-  constructor(private cb: AlarmCallbacks) {}
+  constructor(private cb: FollowupCallbacks) {}
 
-  get current(): Entry | null {
-    return this.active?.entry ?? null;
+  get current(): Pursuit | null {
+    return this.active?.pursuit ?? null;
   }
 
-  get isRinging(): boolean {
+  get isActive(): boolean {
     return this.active !== null;
   }
 
-  /**
-   * 响铃。weak 只弹通知就返回 false，由调用方走弱提示横幅。
-   * silent：补发场景已弹过「补发提醒」，这里别再弹第二条。
-   */
-  fire(entry: Entry, silent = false): boolean {
-    const settings = loadConfig().settings;
-    if (!silent) this.cb.onNotify(entry, 1);
+  get level(): NudgeLevel | null {
+    return this.active?.level ?? null;
+  }
 
-    if (!shouldRing(entry, settings)) {
-      return false;
+  /**
+   * 收到 nudge。重复同一项同级不重入；更高级别覆盖旧状态。
+   * 返回是否真正触发了表现，让调用方决定要不要刷新界面
+   */
+  fire(pursuit: Pursuit, level: NudgeLevel, reason: string, channel: NudgeChannel = 'in_app'): boolean {
+    const s = loadConfig().settings;
+    // 静音时段的 L4 降级，服务端也会算；这里再兜一层，避免广播顺序导致闪一下接管窗
+    const effective: NudgeLevel = level >= 4 && inQuietHours(s) ? 2 : level;
+
+    if (this.active?.pursuit.id === pursuit.id) {
+      if (effective <= this.active.level) return false;
+      this.stop();
+    } else if (this.active) {
+      this.stop();
     }
-    if (this.active && this.active.entry.id === entry.id) return true;
-    if (this.active) this.clearTimers();
 
     this.active = {
-      entry,
-      startedAt: Date.now(),
-      attempt: 1,
-      escalTimer: null,
-      repeatTimer: null,
+      pursuit, level: effective, reason, channel, attempt: 1, timer: null,
     };
 
-    this.cb.onShow(entry);
-    this.scheduleEscalate(settings.escalateAfterSec);
-    this.scheduleRepeat(settings.repeatEverySec * 1000);
+    switch (effective) {
+      case 1:
+        this.cb.onSilent(pursuit, 1);
+        break;
+      case 2:
+        this.cb.onNotify(pursuit, 2, reason, 1);
+        this.scheduleRepeat();
+        break;
+      case 3:
+        this.cb.onNotify(pursuit, 3, reason, 1);
+        this.cb.onBanner(pursuit, 3, reason);
+        this.scheduleRepeat();
+        break;
+      case 4:
+        this.cb.onTakeover(pursuit, 4, reason);
+        this.scheduleRepeat();
+        break;
+      case 5:
+        this.cb.onArchive(pursuit, reason);
+        this.stop();
+        break;
+    }
     return true;
   }
 
-  private scheduleEscalate(sec: number) {
-    if (!this.active || sec <= 0) return;
-    const entry = this.active.entry;
-    this.active.escalTimer = window.setTimeout(() => {
-      if (!this.active) return;
-      this.cb.onEscalate(entry);
-      // 升级之后改成每分钟一次，比第一次更密
-      this.scheduleRepeat(60_000);
-    }, sec * 1000);
-  }
-
-  private scheduleRepeat(ms: number) {
-    if (!this.active || ms <= 0) return;
-    // 升级时会改用更密的间隔，不清掉旧定时器会留下两条重复链，越响越快
-    if (this.active.repeatTimer !== null) clearTimeout(this.active.repeatTimer);
-    const id = this.active.entry.id;
-    const entry = this.active.entry;
-    this.active.repeatTimer = window.setTimeout(() => {
-      if (!this.active || this.active.entry.id !== id) return;
-      const s = loadConfig().settings;
-      // 静音时段只压住重复，不关闭已有窗口；出时段后从下一次 tick 继续
-      if (inQuietHours(s) && !entry.bypassQuiet) {
-        this.scheduleRepeat(ms);
+  private scheduleRepeat() {
+    const a = this.active;
+    if (!a) return;
+    const ms = REPEAT_MS[a.level];
+    if (ms <= 0) return;
+    a.timer = window.setTimeout(() => {
+      const cur = this.active;
+      if (!cur || cur.pursuit.id !== a.pursuit.id) return;
+      if (inQuietHours(loadConfig().settings)) {
+        this.scheduleRepeat();
         return;
       }
-      // attempt 1 是首次提示，之后每多一次算一次重复
-      const repeats = this.active.attempt - 1;
-      if (s.maxRepeatCount > 0 && repeats >= s.maxRepeatCount) {
+      const cap = MAX_ATTEMPTS[cur.level];
+      if (cap > 0 && cur.attempt >= cap) {
         this.stop();
-        this.cb.onAutoMute(entry);
+        this.cb.onStop(cur.pursuit, 'aged');
         return;
       }
-      this.active.attempt += 1;
-      this.cb.onRepeat(this.active.entry, this.active.attempt);
-      this.scheduleRepeat(ms);
+      cur.attempt += 1;
+      if (cur.level === 2 || cur.level === 3) {
+        this.cb.onNotify(cur.pursuit, cur.level, cur.reason, cur.attempt);
+      } else if (cur.level === 4) {
+        this.cb.onTakeover(cur.pursuit, 4, cur.reason);
+      }
+      this.scheduleRepeat();
     }, ms);
   }
 
-  /** 本机处理了。走 WS 让所有设备同时停铃 */
-  acknowledge(action: AckAction, snoozeTo?: number) {
-    if (!this.active) return null;
-    const entry = this.active.entry;
+  /** 用户在本机处理了（跟进动作） */
+  acknowledge(action: FollowupAction): { pursuitId: string; action: FollowupAction } | null {
+    const a = this.active;
+    if (!a) return null;
+    const result = { pursuitId: a.pursuit.id, action };
     this.stop();
-    this.cb.onDismiss(entry, 'self');
-    return { entry, action, snoozeTo };
+    this.cb.onStop(a.pursuit, 'self');
+    return result;
   }
 
   /** 别的设备处理了 */
-  dismissedElsewhere() {
-    if (!this.active) return;
-    const entry = this.active.entry;
+  dismissedElsewhere(pursuitId?: string) {
+    const a = this.active;
+    if (!a || (pursuitId && a.pursuit.id !== pursuitId)) return;
     this.stop();
-    this.cb.onDismiss(entry, 'elsewhere');
+    this.cb.onStop(a.pursuit, 'elsewhere');
+  }
+
+  /** 等级降级：收起高等级表现，退回低等级 */
+  downgrade(level: NudgeLevel) {
+    const a = this.active;
+    if (!a || level >= a.level) return;
+    const p = a.pursuit, reason = a.reason;
+    this.stop();
+    if (level === 3) this.cb.onBanner(p, 3, reason);
+    else if (level === 2) this.cb.onNotify(p, 2, reason, 1);
+    else this.cb.onSilent(p, 1);
+    this.cb.onStop(p, 'lowered');
   }
 
   stop() {
-    this.clearTimers();
+    const a = this.active;
+    if (a?.timer !== null && a?.timer !== undefined) clearTimeout(a.timer);
     this.active = null;
   }
-
-  private clearTimers() {
-    if (!this.active) return;
-    if (this.active.escalTimer !== null) clearTimeout(this.active.escalTimer);
-    if (this.active.repeatTimer !== null) clearTimeout(this.active.repeatTimer);
-    this.active.escalTimer = null;
-    this.active.repeatTimer = null;
-  }
 }
 
-/* ---------------------------------------------------------- 弱提示队列 */
+/* ---------------------------------------------------------- 横幅队列 */
 
-/**
- * weak 强度的提醒只出一条横幅，不抢注意力。
- * 同一时间最多留 3 条，多了就把最老的收掉，避免堆成一片
- */
-const MAX_WEAK = 3;
-const weak: Entry[] = [];
-
-type WeakListener = (list: Entry[]) => void;
-let weakListener: WeakListener | null = null;
-
-export function onWeakChange(fn: WeakListener) {
-  weakListener = fn;
-  fn([...weak]);
+/** L3 横幅替代旧的 weak 队列：最多 3 条，多了收掉最老的，避免堆成噪声 */
+export interface Banner {
+  pursuit: Pursuit;
+  reason: string;
+  level: NudgeLevel;
 }
 
-export function pushWeak(entry: Entry) {
-  if (weak.some((e) => e.id === entry.id)) return;
-  weak.push(entry);
-  while (weak.length > MAX_WEAK) weak.shift();
-  weakListener?.([...weak]);
+const MAX_BANNERS = 3;
+const banners: Banner[] = [];
+
+type BannerListener = (list: Banner[]) => void;
+let bannerListener: BannerListener | null = null;
+
+export function onBannerChange(fn: BannerListener) {
+  bannerListener = fn;
+  fn([...banners]);
 }
 
-export function popWeak(entryId: string) {
-  const i = weak.findIndex((e) => e.id === entryId);
+export function pushBanner(pursuit: Pursuit, reason: string, level: NudgeLevel) {
+  if (banners.some((b) => b.pursuit.id === pursuit.id)) return;
+  banners.push({ pursuit, reason, level });
+  while (banners.length > MAX_BANNERS) banners.shift();
+  bannerListener?.([...banners]);
+}
+
+export function dropBannerByPursuit(pursuitId: string) {
+  const i = banners.findIndex((b) => b.pursuit.id === pursuitId);
   if (i < 0) return;
-  weak.splice(i, 1);
-  weakListener?.([...weak]);
+  banners.splice(i, 1);
+  bannerListener?.([...banners]);
 }
 
-export function listWeak(): Entry[] {
-  return [...weak];
+export function listBanners(): Banner[] {
+  return [...banners];
 }
 
-export function clearWeak() {
-  weak.length = 0;
-  weakListener?.([]);
+export function clearBanners() {
+  banners.length = 0;
+  bannerListener?.([]);
 }
-
-/** 收掉某条弱提示。用户点了完成/推迟/忽略之后调它 */
-export function dropWeakByEntry(entryId: string) {
-  const hit = weak.some((e) => e.id === entryId);
-  if (hit) popWeak(entryId);
-}
-
-export type { Settings, AckAction };
-export { inQuietHours };

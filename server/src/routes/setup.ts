@@ -8,7 +8,6 @@ import { run, tx, now } from '../db.js';
 import { countUsers, getUser, hashPassword } from '../repo/users.js';
 import { ensureSettings } from '../repo/settings.js';
 import { upsertDeviceByMachine } from '../repo/devices.js';
-import { invalidateTransport } from '../repo/deliveries.js';
 
 const SETUP_LOCK = 918273;
 
@@ -61,7 +60,6 @@ export async function setupRoutes(app: FastifyInstance) {
       device = await upsertDeviceByMachine({
         machineId, userId: user.id, name: '我的笔记本', platform: 'windows', transport: 'ws',
       });
-      invalidateTransport(device.id);
     }
 
     const tok = newToken();

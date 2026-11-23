@@ -8,7 +8,6 @@ interface Row {
   name: string;
   platform: string;
   transport: string;
-  push_token: string | null;
   push_enabled: boolean;
   online: boolean;
   last_ip: string | null;
@@ -26,7 +25,6 @@ function toDevice(r: Row): Device {
     transport: (r.transport as TransportName) ?? 'ws',
     pushEnabled: r.push_enabled,
     online: r.online,
-    pushReady: r.transport === 'ws' || !!r.push_token,
     lastIp: r.last_ip,
     lastSeenAt: new Date(r.last_seen_at).getTime(),
     createdAt: new Date(r.created_at).getTime(),
@@ -72,7 +70,6 @@ export async function upsertDeviceByMachine(input: {
   name: string;
   platform: Platform;
   transport?: TransportName;
-  pushToken?: string | null;
   ip?: string | null;
 }): Promise<Device> {
   const existing = await one<Row>(
@@ -83,23 +80,22 @@ export async function upsertDeviceByMachine(input: {
       `UPDATE devices
           SET user_id = $2, name = $3, platform = $4,
               transport = COALESCE($5, transport),
-              push_token = COALESCE($6, push_token),
-              last_ip = COALESCE($7, last_ip),
+              last_ip = COALESCE($6, last_ip),
               last_seen_at = now()
         WHERE id = $1`,
       [existing.id, input.userId, input.name, input.platform,
-       input.transport ?? null, input.pushToken ?? null, input.ip ?? null],
+       input.transport ?? null, input.ip ?? null],
     );
     return (await getDevice(existing.id))!;
   }
 
   const r = await one<{ id: string }>(
     `INSERT INTO devices
-       (machine_id, user_id, name, platform, transport, push_token, last_ip, push_enabled, online, last_seen_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,true,false,now())
+       (machine_id, user_id, name, platform, transport, last_ip, push_enabled, online, last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,$6,true,false,now())
      RETURNING id`,
     [input.machineId, input.userId, input.name, input.platform,
-     input.transport ?? 'ws', input.pushToken ?? null, input.ip ?? null],
+     input.transport ?? 'ws', input.ip ?? null],
   );
   return (await getDevice(r!.id))!;
 }

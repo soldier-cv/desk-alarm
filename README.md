@@ -1,13 +1,15 @@
 # DeskAlarm
 
-到点强提示的桌面工具。客户端与服务端分离，多用户、数据隔离，同一条提醒可指定推送到该用户的多台设备。
+**agent-first 的自我驱动推进引擎。** 客户端与服务端分离，多用户、数据隔离。它不只是「到点提醒」，而是把每件事当作一个**推进项（Pursuit）**持续跟进：拆解成小步骤、按重要性与停滞排今日聚焦、给不同打扰等级，agent 可全权推进，人通过客户端看和确认。
+
+> v2 是架构重构（Entry→Pursuit），数据模型不兼容 v1。升级时先 `npm run db:init` 建新表，再 `npm run migrate:v2` 把旧 `entries/dismissals` 迁进来（按用户幂等）。设计动机与算法见 `docs/drive-engine.md`。
 
 ## 当前状态
 
 | 模块 | 状态 |
 |---|---|
-| 服务端（Node + Fastify + PostgreSQL） | 完成，**146 项冒烟 + 23 项网关验证 + 14 项重复日期 + 14 项隔离检查全通过** |
-| 强弱提示与忽略记录 | 完成 |
+| 服务端（Node + Fastify + PostgreSQL） | 完成，**v2 冒烟 84 项 + 重复日期 17 项全通过** |
+| 推进引擎（四循环 / 打扰等级 / 配额 / 跟进） | 完成 |
 | 多用户 / 数据隔离 / 用户管理 | 完成，用户名密码登录，管理员管用户 |
 | Agent 令牌（每用户自助签发） | 完成，独立鉴权，只读/读写 scope，machine-id 可选（云端 agent 可不绑） |
 | Agent 专用 API（`/api/agent`） | 完成，与用户 API 分开，独立鉴权与 scope |
@@ -49,29 +51,23 @@ CREATE SCHEMA desk_alarm AUTHORIZATION desk_alarm;
 
 **核心规则：服务端是计时的唯一权威。** 客户端不做权威计时，本地预判只让提示提前一点出现，最终以服务端写入的 `fired_at` 为准。
 
-**投递是事务性 outbox。** 调度器只往 `deliveries` 表写 pending 记录，投递由独立的轮转器做，判定和送出去是两件不相干的事。`delivered` 的判定标准是「通道确认接收」，不是「我发出去了」。
+**投递是事务性 outbox。** 引擎只往 `nudges` 表写 pending 记录，投递由独立的轮转器做，判定和送出去是两件不相干的事。`delivered` 的判定标准是「通道确认接收」，不是「我发出去了」。
 
-## 提醒强度
+## 打扰等级与跟进
 
-设计上的第一条原则：**提醒疲劳是提醒类工具失效的首要原因。全都喊，等于全听不见。**
+第一条原则仍然是：**全都喊，等于全听不见。** 但 v2 不再靠「默认弱 + 关键词判强」，而是**连续等级 + 每日配额**：
 
-| | 强提示 | 弱提示 |
+| 等级 | 触发（停滞时长） | 表现 |
 |---|---|---|
-| 表现 | 全屏接管窗口，关不掉，会重复响 | 只出通知和顶部细横幅 |
-| 动作 | 完成 / 打开链接 / 推迟 / 静音 | 完成 / 推迟 10 分钟 / **忽略（写理由）** |
-| 升级 | 30 秒不处理就升级，5 分钟后每 2 分钟重复 | 永不升级 |
-| 默认 | 只有文本含「一定要 / 必须 / 紧急…」才判强 | 其余全部默认弱，包括 agent 建的 |
+| L1 | < 2h | 静默，只进今日聚焦列表 |
+| L2 | ≥ 2h | 通知 |
+| L3 | ≥ 1d | 通知 + 横幅 |
+| L4 | ≥ 3d | 接管窗口，关不掉 |
+| L5 | ≥ 7d | 自动归档（不删除） |
 
-`strength` 和 `bypassQuiet` 是**两个正交字段**。必须拆开，因为「服药」要 strong 且绕过静音，「站起来走走」要 weak 且不绕过。
+L4/L5 受每日强打扰配额限制（默认 2 次）：配额用完就降到 L3；静音时段 L4 降 L2。不再按措辞猜强度，而是看**重要性、逾期、停滞、承诺**算权重，由引擎排优先级。
 
-**忽略和完成必须分开记**：
-
-- `done` = 我做完了
-- `dismissed` = 我看到了，故意不处理
-
-分开的全部意义在于下面这个判断：
-
-> 一条被忽略 2 次的条目自动降级为弱提示；被忽略 3 次提示「建议删除」。
+**跟进是信号，不是惩罚。** 每次跟进给用户低摩擦动作：**推进 / 推了一点 / 拆小 / 改天 / 归档**，回答实时改写后续策略。反复"推不动"不再导向"建议删除"，而是帮你**拆小或调整**——这才是自我驱动。v1 的 `dismissed` 计数降级逻辑已移除。
 
 ## 临近梯度
 
@@ -109,7 +105,7 @@ server/
   src/transport/           WebSocket 投递通道（注册表式，便于以后接厂商通道）
   src/mcp/                 工具集与 stdio 入口
   src/routes/              entries / devices / stream / mcp / admin / agent-tokens
-  scripts/smoke.mjs        146 项冒烟测试
+  scripts/smoke.mjs        v2 冒烟测试（84 项）
   scripts/verify.mjs       23 项端到端验证（打网关）
   scripts/isolation-check.mjs  跨用户隔离 / 设备随用户走 / 看板接口
   src/alarm.ts             升级阶梯 + 弱提示队列
@@ -312,10 +308,10 @@ connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:
 cd server
 npm run typecheck
 npm run build
-npm run smoke            # 146 项。会建临时库，跑完删掉
+npm run smoke            # v2 冒烟 84 项。会建临时库，跑完删掉
 node scripts/verify.mjs  # 含管理员初始化、API、MCP/Agent 令牌
 node scripts/e2e-check.mjs   # 联调自检，真跑一遍调度/确认/忽略/MCP
-npm run repeat           # 14 项。重复日期与月末钳位
+npm run repeat           # 17 项。重复规则与月末钳位
 npm run isolation        # 14 项。跨用户隔离 / 设备随用户走 / 看板接口（需栈起着）
 ```
 
@@ -332,25 +328,19 @@ cd server && SMOKE_PG_PASSWORD=deskalarm npm run smoke
 
 `docker-compose.local.yml` 只在这条命令里生效；Woodpecker 的普通 `docker compose up -d` 不会碰它，仍然用宿主机 `.env` 里已有的数据库。
 
-## 强提示的升级阶梯
+## 推进引擎的跟进阶梯
 
-```
-0 秒      Windows Toast + 接管窗口亮起
-30 秒     加抖动，窗口关不掉
-5 分钟    每 2 分钟重复一次
-```
+引擎每 tick 遍历 active 推进项，按停滞时长算打扰等级（见上表），命中情境闸门（时间窗/设备在线）且配额允许时写一条 `nudge` 进 outbox。等级到 L5 自动归档。
 
-停止条件只有两个：用户处理了，或者别的设备已经处理了（收到 `entry.acked` 广播就立刻停）。
+停止条件：用户处理了（`pursuit.followed` 广播）、别的设备处理了、或等级降级。L4 接管窗口的「关不掉」在 `src-tauri/src/windows.rs` 里靠 `TAKEOVER_UNLOCKED` 原子标志实现，前端处理完才解锁。
 
-接管窗口的「关不掉」在 `src-tauri/src/windows.rs` 里靠 `TAKEOVER_UNLOCKED` 原子标志实现，默认锁死，前端处理完才解锁。
-
-静音时段（默认 23:30 到 07:00）内普通提醒只出通知不进接管窗口，标了 `bypassQuiet` 的照响。
+静音时段（默认 23:30 到 07:00）内 L4 降为 L2；每天强打扰（L4/L5）有配额上限，用完降到 L3。
 
 ## 多设备去重
 
-任意设备点完成，服务端把 `deliveries` 改成 `acked` 并广播 `entry.acked`，其它正在响的设备立刻停铃并降级显示「已在 XX 完成」。
+任意设备处理了推进项，服务端发 `pursuit.followed` 广播，其它正在响的设备立刻停铃。
 
-离线设备不丢提醒：投递记录留在 `pending`，设备重新上线时 `welcome` 消息里带 `missed` 列表并标注迟了多久。重试超时的会主动放弃，机会留给补发，不会让坏 token 无限重试。
+离线设备不丢提醒：nudge 留在 `pending`，设备重新上线时 `welcome` 消息里带 `missed` 列表并标注迟了多久。重试超时的会主动放弃，机会留给补发，不会让坏 token 无限重试。推送范围为空的推进项会广播给该用户所有在线设备。
 
 ## MCP 与 Agent 令牌
 

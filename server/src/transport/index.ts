@@ -1,22 +1,27 @@
 /**
  * 投递通道抽象。
  *
- * 目前只有 WebSocket 一条通道：Android 用常驻前台服务维持进程和 WS 连接，
- * 桌面端本来就是常驻进程，所以两端都走同一条实时通道。断线期间的提醒由
- * outbox 保留，重连后 welcome 带 missed 补发。
- *
- * 契约很简单：send 成功返回 true，失败返回 false 加原因。
- * 失败不算「提醒丢了」，outbox 会重试，重试超时才降级到 missed 补发。
+ * 目前只有 WebSocket 一条通道：Android 常驻前台服务维持连接，桌面端本来就是常驻进程。
+ * 失败不算「提醒丢了」，outbox 会重试，重连后 welcome 带 missed 补发。
+ * 注册表留着，方便以后接厂商推送。
  */
-import type { Entry } from '../../../shared/types.js';
+import type { NudgeChannel, NudgeLevel, Pursuit, ServerMessage } from '../../../shared/types.js';
 import { hub } from '../hub.js';
 import { log } from '../log.js';
 
 export type TransportName = 'ws';
 
+/** A 模块调度器调用 send 时传的载荷 */
+export interface NudgePayload {
+  pursuit: Pursuit;
+  level: NudgeLevel;
+  channel: NudgeChannel;
+  reason: string;
+  serverTs?: number;
+}
+
 export interface SendResult {
   ok: boolean;
-  /** 通道自己的回执 id，出问题时排查用 */
   messageId?: string;
   error?: string;
   /** 明确的「这个 token 废了」，不该重试 */
@@ -27,7 +32,33 @@ export interface Transport {
   readonly name: TransportName;
   /** 这台设备当前能不能立刻收到。false 时 outbox 会等 */
   available(deviceId: string): boolean;
-  send(deviceId: string, entry: Entry, serverTs: number): Promise<SendResult>;
+  send(deviceId: string, msg: ServerMessage): Promise<SendResult>;
+}
+
+// 表现由等级决定：L4/L5 接管，L2/L3 走通知（客户端按 level 决定是否加横幅），L1 静默在应用内
+function presentationChannel(level: NudgeLevel, requested: NudgeChannel): NudgeChannel {
+  if (level >= 4) return 'takeover';
+  if (level === 1) return 'in_app';
+  return requested === 'in_app' ? 'in_app' : 'notification';
+}
+
+function nudgeMessage(p: NudgePayload): ServerMessage {
+  return {
+    t: 'pursuit.nudge',
+    pursuit: p.pursuit,
+    level: p.level,
+    channel: presentationChannel(p.level, p.channel),
+    reason: p.reason,
+    serverTs: p.serverTs ?? Date.now(),
+  };
+}
+
+/** 调度器的唯一入口。也接受已经组装好的 ServerMessage，方便测试与补发 */
+export async function send(deviceId: string, payload: NudgePayload | ServerMessage): Promise<SendResult> {
+  const msg = 't' in payload ? payload : nudgeMessage(payload);
+  const transport = transportFor('ws');
+  if (!transport.available(deviceId)) return { ok: false, error: '设备不在线' };
+  return transport.send(deviceId, msg);
 }
 
 /* ------------------------------------------------------------ WebSocket */
@@ -39,18 +70,11 @@ class WebSocketTransport implements Transport {
     return hub.isOnline(deviceId);
   }
 
-  async send(deviceId: string, entry: Entry, serverTs: number): Promise<SendResult> {
+  async send(deviceId: string, msg: ServerMessage): Promise<SendResult> {
     if (!this.available(deviceId)) {
       return { ok: false, error: '设备不在线' };
     }
-    const sent = hub.sendTo(deviceId, {
-      t: 'entry.fired',
-      entry,
-      serverTs,
-      repeat: entry.repeat,
-      strength: entry.strength,
-      transport: 'ws' as const,
-    });
+    const sent = hub.sendTo(deviceId, msg);
     return sent ? { ok: true } : { ok: false, error: 'socket 写入失败' };
   }
 }
@@ -58,7 +82,7 @@ class WebSocketTransport implements Transport {
 /* ------------------------------------------------------------- 注册表 */
 
 const registry = new Map<TransportName, Transport>([
-  ['ws', new WebSocketTransport() as Transport],
+  ['ws', new WebSocketTransport()],
 ]);
 
 export function registerTransport(t: Transport) {

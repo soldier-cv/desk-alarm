@@ -8,7 +8,7 @@ import { startScheduler, stopScheduler, schedulerStats } from './scheduler.js';
 import { initTransports } from './transport/index.js';
 import { setupRoutes } from './routes/setup.js';
 import { deviceRoutes } from './routes/devices.js';
-import { entryRoutes } from './routes/entries.js';
+import { pursuitRoutes } from './routes/pursuits.js';
 import { streamRoutes } from './routes/stream.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { adminRoutes } from './routes/admin.js';
@@ -95,7 +95,7 @@ await app.register(
 );
 
 // 每组路由单独 register，形成独立封装作用域。
-// entryRoutes 内部用了 app 级 preHandler，共用实例的话钩子会泄漏到 /auth/login
+// pursuitRoutes 内部用了 app 级 preHandler，共用实例的话钩子会泄漏到 /auth/login
 await app.register(
   async (api) => { await deviceRoutes(api); },
   { prefix: '/api/v1' },
@@ -107,7 +107,7 @@ await app.register(
 );
 
 await app.register(
-  async (api) => { await entryRoutes(api); },
+  async (api) => { await pursuitRoutes(api); },
   { prefix: '/api/v1' },
 );
 

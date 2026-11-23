@@ -1,4 +1,4 @@
-/** 端到端验证：静态页 + API + MCP 全走网关。node scripts/verify.mjs */
+/** v2 端到端验证：API + MCP 全走网关。node scripts/verify.mjs */
 const BASE = process.env.BASE ?? 'http://127.0.0.1:8091';
 const API = `${BASE}/api/v1`;
 const MCP = `${BASE}/api/mcp`;
@@ -10,7 +10,6 @@ const ok = (n, c, x = '') => {
   if (c) { pass++; console.log(`  \x1b[32mPASS\x1b[0m ${n}`); }
   else { fail++; console.log(`  \x1b[31mFAIL\x1b[0m ${n} ${x}`); }
 };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function call(path, { method = 'GET', token, body } = {}) {
   const headers = {};
@@ -27,7 +26,7 @@ const mcpCall = (name, args, token) => fetch(`${MCP}/call`, {
   body: JSON.stringify({ name, arguments: args }),
 }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => ({})) }));
 
-console.log(`\n\x1b[1m端到端验证\x1b[0m ${BASE}\n`);
+console.log(`\n\x1b[1m端到端验证（v2 推进引擎）\x1b[0m ${BASE}\n`);
 
 console.log('健康');
 const hz = await fetch(`${BASE}/healthz`).then((r) => r.json());
@@ -61,22 +60,20 @@ const phone = await call('/auth/login', {
 ok('安卓设备走 ws 通道（前台服务保活）', phone.json.device?.transport === 'ws');
 ok('安卓设备标为未在线', phone.json.device?.online === false);
 
-console.log('\n强弱提示');
-const weak = await call('/entries', {
+console.log('\n推进项');
+const plan = await call('/pursuits', {
   method: 'POST', token: t,
-  body: { text: '端到端验弱提示', remindAt: Date.now() + 1500, strength: 'weak' },
+  body: { text: '端到端验推进项', importance: 2, dueAt: Date.now() + 60_000 },
 });
-ok('弱提示保存成功', weak.status === 201 && weak.json.entry.strength === 'weak');
-const inbox = await call('/entries', { method: 'POST', token: t, body: { text: '端到端验收集箱' } });
-ok('收集箱条目默认 weak', inbox.json.entry.strength === 'weak' && inbox.json.entry.status === 'inbox');
-
-const dismissedView = await call('/entries?view=dismissed', { token: t });
-ok('已忽略视图可访问', Array.isArray(dismissedView.json.dismissals));
-const neglected = await call('/neglected', { token: t });
-ok('被反复忽略视图可访问', Array.isArray(neglected.json.entries));
+ok('建推进项成功', plan.status === 201 && plan.json.pursuit?.importance === 2);
+const noTime = await call('/pursuits', { method: 'POST', token: t, body: { text: '端到端验无时间' } });
+ok('无时间默认 active', noTime.json.pursuit?.status === 'active');
+const focus = await call('/focus', { token: t });
+ok('今日聚焦可用', focus.status === 200 && Array.isArray(focus.json.items));
+const stats = await call('/stats/me', { token: t });
+ok('我的看板可用', stats.status === 200 && stats.json.today !== undefined);
 
 console.log('\nMCP / Agent 令牌');
-const mh = { authorization: `Bearer ${t}` };
 const issued = await call('/agent-tokens', { method: 'POST', token: t, body: {
   name: '验证用 Agent', machineId: `verify-agent-${Date.now()}`, scope: 'write',
 } });
@@ -86,40 +83,34 @@ ok('登录 token 调不了 MCP', (await mcpCall('today_digest', {}, t)).status =
 const tools = await fetch(`${MCP}/tools`, { headers: { authorization: `Bearer ${AT}` } }).then((r) => r.json());
 ok('工具清单能取到', (tools.tools?.length ?? 0) >= 8, `${tools.tools?.length}`);
 const digest = await mcpCall('today_digest', {}, AT);
-ok('today_digest 可调', digest.status === 200 && !!digest.json.result?.概览);
-const strong = await mcpCall('create_entry', { text: 'x', remindAt: Date.now() + 60_000, strength: 'strong' }, AT);
-ok('agent 建强提示被拦', strong.status === 400 && /reason/.test(strong.json.message ?? ''));
-const weakm = await mcpCall('create_entry', { text: '端到端 agent 建的弱提示' }, AT);
-ok('agent 建弱提示放行', weakm.status === 200 && weakm.json.result?.entry?.strength === 'weak');
+ok('today_digest 可调', digest.status === 200 && digest.json.result?.聚焦数 !== undefined);
+const high = await mcpCall('create_pursuit', { text: 'x', importance: 3 }, AT);
+ok('agent 建高优先级无 reason 被拦', high.status === 400 && /reason|重要性/.test(high.json.message ?? ''));
+const normal = await mcpCall('create_pursuit', { text: '端到端 agent 建的推进项' }, AT);
+ok('agent 建普通推进项放行（阶段）', normal.status === 200 && !!normal.json.result?.planId);
 
-console.log('\n幂等与并发');
-const key = `mcp:e2e-${Date.now()}`;
-const i1 = await call('/entries', { method: 'POST', token: t, body: { text: '端到端幂等', idempotencyKey: key } });
-const i2 = await call('/entries', { method: 'POST', token: t, body: { text: '端到端幂等', idempotencyKey: key } });
-ok('同一个幂等键只建一条', i1.json.entry.id === i2.json.entry.id);
-const v = weak.json.entry.version;
-await call(`/entries/${weak.json.entry.id}`, { method: 'PATCH', token: t, body: { note: '改过', version: v } });
-const stale = await call(`/entries/${weak.json.entry.id}`, { method: 'PATCH', token: t, body: { note: '旧版本', version: v } });
+console.log('\n并发与容错');
+const v = plan.json.pursuit.version;
+const patched = await call(`/pursuits/${plan.json.pursuit.id}`, { method: 'PATCH', token: t, body: { note: '改过', version: v } });
+ok('版本匹配改成功', patched.status === 200);
+const stale = await call(`/pursuits/${plan.json.pursuit.id}`, { method: 'PATCH', token: t, body: { note: '旧版本', version: v } });
 ok('旧版本改被拒 409', stale.status === 409);
-
-console.log('\n空 body 容错');
-const nb = await fetch(`${API}/entries`, { method: 'POST', headers: { ...mh } });
+const nb = await fetch(`${API}/pursuits`, { method: 'POST', headers: { authorization: `Bearer ${t}` } });
 ok('不带 body 的 POST 返回 400 而不是 500', nb.status === 400, `status=${nb.status}`);
 const nbMsg = await nb.json().catch(() => ({}));
 ok('错误信息是人话', typeof nbMsg.message === 'string' && nbMsg.message.length > 0, JSON.stringify(nbMsg));
-const emptyText = await call('/entries', { method: 'POST', token: t, body: { text: '   ' } });
+const emptyText = await call('/pursuits', { method: 'POST', token: t, body: { text: '   ' } });
 ok('全是空格的 text 也被拒', emptyText.status === 400);
-const badStrength = await call('/entries', { method: 'POST', token: t, body: { text: 'x', strength: 'loud' } });
-ok('非法的 strength 被拒', badStrength.status === 400);
+const badImportance = await call('/pursuits', { method: 'POST', token: t, body: { text: 'x', importance: 9 } });
+ok('非法的 importance 被拒', badImportance.status === 400);
 
 console.log('\n清理');
-// 清干净这一轮造的全部条目，不靠列表点名，避免漏
-const all = await call('/entries?view=all&limit=500', { token: t });
-for (const e of all.json.entries ?? []) {
-  await call(`/entries/${e.id}`, { method: 'DELETE', token: t });
+const all = await call('/pursuits', { token: t });
+for (const p of all.json.pursuits ?? []) {
+  await call(`/pursuits/${p.id}`, { method: 'DELETE', token: t });
 }
-const after = await call('/entries?view=all', { token: t });
-ok('测试数据清干净', after.json.entries.length === 0, `剩 ${after.json.entries.length} 条`);
+const after = await call('/pursuits', { token: t });
+ok('测试数据清干净', (after.json.pursuits ?? []).length === 0, `剩 ${(after.json.pursuits ?? []).length} 条`);
 
 console.log(`\n${'-'.repeat(44)}`);
 console.log(fail === 0

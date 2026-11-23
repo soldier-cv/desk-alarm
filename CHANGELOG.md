@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Changed（架构重构：从「到点提醒」到「agent-first 推进引擎」）
+- 核心抽象从「提醒条目 Entry」换成「推进项 Pursuit」：有生命周期（收集→拆解→排期→跟进→完成/归档）、显式 importance/energy、步骤进度、情境触发。系统不再只问「到没到点」，而持续问「这件事到哪了、下一步推什么」。
+- 数据模型重做：`entries/deliveries/dismissals` 三表收敛为 `pursuits/steps/followups/nudges`；`nudges` 同时是打扰账本和投递 outbox。提供 `npm run migrate:v2` 做 v1→v2 数据迁移（按用户幂等）。
+- 提醒从「强/弱二分 + 关键词判强度」改为「连续打扰等级 L1–L5 + 停滞驱动升级 + 每日强打扰配额」。忽略不再是惩罚（旧版降级/建议删除），而是跟进信号：改天 / 拆小 / 归档的低摩擦动作。
+- 服务端新增推进引擎 `drive.ts`：四循环（晨间聚焦、微步骤、情境触发、跟进曲线）+ 权重排序 + 打扰预算；服务端仍是唯一计时权威。
+- agent-first：MCP（9 工具）与 Agent API 能完整跑通「拆解→聚焦→跟催→归档」，所有写操作两步防呆（plan/apply）+ 强打扰必须给 reason。客户端是给人看和确认的界面，两条路走同一套领域逻辑。
+
+### Added
+- 客户端主视图重做为「今日推进」工作台：今日聚焦卡 + 按权重排序的推进项列表 + 步骤进度 + 详情面板；「忽略」改为五种跟进动作。
+- 重复规则扩展为 daily/weekly/monthly/yearly/workdays/interval + byWeekday/byMonthday，月末钳位保留。
+- 新增 `GET /pursuits/:id` 单条查询接口。
+
+### Fixed
+- 修复默认推送范围（device_id 为空）的 nudge 被轮转器静默丢弃的问题：现在广播给该用户所有在线设备。
+- 补上 recurrence.freq 的入参校验，非法重复规则不再被存入后 silently 失效。
+
 ## [v0.4.11] - 2026-11-22
 
 ### Added

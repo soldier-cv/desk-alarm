@@ -1,27 +1,36 @@
 /**
- * 客户端与服务端的通信层。HTTP 走增删改，WS 收触发与跨端广播。
- * 触发权威在服务端，本地预判只让提示早一点出现，最终以 serverTs 为准
+ * 客户端与服务端的通信层。HTTP 负责增删改，WS 只送触发与跨端广播。
+ * 领域操作全部走服务端引擎，本地不判断「该不该响」。
  */
 import { invoke } from '@tauri-apps/api/core';
 import type {
-  AckAction, AgentScope, AgentToken, CreateEntryRequest, Device, Dismissal, Entry, EntryCounts,
-  LoginResponse, MissedFire, MyStats, Overview, RepeatRule, Role, ServerMessage, Settings, Strength, TransportName, User,
+  AddStepRequest, AgentScope, AgentToken, CreatePursuitRequest, Device, Followup,
+  FollowupAction, FollowupRequest, FocusResult, Importance, LoginResponse, MyStats,
+  NudgeLevel, Overview, Pursuit, PursuitStatus, Role, ServerMessage, Settings, Step, StepState,
+  UpdatePursuitRequest, UpdateStepRequest, User,
 } from '../../shared/types';
 
 export type {
-  AckAction, AgentScope, AgentToken, Device, Dismissal, Entry, EntryCounts, MissedFire, MyStats, RepeatRule,
-  Overview, ServerMessage, Settings, Strength, TransportName, User,
-};
+  AddStepRequest, AgentScope, AgentToken, ClientMessage, Commitment, CreatePursuitRequest,
+  Device, Energy, EntryKind, Followup, FollowupAction, FollowupPrompt, FollowupRequest,
+  FocusItem, FocusResult, Importance, LoginResponse, MyStats, Nudge, NudgeChannel,
+  NudgeLevel, Overview, Platform, Pursuit, PursuitContext, PursuitNature, PursuitStatus,
+  RecurrenceRule, Role, ServerMessage, Settings, Step, StepState, TransportName,
+  UpdatePursuitRequest, UpdateStepRequest, User,
+} from '../../shared/types';
+
+export type PursuitView = 'today' | 'all' | 'inbox' | 'done' | 'archived';
+export type Urgency = 'none' | 'soon' | 'close' | 'due' | 'over';
+
+export interface CountsResult {
+  counts: Partial<Record<PursuitStatus, number>>;
+  pendingFollowup: number;
+}
 
 const LS_KEY = 'deskalarm.config';
 
-/** serverNow 的时钟偏差缓存，不进 localStorage */
 let skewCache: number | null = null;
-
-/** machine-id 一次读到就缓存：注册表/ioreg 不会在会话中变，重复调用纯属浪费 */
 let machineIdCache: string | null = null;
-
-/** 平台探测结果缓存。首屏要等它，重复 invoke 没意义 */
 let platformCache: ClientPlatform | null = null;
 
 export type ClientPlatform = 'web' | 'windows' | 'macos' | 'linux' | 'android';
@@ -42,7 +51,6 @@ export async function getPlatform(): Promise<ClientPlatform> {
   return platformCache;
 }
 
-/** 非 Tauri（vite 开发、看板）拿不到机器指纹，返回空串让服务端不建设备行 */
 export async function getMachineId(): Promise<string> {
   if (!inTauri()) return '';
   if (machineIdCache !== null) return machineIdCache;
@@ -60,20 +68,23 @@ export interface Config {
   deviceName: string;
   token: string;
   device: Device | null;
-  /** 上次收到 welcome 的服务端时刻，用来算本机时钟偏差 */
+  deviceId: string;
   serverSkewMs: number;
   settings: Settings;
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  escalateAfterSec: 30,
-  repeatEverySec: 120,
-  maxRepeatCount: 5,
+  dailyStrongBudget: 3,
+  escalateAfterMs: {
+    l2: 2 * 60 * 60_000,
+    l3: 24 * 60 * 60_000,
+    l4: 3 * 24 * 60 * 60_000,
+    l5: 7 * 24 * 60 * 60_000,
+  },
   quietStartMin: 23 * 60 + 30,
   quietEndMin: 7 * 60,
+  focusAtMin: 9 * 60,
   sound: 'system',
-  autoDowngradeAfter: 2,
-  neglectedAfter: 3,
 };
 
 export const DEFAULT_CONFIG: Config = {
@@ -82,6 +93,7 @@ export const DEFAULT_CONFIG: Config = {
   deviceName: '我的笔记本',
   token: '',
   device: null,
+  deviceId: '',
   serverSkewMs: 0,
   settings: DEFAULT_SETTINGS,
 };
@@ -91,14 +103,22 @@ export function loadConfig(): Config {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return { ...DEFAULT_CONFIG };
     const parsed = JSON.parse(raw) as Partial<Config>;
-    // 旧缓存或旧服务端可能没有新字段，这里补齐，避免读到 undefined
-    return { ...DEFAULT_CONFIG, ...parsed, settings: { ...DEFAULT_SETTINGS, ...(parsed.settings ?? {}) } };
+    const s: Partial<Settings> = parsed.settings ?? {};
+    return {
+      ...DEFAULT_CONFIG,
+      ...parsed,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        ...s,
+        escalateAfterMs: { ...DEFAULT_SETTINGS.escalateAfterMs, ...(s.escalateAfterMs ?? {}) },
+      },
+    };
   } catch {
     return { ...DEFAULT_CONFIG };
   }
 }
 
-export function saveConfig(c: Partial<Config>) {
+export function saveConfig(c: Partial<Config>): Config {
   const next = { ...loadConfig(), ...c };
   localStorage.setItem(LS_KEY, JSON.stringify(next));
   if (c.serverSkewMs !== undefined) skewCache = c.serverSkewMs;
@@ -106,14 +126,12 @@ export function saveConfig(c: Partial<Config>) {
 }
 
 /**
- * 规范化用户填的服务端地址。容错：多余空格、漏协议、结尾斜杠。
- * CSP 是白名单，地址填错要在这里就被拒，而不是等到连不上
+ * 有 scheme 的交给 URL 解析，不能补 http://：
+ * 否则 ftp://x.com 会被补成 http://ftp，scheme 注入就进来了
  */
 export function normalizeBaseUrl(input: string): string {
   const s = input.trim();
   if (!s) return '';
-  // 带 scheme 就原样交给 URL 解析，不能补 http://：
-  // 否则 ftp://x.com 会被补成 http://ftp，scheme 注入就进来了
   const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(s) ? s : `http://${s}`;
   try {
     const u = new URL(withScheme);
@@ -125,17 +143,14 @@ export function normalizeBaseUrl(input: string): string {
   }
 }
 
-/** 换服务端地址。清掉旧会话：旧 token 和新地址上的用户都对不上 */
 export function switchServer(baseUrl: string) {
-  saveConfig({ baseUrl, token: '', user: null, device: null, serverSkewMs: 0 });
+  saveConfig({ baseUrl, token: '', user: null, device: null, deviceId: '', serverSkewMs: 0 });
 }
 
-/** 探测地址是否真的是 DeskAlarm 服务端，顺便同步时钟偏差 */
 export async function probeServer(baseUrl: string): Promise<{ ok: boolean; reason: string; skewMs: number }> {
   const norm = normalizeBaseUrl(baseUrl);
   if (!norm) return { ok: false, reason: '地址格式不对，需要 http:// 或 https:// 开头', skewMs: 0 };
-  // AbortSignal.timeout 是 Chrome 103 才有的，安卓系统 WebView 常低于这个版本。
-  // 缺失时直接调用会抛 TypeError，被下面的 catch 误报成「连不上」，登录页就永远进不去。
+  // AbortSignal.timeout 在旧安卓 WebView 上没有，手动建 controller 才不会误报「连不上」
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 6000);
   try {
@@ -144,7 +159,6 @@ export async function probeServer(baseUrl: string): Promise<{ ok: boolean; reaso
     if (!r.ok) return { ok: false, reason: `服务端返回 ${r.status}`, skewMs: 0 };
     const j = await r.json();
     if (!j?.ok) return { ok: false, reason: '那个地址上没有 DeskAlarm 服务', skewMs: 0 };
-    // 单程时延的一半是估算，只用来让倒计时别差太多
     return { ok: true, reason: '', skewMs: j.serverTs - (Date.now() + (Date.now() - started) / 2) };
   } catch (e) {
     const timedOut = ctrl.signal.aborted || (e instanceof Error && e.name === 'AbortError');
@@ -156,10 +170,9 @@ export async function probeServer(baseUrl: string): Promise<{ ok: boolean; reaso
 }
 
 export function clearToken() {
-  saveConfig({ token: '', user: null, device: null });
+  saveConfig({ token: '', user: null, device: null, deviceId: '' });
 }
 
-/** 登录过期时由 UI 注册一个回登录页的动作；模块级标志避免并发请求重复弹屏 */
 type UnauthorizedHandler = () => void;
 let unauthorizedHandler: UnauthorizedHandler | null = null;
 let unauthorizedFired = false;
@@ -167,9 +180,7 @@ let unauthorizedFired = false;
 export function onUnauthorized(fn: UnauthorizedHandler) { unauthorizedHandler = fn; }
 function resetUnauthorized() { unauthorizedFired = false; }
 
-/** 服务端权威时间。所有「到点了吗」的判断都用它，不用本机 Date.now() */
 export function serverNow(): number {
-  // 列表里每行都调它，不能每次都读一次 localStorage 再 parse
   if (skewCache === null) skewCache = loadConfig().serverSkewMs;
   return Date.now() + skewCache;
 }
@@ -177,15 +188,11 @@ export function serverNow(): number {
 /* ---------------------------------------------------------------- HTTP */
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) {
+  constructor(public status: number, public code: string, message: string, public current?: Pursuit) {
     super(message);
   }
 }
 
-/**
- * content-type 只在真的有 body 时才带。
- * 服务端虽然容忍空 body，但带上也没意义，而且有些网关会拦
- */
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const cfg = loadConfig();
   const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
@@ -194,10 +201,9 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${cfg.baseUrl}/api/v1${path}`, { ...init, headers });
   const text = await res.text();
-  // 网关的 HTML 错误页不是 JSON，直接 parse 会抛 SyntaxError，调用方拿不到状态码
-  let json: { error?: string; message?: string } = {};
+  let json: { error?: string; message?: string; current?: Pursuit } = {};
   if (text) {
-    try { json = JSON.parse(text); } catch { /* 非 JSON 响应，走下面的状态码兜底 */ }
+    try { json = JSON.parse(text); } catch { /* 网关的 HTML 错误页不是 JSON */ }
   }
   if (!res.ok) {
     if (res.status === 401 && cfg.token && json.error === 'UNAUTHORIZED') {
@@ -207,61 +213,94 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
         unauthorizedHandler?.();
       }
     }
-    throw new ApiError(res.status, json.error ?? 'UNKNOWN', json.message ?? res.statusText);
+    throw new ApiError(res.status, json.error ?? 'UNKNOWN', json.message ?? res.statusText, json.current);
   }
   return json as T;
+}
+
+/** 写请求必须带回乐观锁版本，统一从这里取，避免各处手抄字段 */
+export function versionOf(p: Pursuit): number {
+  return p.version;
+}
+
+/** 服务端还没有跟进历史路由，会话内先记住本机做过的和广播收到的动作 */
+const followupLog = new Map<string, Followup[]>();
+
+export function noteFollowup(pursuitId: string, action: FollowupAction, level: NudgeLevel = 1, note: string | null = null) {
+  const list = followupLog.get(pursuitId) ?? [];
+  // 本机动作会收到服务端广播，同一个动作记两次只会让历史变吵
+  if (list[0] && list[0].action === action && serverNow() - list[0].at < 2000) return;
+  list.unshift({
+    id: -Date.now(), pursuitId, userId: loadConfig().user?.id ?? '',
+    at: serverNow(), level, action, note,
+  });
+  followupLog.set(pursuitId, list.slice(0, 50));
+}
+
+export function cachedFollowups(pursuitId: string): Followup[] {
+  return [...(followupLog.get(pursuitId) ?? [])];
 }
 
 export const api = {
   setupStatus: () => req<{ needed: boolean }>('/setup/status'),
 
   setup: (body: { username: string; password: string; confirmPassword: string; machineId?: string }) =>
-    req<{ token: string; user: User; device: Device | null }>('/setup', {
-      method: 'POST', body: JSON.stringify(body),
-    }).then((r) => { resetUnauthorized(); return r; }),
+    req<LoginResponse>('/setup', { method: 'POST', body: JSON.stringify(body) })
+      .then((r) => { resetUnauthorized(); return r; }),
 
   login: async (username: string, password: string, deviceName: string, platform: string = 'windows') => {
     const machineId = await getMachineId();
     const r = await req<LoginResponse>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password, deviceName, platform, machineId, transport: 'ws' }),
+      body: JSON.stringify({
+        username, password, deviceName, platform, machineId, transport: 'ws',
+      }),
     });
     resetUnauthorized();
     saveConfig({ user: r.user });
     return r;
   },
 
-  entries: (view: string) =>
-    req<{ entries: Entry[]; dismissals?: Dismissal[] }>(`/entries?view=${view}`),
+  focus: () => req<FocusResult>('/focus'),
 
-  counts: () => req<{ counts: EntryCounts }>('/entries/counts'),
+  pursuits: (view: PursuitView) => {
+    const status = view === 'today' ? 'active' : view === 'all' ? '' : view;
+    return req<{ pursuits: Pursuit[] }>(`/pursuits${status ? `?status=${status}` : ''}`);
+  },
 
-  dismissed: () => req<{ dismissals: Dismissal[] }>('/entries?view=dismissed'),
+  /** 服务端没有独立的 counts 路由，侧栏数字直接从全量列表算 */
+  counts: async (): Promise<CountsResult> => {
+    const { pursuits } = await req<{ pursuits: Pursuit[] }>('/pursuits');
+    const counts: Partial<Record<PursuitStatus, number>> = {};
+    for (const p of pursuits) counts[p.status] = (counts[p.status] ?? 0) + 1;
+    return { counts, pendingFollowup: 0 };
+  },
 
-  neglected: () => req<{ entries: Entry[] }>('/neglected'),
+  create: (body: CreatePursuitRequest) =>
+    req<{ pursuit: Pursuit }>('/pursuits', { method: 'POST', body: JSON.stringify(body) }),
 
-  create: (body: CreateEntryRequest) =>
-    req<{ entry: Entry }>('/entries', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: UpdatePursuitRequest) =>
+    req<{ pursuit: Pursuit }>(`/pursuits/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
-  update: (id: string, body: Partial<CreateEntryRequest> & { version: number }) =>
-    req<{ entry: Entry }>(`/entries/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  followup: (id: string, body: FollowupRequest) =>
+    req<{ pursuit: Pursuit }>(`/pursuits/${id}/followup`, { method: 'POST', body: JSON.stringify(body) }),
 
-  remove: (id: string) => req<{ ok: true }>(`/entries/${id}`, { method: 'DELETE' }),
+  addStep: (id: string, body: AddStepRequest) =>
+    req<{ step: Step; pursuit: Pursuit }>(`/pursuits/${id}/steps`, { method: 'POST', body: JSON.stringify(body) }),
 
-  done: (id: string) => req<{ entry: Entry }>(`/entries/${id}/done`, { method: 'POST' }),
+  updateStep: (id: string, body: UpdateStepRequest) =>
+    req<{ step: Step; pursuit: Pursuit }>(`/steps/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
-  snooze: (id: string, body: { minutes?: number; to?: number }) =>
-    req<{ entry: Entry }>(`/entries/${id}/snooze`, { method: 'POST', body: JSON.stringify(body) }),
+  /** 服务端暂未暴露跟进历史路由；拿不到时退回会话内记录 */
+  followups: (id: string) => req<{ followups: Followup[] }>(`/pursuits/${id}/followups`)
+    .catch(() => ({ followups: cachedFollowups(id) })),
 
-  /**
-   * 弱提示的忽略。和 done 语义不同：
-   * done 是「我做完了」，dismiss 是「我看到了，故意不处理」
-   */
-  dismiss: (id: string, reason?: string) =>
-    req<{ entry: Entry; dismissCount: number; suggestion: string | null }>(
-      `/entries/${id}/dismiss`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  settings: () => req<{ settings: Settings }>('/settings'),
 
-  rearm: (id: string) => req<{ entry: Entry }>(`/entries/${id}/rearm`, { method: 'POST' }),
+  patchSettings: (p: Partial<Settings>) =>
+    req<{ settings: Settings }>('/settings', { method: 'PATCH', body: JSON.stringify(p) }),
+
+  myStats: () => req<MyStats>('/stats/me'),
 
   devices: () => req<{ devices: Device[] }>('/devices'),
 
@@ -271,22 +310,10 @@ export const api = {
   setPushEnabled: (id: string, pushEnabled: boolean) =>
     req<{ device: Device }>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify({ pushEnabled }) }),
 
-  settings: () => req<{ settings: Settings }>('/settings'),
-
-  patchSettings: (p: Partial<Settings>) =>
-    req<{ settings: Settings }>('/settings', { method: 'PATCH', body: JSON.stringify(p) }),
-
-  myStats: () => req<MyStats>('/stats/me'),
-
-  missed: () => req<{ missed: MissedFire[] }>('/missed'),
-
   agentTokens: () => req<{ tokens: AgentToken[] }>('/agent-tokens'),
 
-  issueAgentToken: (body: {
-    name: string; machineId?: string; scope?: AgentScope; days?: number;
-  }) => req<{ token: AgentToken; plain: string }>('/agent-tokens', {
-    method: 'POST', body: JSON.stringify(body),
-  }),
+  issueAgentToken: (body: { name: string; machineId?: string; scope?: AgentScope; days?: number }) =>
+    req<{ token: AgentToken; plain: string }>('/agent-tokens', { method: 'POST', body: JSON.stringify(body) }),
 
   revokeAgentToken: (id: string) => req<{ ok: true }>(`/agent-tokens/${id}`, { method: 'DELETE' }),
 
@@ -320,7 +347,6 @@ export class Realtime {
   connect() {
     const cfg = loadConfig();
     if (!cfg.token) return;
-    // Web/看板没有设备行，服务端不认这条 WS session；桌面端才有实时提醒
     if (!cfg.device) return;
     this.closed = false;
     this.onStatus('connecting');
@@ -339,15 +365,11 @@ export class Realtime {
 
     ws.onmessage = (ev) => {
       let msg: ServerMessage;
-      try {
-        msg = JSON.parse(ev.data);
-      } catch {
-        return;
-      }
-      // welcome 顺带校正本机时钟偏差
+      try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.t === 'welcome') {
         saveConfig({
           serverSkewMs: msg.serverTs - Date.now(),
+          deviceId: msg.deviceId,
           settings: { ...loadConfig().settings, ...msg.settings },
         });
       }
@@ -358,7 +380,6 @@ export class Realtime {
       this.onStatus('closed');
       this.clearTimers();
       if (this.closed) return;
-      // 指数退避，最长 30 秒。服务端重启后能自动接回来
       const wait = Math.min(this.backoff, 30_000);
       this.backoff *= 2;
       this.reconnectTimer = window.setTimeout(() => this.connect(), wait);
@@ -367,17 +388,18 @@ export class Realtime {
     ws.onerror = () => ws.close();
   }
 
-  /** 确认走 WS，让正在响铃的设备零延迟停铃 */
-  ack(entryId: string, action: AckAction, snoozeTo?: number): boolean {
+  /** 跟进动作走 WS，让正在接管的设备立刻收起来 */
+  followup(pursuitId: string, action: FollowupAction, version: number, note?: string): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
-    this.ws.send(JSON.stringify({ t: 'entry.ack', entryId, action, at: Date.now(), snoozeTo }));
+    this.ws.send(JSON.stringify({
+      t: 'pursuit.followup', pursuitId, action, note, at: Date.now(), version,
+    }));
     return true;
   }
 
-  /** 弱提示的忽略 */
-  dismiss(entryId: string, reason?: string): boolean {
+  step(stepId: string, state: StepState): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
-    this.ws.send(JSON.stringify({ t: 'entry.dismiss', entryId, reason, at: Date.now() }));
+    this.ws.send(JSON.stringify({ t: 'pursuit.step', stepId, state, at: Date.now() }));
     return true;
   }
 
@@ -396,19 +418,17 @@ export class Realtime {
 
 /* ------------------------------------------------------------ 解析 */
 
-/**
- * 粘贴内容的自动识别。和服务端规则一致，服务端还会再兜一层。
- * 这里的识别只是给用户看，确认过的以服务端存的为准
- */
 export interface Parsed {
   kind: 'text' | 'link' | 'path';
   kindLabel: string;
   remindAt: number | null;
   timeLabel: string;
-  strength: Strength;
+  /** 捕获窗一键标注的显式重要性，不靠关键词猜 */
+  importance: Importance;
+  /** 只用于提示：关键词命中不代表替用户定了重要性 */
+  strength: 'strong' | 'weak';
 }
 
-/** 中文数目字 → 数值。相对时间里「一分钟后」「两小时后」「半小时」都要能认 */
 const CN_DIGIT: Record<string, number> = {
   零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
   六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
@@ -428,7 +448,6 @@ function cnNumber(s: string): number | null {
   return CN_DIGIT[s] ?? null;
 }
 
-/** 强提示关键词。只有明确要求才强提示，默认弱。见 docs/requirements.md */
 const URGENT_RE = /一定要|必须|别忘|不要忘|别忘了|务必|千万|记得|重要|紧急|马上|立刻|立即|尽快|截止|deadline/i;
 
 export function parseInput(raw: string, now = serverNow()): Parsed {
@@ -436,14 +455,13 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
   const out: Parsed = {
     kind: 'text', kindLabel: '普通文本',
     remindAt: null, timeLabel: '没有时间，进收集箱',
-    strength: 'weak',
+    importance: 0, strength: 'weak',
   };
   if (!s) return out;
 
   if (/^(https?:\/\/|www\.)\S+/i.test(s)) { out.kind = 'link'; out.kindLabel = '链接'; }
   else if (/^[a-zA-Z]:\\|^\/\//.test(s)) { out.kind = 'path'; out.kindLabel = '目录路径'; }
 
-  // 明确日期优先：一行里可能同时出现多个日期，取第一个还没过去的
   const explicit = /(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})\s*日?(?:\s*(\d{1,2})\s*[:：点时]\s*(\d{1,2})?\s*分?)?/g;
   const shortDate = /(?:^|[^\d])(\d{1,2})[-/月.](\d{1,2})\s*日?(?:\s*(\d{1,2})\s*[:：点时]\s*(\d{1,2})?\s*分?)?/g;
   const pickDate = (pattern: RegExp, withYear: boolean) => {
@@ -454,11 +472,9 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
       if (d.getTime() > now) return d;
       if (!past || d.getTime() > past.getTime()) past = d;
     }
-    // 全是过去的时间就取最近的一个，而不是文本里出现的第一个
     return past;
   };
   const dated = pickDate(explicit, true) ?? pickDate(shortDate, false);
-  // 相对时间：阿拉伯数字和中文数字都要认（3分钟后 / 三小时后 / 半小时后 / 二十分钟后）
   const rel = s.match(/(半|\d+|[零〇一二两三四五六七八九十]+)\s*(分钟|分|小时|时|钟头)\s*(之?后)?/);
   const abs = s.match(/(今天|明天|后天|大后天|周[一二三四五六日天])[^\d]{0,4}(\d{1,2})\s*[:：点]\s*(\d{2})?/);
   const clock = s.match(/^\s*(\d{1,2})[:：](\d{2})\s*$/);
@@ -470,7 +486,6 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
     out.timeLabel = `${dated.getFullYear()}-${p(dated.getMonth() + 1)}-${p(dated.getDate())} ${p(dated.getHours())}:${p(dated.getMinutes())}`;
   } else if (rel) {
     const raw = cnNumber(rel[1]) ?? NaN;
-    // 「半」配「分钟」是半小时=30分，配「小时/钟头」是30分，配「时」也是
     const unitIsHour = /小时|时|钟头/.test(rel[2]);
     const mins = Math.round(raw * (unitIsHour ? 60 : 1));
     out.remindAt = now + mins * 60_000;
@@ -489,7 +504,6 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
       d.setDate(d.getDate() + delta);
     }
     d.setHours(Number(abs[2]), Number(abs[3] ?? 0), 0, 0);
-    // 说「明天15点」但现在已经 17 点了，那这个时刻已经过了，推到后天
     if (d.getTime() <= now) d.setDate(d.getDate() + 1);
     out.remindAt = d.getTime();
     out.timeLabel = `${dayWord} ${String(abs[2]).padStart(2, '0')}:${String(abs[3] ?? '00').padStart(2, '0')}`;
@@ -501,8 +515,7 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
     out.timeLabel = `今天 ${clock[1]}:${clock[2]}`;
   }
 
-  // 只有明确说了「一定要」才给强提示，否则默认弱。理由见 docs/requirements.md
-  if (out.remindAt !== null) out.strength = urgent ? 'strong' : 'weak';
+  out.strength = urgent ? 'strong' : 'weak';
   return out;
 }
 
@@ -524,8 +537,7 @@ export function dayLabel(ts: number | null): string {
   const d = new Date(ts);
   const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
   if (same(d, now)) return '今天';
-  const t = new Date(now.getTime() + 86400_000);
-  if (same(d, t)) return '明天';
+  if (same(d, new Date(now.getTime() + 86400_000))) return '明天';
   if (same(d, new Date(now.getTime() + 2 * 86400_000))) return '后天';
   return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
 }
@@ -541,27 +553,38 @@ export function lateBy(ts: number): string {
   return `${Math.floor(h / 24)} 天`;
 }
 
-/**
- * 离到点有多近。列表里唯一的颜色梯度，超过 24 小时无色。
- * 四级而非连续渐变：连续变化会变成噪声。各档阈值见 docs/requirements.md
- */
-export type Urgency = 'none' | 'soon' | 'close' | 'due' | 'over';
-
-export function urgencyOf(
-  e: Pick<Entry, 'status' | 'remindAt' | 'firedAt'>,
-  now = serverNow(),
-): Urgency {
-  if (e.status === 'done' || e.remindAt === null) return 'none';
-  if (e.status === 'missed') return 'over';
-  const ms = e.remindAt - now;
-  // 到点但调度器还没触发的（最多 1 秒）也算 due
-  if (ms <= 15 * 60_000) return 'due';
-  if (ms <= 60 * 60_000) return 'close';
-  if (ms <= 24 * 60 * 60_000) return 'soon';
+/** 截止与停滞共同决定「暖度」。安静是常态，只有逾期或久滞才上色 */
+export function warmthOf(p: Pursuit, now = serverNow()): Urgency {
+  if (p.status === 'done' || p.status === 'archived') return 'none';
+  if (p.dueAt !== null) {
+    const ms = p.dueAt - now;
+    if (ms <= 0) return 'over';
+    if (ms <= 15 * 60_000) return 'due';
+    if (ms <= 60 * 60_000) return 'close';
+    if (ms <= 24 * 60 * 60_000) return 'soon';
+  }
+  const stale = now - p.lastActivityAt;
+  const t = loadConfig().settings.escalateAfterMs;
+  if (stale >= t.l4) return 'due';
+  if (stale >= t.l3) return 'close';
+  if (stale >= t.l2) return 'soon';
   return 'none';
 }
 
-/** 是否落在静音时段。跨零点要单独处理 */
+export function dueLabel(p: Pursuit): string {
+  if (p.dueAt === null) return '没有截止';
+  if (p.dueAt <= serverNow()) return `逾期 ${lateBy(p.dueAt)}`;
+  return `${dayLabel(p.dueAt)} ${hhmm(p.dueAt)}`;
+}
+
+export function staleLabel(p: Pursuit): string {
+  const ms = Math.max(0, serverNow() - p.lastActivityAt);
+  if (ms < 60_000) return '刚刚推进过';
+  const h = ms / 3_600_000;
+  if (h < 24) return `停滞 ${Math.floor(h)} 小时`;
+  return `停滞 ${Math.floor(h / 24)} 天`;
+}
+
 export function inQuietHours(s: Settings, at = serverNow()): boolean {
   const d = new Date(at);
   const m = d.getHours() * 60 + d.getMinutes();
@@ -570,10 +593,10 @@ export function inQuietHours(s: Settings, at = serverNow()): boolean {
   return a < b ? m >= a && m < b : m >= a || m < b;
 }
 
-/** 要不要响。weak 不响；静音时段内除非 bypassQuiet；不定时不响 */
-export function shouldRing(e: Pick<Entry, 'strength' | 'bypassQuiet' | 'remindAt'>, s: Settings): boolean {
-  if (e.remindAt === null) return false;
-  if (e.strength === 'weak') return false;
-  if (inQuietHours(s) && !e.bypassQuiet) return false;
-  return true;
-}
+export const NATURE_LABEL: Record<Pursuit['nature'], string> = {
+  one_off: '一次性', recurring: '周期性', project: '项目',
+};
+
+export const ENERGY_LABEL: Record<Pursuit['energy'], string> = {
+  low: '低', medium: '中', high: '高',
+};

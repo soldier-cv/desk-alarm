@@ -1,11 +1,10 @@
 /**
- * 接管窗口。无边框、置顶、关不掉，只有四个动作能结束它。
- * 与主窗口不共享 JS 全局变量，动作全靠 Tauri 事件发给主窗口（WS 在那边）
+ * L4 接管窗口。无边框、置顶、关不掉，只有跟进动作能结束它。
+ * 与主窗口不共享全局变量，动作全靠 Tauri 事件发给主窗口（WS 在那边）。
  */
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import { hhmm, hostOf, serverNow } from '../api';
-import type { AckAction, Entry } from '../api';
+import { dayLabel, hhmm, hostOf, serverNow, type FollowupAction, type NudgeChannel, type NudgeLevel, type Pursuit } from '../api';
 import { applyTheme, loadTheme } from '../theme';
 import '../styles.css';
 
@@ -13,9 +12,12 @@ applyTheme(loadTheme());
 listen<{ theme: 'dark' | 'morandi' }>('theme:changed', (ev) => applyTheme(ev.payload.theme));
 
 interface Payload {
-  entry: Entry;
+  pursuit: Pursuit;
+  level: NudgeLevel;
+  channel: NudgeChannel;
+  reason: string;
+  serverTs: number;
   stage: 'banner' | 'escalated';
-  /** 静默时段内且不是 hard，只提示不强推 */
   muted: boolean;
 }
 
@@ -40,116 +42,139 @@ let current: Payload | null = null;
 let tickTimer: number | null = null;
 let startedAt = 0;
 
-/* ------------------------------------------------------------ 渲染 */
+function esc(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => (
+    c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;'
+  ));
+}
 
 const ICON = {
   link: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg>',
   folder: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
 };
 
-function render(p: Payload) {
-  // 兜底：弱提示不该走到接管窗口。真进来了就直接收起来，
-  // 否则会出现「说了弱提示却弹全屏」这种最伤信任的情况
-  if (p.entry.strength === 'weak') {
-    void invoke('hide_takeover');
-    return;
-  }
+function dayAfter(days: number, hour = 9): number {
+  const d = new Date(serverNow());
+  d.setDate(d.getDate() + days);
+  d.setHours(hour, 0, 0, 0);
+  return d.getTime();
+}
 
+function renderActions(p: Payload) {
+  const next = p.pursuit.steps.find((s) => s.state !== 'done')?.text ?? '';
+  el.acts.innerHTML = `
+    <button class="btn solid" data-act="done">推进 ${next ? `：${esc(next.slice(0, 18))}` : '第一步'}</button>
+    <button class="btn ghost" data-act="partial">推了一点</button>
+    <button class="btn ghost" data-act="smaller">拆小</button>
+    <button class="btn ghost" data-act="later">改天</button>
+    <button class="btn danger" data-act="archive">归档</button>`;
+
+  el.snooze.innerHTML = `
+    <span class="lb">${esc(p.reason || '这件事停太久了，先决定下一步')}</span>
+    <button class="btn sm ghost" data-act="later" data-to="${dayAfter(1)}">明天 9:00</button>
+    <button class="btn sm ghost" data-act="later" data-to="${dayAfter(3)}">3 天后</button>
+    <button class="btn sm ghost" data-act="later" data-to="${dayAfter(7)}">下周</button>`;
+}
+
+function render(p: Payload) {
   current = p;
-  const e = p.entry;
+  const item = p.pursuit;
   startedAt = Date.now();
 
   el.root.classList.toggle('shake', p.stage === 'escalated');
   el.root.classList.remove('entering');
-  void el.root.offsetWidth; // 强制回流，让 entering 动画能重放
+  void el.root.offsetWidth;
   el.root.classList.add('entering');
 
-  el.clock.innerHTML = `${hhmm(e.remindAt)}<span>${new Date(e.remindAt ?? serverNow()).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}</span>`;
-  el.title.textContent = e.text;
-  el.note.textContent = e.note ?? '';
-  el.note.hidden = !e.note;
+  const at = item.dueAt ?? serverNow();
+  el.clock.innerHTML = `${hhmm(at)}<span>${esc(dayLabel(at))}</span>`;
+  el.title.textContent = item.text;
+  el.note.textContent = item.note ?? '';
+  el.note.hidden = !item.note;
 
   const targets: string[] = [];
-  if (e.url) {
-    targets.push(`<div class="t">${ICON.link}<span>${esc(hostOf(e.url))}</span><button class="btn sm ghost act" data-act="open">打开</button></div>`);
+  if (item.url) {
+    targets.push(`<div class="t">${ICON.link}<span>${esc(hostOf(item.url))}</span><button class="btn sm ghost act" data-act="open">打开</button></div>`);
   }
-  if (e.path) {
-    targets.push(`<div class="t path">${ICON.folder}<span>${esc(e.path)}</span></div>`);
+  if (item.path) {
+    targets.push(`<div class="t path">${ICON.folder}<span>${esc(item.path)}</span></div>`);
   }
   el.target.innerHTML = targets.join('');
 
-  el.where.textContent = e.devices[0] === '*'
-    ? '推送到全部在线设备'
-    : `只推送到：${e.devices.map((d) => esc(d)).join(' / ')}`;
+  el.where.textContent = item.deviceIds.length
+    ? `同步到 ${item.deviceIds.length} 台设备`
+    : '这条在所有设备可见';
 
   el.escNote.textContent = p.muted
     ? '静音时段内，窗口会自己收起'
-    : '关不掉，只能选一个处理方式';
-
-  // 没有链接时不显示「打开链接」
-  el.acts.querySelector<HTMLButtonElement>('[data-act="open"]')?.remove();
-  if (!e.url) {
-    el.acts.insertAdjacentHTML('afterbegin', '<button class="btn ghost" data-act="open" disabled>打开链接</button>');
-  }
+    : '关不掉，只能选一个跟进动作';
 
   el.stage.textContent = p.stage === 'escalated'
-    ? '已升级：关不掉，每分钟重复一次'
-    : '首次提示 0 秒，30 秒未确认升级全屏，5 分钟后每 2 分钟重复';
+    ? '已升级：关不掉，会继续跟催'
+    : `L${p.level} 接管：这件事已经停滞，先给它一个去向`;
   el.stage.setAttribute('data-stage', p.stage);
+
+  renderActions(p);
 
   if (tickTimer !== null) clearInterval(tickTimer);
   tickTimer = window.setInterval(() => {
     const s = Math.floor((Date.now() - startedAt) / 1000);
-    el.elapsed.textContent = `已响 ${s} 秒`;
+    el.elapsed.textContent = `已等待 ${s} 秒`;
     el.bar.style.width = `${Math.min(100, (s / 300) * 100)}%`;
   }, 1000);
-}
 
-function esc(s: string): string {
-  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+  if (p.muted) window.setTimeout(() => void invoke('hide_takeover'), 4000);
 }
 
 /* -------------------------------------------------------- 动作派发 */
 
-/** 四个动作。「静音 10 分钟」是有代价的，它会记 snooze_count */
-async function act(kind: string) {
+async function send(action: FollowupAction, extra: Record<string, unknown> = {}) {
   const p = current;
   if (!p) return;
+  await emit('takeover:action', {
+    pursuitId: p.pursuit.id,
+    action,
+    version: p.pursuit.version,
+    ...extra,
+  });
+  await invoke('hide_takeover');
+}
 
-  const fire = (action: AckAction, snoozeTo?: number) =>
-    emit('takeover:action', { entryId: p.entry.id, action, snoozeTo });
+function askSteps() {
+  const p = current;
+  if (!p) return;
+  const next = p.pursuit.steps.find((s) => s.state !== 'done')?.text ?? p.pursuit.text;
+  const value = window.prompt('把这件事拆成 2-3 个能立刻动手的小步骤，用换行分隔', next);
+  if (value === null) return;
+  const steps = value.split(/\r?\n|；|;/).map((s) => s.trim()).filter(Boolean);
+  if (!steps.length) return;
+  void send('smaller', { steps });
+}
 
+async function act(kind: string, to?: number) {
+  const p = current;
+  if (!p) return;
   switch (kind) {
-    case 'done':
-      await fire('done');
-      break;
+    case 'done': await send('done'); break;
+    case 'partial': await send('partial'); break;
+    case 'smaller': askSteps(); break;
+    case 'later': await send('later', { to: to ?? dayAfter(1) }); break;
+    case 'archive': await send('archive'); break;
     case 'open':
-      if (p.entry.url) {
-        // 先把条目完成再开浏览器。顺序反了的话，用户可能开了网页就忘了回来
-        await emit('takeover:open-url', { entryId: p.entry.id, url: p.entry.url });
+      if (p.pursuit.url) {
+        await emit('takeover:open-url', { pursuitId: p.pursuit.id, url: p.pursuit.url });
+        await invoke('hide_takeover');
       }
       break;
-    case 'sn10': await fire('snooze', serverNow() + 10 * 60_000); break;
-    case 'sn30': await fire('snooze', serverNow() + 30 * 60_000); break;
-    case 'sn60': await fire('snooze', serverNow() + 60 * 60_000); break;
-    case 'sntom': {
-      const base = new Date(p.entry.remindAt ?? serverNow());
-      base.setDate(base.getDate() + 1);
-      await fire('snooze', base.getTime());
-      break;
-    }
-    case 'silence': await fire('silence'); break;
   }
-  await invoke('hide_takeover');
 }
 
 document.addEventListener('click', (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-act]');
-  if (b) void act(b.dataset.act!);
+  if (b) void act(b.dataset.act!, b.dataset.to ? Number(b.dataset.to) : undefined);
 });
 
-// Esc 不结束提醒。这是设计意图，不是遗漏。
-// 触发「我关不掉」的反馈，让主窗口把升级程度往上抬。
+// Esc 不结束提醒。这是设计意图：让主窗口把升级程度往上抬
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' && current) void act('done');
   if (ev.key === 'Escape') {
@@ -158,15 +183,12 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 
-/* ------------------------------------------------------------ 订阅 */
-
 listen<Payload>('takeover:show', (ev) => render(ev.payload));
 
 listen('takeover:close-blocked', () => {
   el.root.classList.add('shake');
 });
 
-/** 别的设备处理了，或者本机处理完了，主窗口会通知收起来 */
 listen('takeover:dismiss', () => {
   void invoke('hide_takeover');
 });

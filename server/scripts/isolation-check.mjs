@@ -1,4 +1,4 @@
-/** 临时验证：跨用户隔离 + 设备随用户走 + 看板接口。跑完清掉测试用户 */
+/** v2 临时验证：跨用户隔离 + 设备随用户走 + 看板接口。跑完清掉测试用户 */
 const BASE = process.env.BASE ?? 'http://127.0.0.1:8091';
 const USER = 'admin';
 const PASS = process.env.ADMIN_PASSWORD ?? 'admin123456';
@@ -43,21 +43,21 @@ const aliceId = created.json.user?.id;
 const alice = await login(aliceName, 'alice-pass-123', 'iso-machine-1');
 ok('新用户登录', alice.status === 200 && !!alice.json.token, JSON.stringify(alice.json).slice(0, 120));
 
-const mine = await call('/entries', {
-  method: 'POST', token: alice.json.token,
-  body: { text: `隔离测试-${suffix}`, remindAt: Date.now() + 600_000 },
+const text = `隔离测试-${suffix}`;
+const mine = await call('/pursuits', {
+  method: 'POST', token: alice.json.token, body: { text },
 });
-ok('Alice 建条目', mine.status === 201, JSON.stringify(mine.json).slice(0, 100));
+ok('Alice 建推进项', mine.status === 201, JSON.stringify(mine.json).slice(0, 100));
 
-const adminList = await call('/entries?view=all', { token: admin.json.token });
-ok('管理员看不到 Alice 的条目',
-  !(adminList.json.entries ?? []).some((e) => e.text === `隔离测试-${suffix}`));
+const adminList = await call('/pursuits', { token: admin.json.token });
+ok('管理员看不到 Alice 的推进项',
+  !(adminList.json.pursuits ?? []).some((p) => p.text === text));
 
-const aliceList = await call('/entries?view=all', { token: alice.json.token });
-ok('Alice 看得到自己的条目', (aliceList.json.entries ?? []).some((e) => e.text === `隔离测试-${suffix}`));
+const aliceList = await call('/pursuits', { token: alice.json.token });
+ok('Alice 看得到自己的推进项', (aliceList.json.pursuits ?? []).some((p) => p.text === text));
 
-const cross = await call(`/entries/${mine.json.entry.id}`, { token: admin.json.token });
-ok('管理员按 id 也读不到 Alice 的条目', cross.status === 404, `status=${cross.status}`);
+const cross = await call(`/pursuits/${mine.json.pursuit?.id}`, { token: admin.json.token });
+ok('管理员按 id 也读不到 Alice 的推进项', cross.status === 404, `status=${cross.status}`);
 
 const adminDevices = await call('/devices', { token: admin.json.token });
 const aliceDevices = await call('/devices', { token: alice.json.token });
@@ -74,14 +74,14 @@ await call('/admin/users', {
 const bob = await login(bobName, 'bob-pass-123', 'iso-machine-1');
 ok('同机换人登录成功', bob.status === 200, JSON.stringify(bob.json).slice(0, 100));
 ok('设备 ID 被复用', bob.json.device?.id === alice.json.device?.id);
-const oldToken = await call('/entries', { token: alice.json.token });
+const oldToken = await call('/pursuits', { token: alice.json.token });
 ok('旧用户会话在同一设备切换后失效', oldToken.status === 401, `status=${oldToken.status}`);
 const bobDevices = await call('/devices', { token: bob.json.token });
 ok('设备归属切到新用户', bobDevices.json.devices?.some((d) => d.id === bob.json.device.id));
 
 const overview = await call('/admin/overview', { token: admin.json.token });
-ok('看板接口可用', overview.status === 200 && overview.json.entries?.total >= 1,
-  JSON.stringify(overview.json).slice(0, 160));
+ok('看板接口可用', overview.status === 200 && overview.json.pursuits !== undefined &&
+  overview.json.engine !== undefined, JSON.stringify(overview.json).slice(0, 160));
 
 const hz = await fetch(`${BASE}/healthz`).then((r) => r.json());
 ok('API 直接对外、健康检查可用', hz?.ok === true && hz?.db === true, JSON.stringify(hz));

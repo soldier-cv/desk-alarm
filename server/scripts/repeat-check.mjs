@@ -1,52 +1,57 @@
 /**
- * 重复提醒的日期计算。月末钳位是最容易错的地方：
+ * 重复规则日期计算（v2 推进引擎）。月末钳位是最容易错的地方：
  * 1 月 31 日加一个月，setMonth 会溢出到 3 月 3 号
  *
  * 直接 import 编译产物，测的是真实实现不是复刻版。
- * 用法：cd server && node scripts/repeat-check.mjs
+ * 用法：cd server && npm run repeat
  */
-import { nextOccurrence } from '../dist/server/src/repo/entries.js';
+import { nextOccurrence } from '../dist/server/src/policy.js';
 
 const fmt = (ts) => {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 const at = (s) => new Date(s).getTime();
+const rule = (freq, extra = {}) => ({ freq, ...extra });
 
 const cases = [
   // 月末钳位
-  ['2026-01-31T10:00:00', 'monthly', '2026-02-28'], // 平年 2 月只有 28 天
-  ['2028-01-31T10:00:00', 'monthly', '2028-02-29'], // 闰年
-  ['2026-03-31T10:00:00', 'monthly', '2026-04-30'],
-  ['2026-01-15T10:00:00', 'monthly', '2026-02-15'], // 非月末不受影响
-  ['2026-12-31T10:00:00', 'monthly', '2027-01-31'], // 跨年
-  ['2026-08-31T10:00:00', 'monthly', '2026-09-30'],
-  ['2026-05-31T10:00:00', 'monthly', '2026-06-30'],
-  // 日与周
-  ['2026-02-28T10:00:00', 'daily', '2026-03-01'], // 平年 2 月末跨月
-  ['2026-12-31T10:00:00', 'daily', '2027-01-01'], // 跨年
-  ['2026-03-01T10:00:00', 'weekly', '2026-03-08'],
-  // 不重复时原样返回
-  ['2026-01-31T10:00:00', 'none', '2026-01-31'],
+  ['2026-01-31T10:00:00', rule('monthly'), '2026-02-28'],
+  ['2028-01-31T10:00:00', rule('monthly'), '2028-02-29'], // 闰年
+  ['2026-03-31T10:00:00', rule('monthly'), '2026-04-30'],
+  ['2026-01-15T10:00:00', rule('monthly'), '2026-02-15'],
+  ['2026-12-31T10:00:00', rule('monthly'), '2027-01-31'], // 跨年
+  ['2026-08-31T10:00:00', rule('monthly'), '2026-09-30'],
+  ['2026-05-31T10:00:00', rule('monthly'), '2026-06-30'],
+  // 日 / 周
+  ['2026-02-28T10:00:00', rule('daily'), '2026-03-01'],
+  ['2026-12-31T10:00:00', rule('daily'), '2027-01-01'],
+  ['2026-03-01T10:00:00', rule('weekly'), '2026-03-08'],
+  // 每年 / 工作日 / 间隔
+  ['2024-02-29T10:00:00', rule('yearly'), '2025-02-28'], // 闰日钳到平年 2/28
+  ['2026-03-06T10:00:00', rule('workdays'), '2026-03-09'], // 周五 -> 周一
+  ['2026-03-01T10:00:00', rule('interval', { interval: 3 }), '2026-03-04'],
+  ['2026-03-01T10:00:00', rule('weekly', { byWeekday: [1, 4] }), '2026-03-09'], // 周日 +7 天再对齐到下个周一
 ];
 
 let bad = 0;
-console.log('重复提醒日期计算\n');
-for (const [from, rule, want] of cases) {
-  const got = fmt(nextOccurrence(at(from), rule).getTime());
+console.log('重复规则日期计算（v2）\n');
+for (const [from, r, want] of cases) {
+  const next = nextOccurrence(at(from), r);
+  const got = next === null ? '(null)' : fmt(next);
   const pass = got === want;
   if (!pass) bad++;
-  console.log(`  ${pass ? 'PASS' : 'FAIL'}  ${from.slice(0, 10)} ${rule.padEnd(8)} -> ${got}${pass ? '' : `  期望 ${want}`}`);
+  console.log(`  ${pass ? 'PASS' : 'FAIL'}  ${from.slice(0, 10)} ${r.freq.padEnd(9)} -> ${got}${pass ? '' : `  期望 ${want}`}`);
 }
 
-// 时刻必须保持不变：用户定的是 9:30，下次还是 9:30，不是 0:00
+// 时刻保持不变：定的是 9:30，下次还是 9:30
 console.log('\n时刻保持');
 const at930 = at('2026-01-31T09:30:00');
-for (const rule of ['daily', 'weekly', 'monthly']) {
-  const d = nextOccurrence(at930, rule);
+for (const r of [rule('daily'), rule('weekly'), rule('monthly')]) {
+  const d = new Date(nextOccurrence(at930, r));
   const pass = d.getHours() === 9 && d.getMinutes() === 30;
   if (!pass) bad++;
-  console.log(`  ${pass ? 'PASS' : 'FAIL'}  ${rule.padEnd(8)} 下次仍是 09:30（实际 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}）`);
+  console.log(`  ${pass ? 'PASS' : 'FAIL'}  ${r.freq.padEnd(9)} 下次仍是 09:30（实际 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}）`);
 }
 
 console.log(`\n${'--------------------------------------------'}`);
