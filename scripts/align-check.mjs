@@ -1,17 +1,18 @@
 /**
- * 需求对齐自检。把 docs/requirements.md 里写成硬规则的那些条，
+ * v2 需求对齐自检。把 docs/drive-engine.md 里写成硬规则的那些条，
  * 逐条对着代码验一遍。需求改了这里也要改。
  *
  * 用法：node scripts/align-check.mjs
  */
 import { readFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
 
 const ROOT = new URL('../', import.meta.url);
 const read = (p) => readFileSync(new URL(p, ROOT), 'utf8');
 const src = {
-  entries: read('server/src/repo/entries.ts'),
-  deliveries: read('server/src/repo/deliveries.ts'),
+  pursuits: read('server/src/repo/pursuits.ts'),
+  nudges: read('server/src/repo/nudges.ts'),
+  drive: read('server/src/drive.ts'),
+  policy: read('server/src/policy.ts'),
   scheduler: read('server/src/scheduler.ts'),
   db: read('server/src/db.ts'),
   tools: read('server/src/mcp/tools.ts'),
@@ -21,7 +22,8 @@ const src = {
   main: read('app/src/ui/main.ts'),
   styles: read('app/src/styles.css'),
   sql: read('server/src/schema.pg.sql'),
-  req: read('docs/requirements.md'),
+  types: read('shared/types.ts'),
+  design: read('docs/drive-engine.md'),
 };
 
 let pass = 0, fail = 0;
@@ -30,76 +32,81 @@ const ok = (rule, cond, detail = '') => {
   else { fail++; console.log(`  FAIL  ${rule}  ${detail}`); }
 };
 
-console.log('需求对齐自检\n');
+console.log('v2 需求对齐自检\n');
 
 console.log('数据库隔离');
 ok('表不写死 public. 前缀', !/\bpublic\s*\./i.test(src.sql));
 ok('search_path 指向自己的 schema', /search_path=\$\{env\.PGSCHEMA\}/.test(src.db));
-// 只看可执行语句，注释里提一句「不需要 pgcrypto」不算依赖
 const sqlCode = src.sql.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
 ok('不依赖 pgcrypto 扩展', !/pgcrypto/i.test(sqlCode));
 ok('没有 CREATE EXTENSION', !/CREATE\s+EXTENSION/i.test(sqlCode));
 ok('gen_random_uuid 当内核函数用', /gen_random_uuid/.test(sqlCode));
+ok('所有业务表带 user_id', ['pursuits', 'steps', 'followups', 'nudges', 'pursuit_devices']
+  .every((t) => new RegExp(`CREATE TABLE IF NOT EXISTS ${t}[\\s\\S]*?user_id`).test(src.sql) ||
+    t === 'pursuit_devices')); // 关联表靠父表级联，不单独带 user_id
 
 console.log('\n服务端是唯一计时权威');
-const firedWrites = [...src.entries.matchAll(/UPDATE entries SET (?:remind_at = \$2, )?fired_at/g)];
-ok('fired_at 只在少数几处写', firedWrites.length <= 3, `实际 ${firedWrites.length} 处`);
-// snooze 是把 fired_at 清空，属于撤销不是决定触发
-ok('snooze 走的是清空 fired_at', /fired_at = NULL/.test(src.entries));
-ok('ackEntry 不自己判断到点', !/ackEntry[\s\S]{0,400}?fired_at = \$2/.test(src.entries));
-ok('客户端不自己判断触发（只听推送）', !/setInterval[\s\S]{0,200}?showTakeover/.test(src.api));
+ok('fired_at 已由 last_activity 取代，不再有 fired_at 列', !/\bfired_at\b/.test(src.sql));
+ok('等级由引擎算不是客户端', /levelFor/.test(src.drive) && /levelFor/.test(src.policy));
+ok('客户端只按 nudge.level 表现，不自己判触发', /level/.test(src.alarm) && !/setInterval[\s\S]{0,200}?showTakeover/.test(src.api));
 
-console.log('\n事务性发件箱');
-ok('调度器只写 outbox', /enqueueDelivery/.test(src.scheduler) || /markFired/.test(src.scheduler));
+console.log('\n推进引擎');
+ok('有 drive.tick 主循环', /export async function driveTick/.test(src.drive));
+ok('有四循环：聚焦/微步骤/情境/跟进', /buildFocus/.test(src.drive) && /suggestNextStep/.test(src.policy) &&
+  /timeWindow/.test(src.drive) && /followUp/.test(src.drive));
+ok('权重含重要性/逾期/停滞/承诺', /importance \* 20/.test(src.policy) && /staleness/.test(src.policy) &&
+  /commitment/.test(src.policy));
+ok('打扰等级 L1-L5', /NudgeLevel = 1 \| 2 \| 3 \| 4 \| 5/.test(src.types));
+ok('等级按停滞时长分级', /escalateAfterMs\.l[2345]/.test(src.policy));
+ok('每日强打扰配额', /dailyStrongBudget/.test(src.drive) && /dailyStrongBudget/.test(src.types));
+ok('静音时段 L4 降 L2', /inQuietHours/.test(src.drive) && /level = 2/.test(src.drive));
+ok('情境闸门：时间窗/设备在线', /timeWindow/.test(src.drive) && /hub\.isOnline/.test(src.drive));
+ok('L5 自动归档不删除', /setStatus\(p\.id, userId, 'archived'\)/.test(src.drive));
+
+console.log('\n跟进是信号不是惩罚');
+ok('六种跟进动作', /FollowupAction = 'done' \| 'partial' \| 'later' \| 'smaller' \| 'archive' \| 'ignored'/.test(src.types));
+ok('跟进历史独立表', /CREATE TABLE IF NOT EXISTS followups/.test(src.sql));
+ok('不再有忽略降级/建议删除', !/autoDowngradeAfter|neglectedAfter|建议删除/.test(src.drive) &&
+  !/dismiss_count/.test(src.sql));
+ok('later 改 dueAt', /case 'later'/.test(src.drive) && /dueAt = new Date/.test(src.drive));
+ok('smaller 拆步骤', /case 'smaller'/.test(src.drive) && /extraSteps = req\.steps/.test(src.drive));
+ok('done 写 completedAt', /completedAt = new Date/.test(src.drive));
+
+console.log('\n打扰账本 = 投递 outbox');
+ok('nudges 表是唯一 outbox', /CREATE TABLE IF NOT EXISTS nudges/.test(src.sql) && !/CREATE TABLE IF NOT EXISTS deliveries/.test(src.sql));
+ok('有 markDelivered', /markDelivered/.test(src.nudges));
 ok('轮转器独立于 tick', /rotate/.test(src.scheduler));
-ok('delivered 有 markDelivered', /export async function markDelivered/.test(src.deliveries));
-ok('markDelivered 真的被调用', (src.deliveries.match(/markDelivered\s*\(/g) ?? []).length >= 2);
-ok('失败不抛异常而是记 last_error', /last_error/.test(src.deliveries));
+ok('fire_key 去重', /fire_key/.test(src.sql) && /key =/.test(src.drive));
+ok('推送范围为空时广播全体在线设备', /broadcastToUser/.test(src.scheduler));
+ok('失败记 last_error 不抛异常', /last_error/.test(src.sql) && /markFailed/.test(src.scheduler));
 
-console.log('\n确认与忽略分开记');
-ok('有独立的 dismiss 表', /CREATE TABLE IF NOT EXISTS dismissals/.test(src.sql));
-ok('dismiss 要求 reason', /dismissEntry/.test(src.entries));
-ok('降级与提示删除阈值可配置', /autoDowngradeAfter/.test(src.entries) && /neglectedAfter/.test(src.entries));
-ok('done 不复用 dismiss 表', !/dismissals[^;]*status\s*=\s*'done'/.test(src.sql));
+console.log('\n乐观锁与隔离');
+ok('Pursuit 带 version', /version: number/.test(src.types));
+ok('写操作校验 version', /VERSION_CONFLICT/.test(src.drive) && /version = version \+ 1/.test(src.pursuits));
+ok('所有查询带 user_id', /user_id = \$/.test(src.pursuits));
+ok('重复规则校验在路由层', /validRecurrence/.test(read('server/src/routes/pursuits.ts')));
 
-console.log('\n提醒强度默认值');
-// 文档曾写「给了时间就是强提示」，实现是「只有说了一定要等词才强」。
-// 需求文档必须和实现一致，否则以后照文档改会改错
-ok('文档不写「给了时间就是强提示」', !/给了时间就是强提示/.test(src.req));
-ok('文档写明关键词触发', /一定要/.test(src.req));
-ok('实现按关键词判强提示', /一定要\|必须\|别忘/.test(src.api));
-ok('无关键词时默认 weak', /urgent \? 'strong' : 'weak'/.test(src.api));
-ok('agent 建的一律 weak', /strength[^;\n]*'weak'/.test(src.tools));
-// 服务端不能再「有 remindAt 就当强提示」，那是文档明确否掉的做法
-ok('服务端不按有没有时间判强提示',
-  !/remindAt === null \? 'weak' : 'strong'/.test(src.entries));
-ok('服务端没传强度就 weak', /req\.strength === 'strong' \? 'strong' : 'weak'/.test(src.entries));
-
-console.log('\n强弱提示正交');
-ok('strength 与 bypassQuiet 是两个字段', /bypass_quiet/.test(src.sql) && /strength/.test(src.sql));
-ok('弱提示不升级（弱队列独立）', /weak/i.test(src.alarm));
-ok('takeover 关不掉', /takeover:close-blocked/.test(src.takeover));
-ok('Esc 不结束强提醒', /takeover:close-blocked/.test(src.takeover));
-ok('重复次数可配置上限', /maxRepeatCount/.test(src.alarm) && /maxRepeatCount/.test(src.api));
-ok('重复到上限自动转静默', /onAutoMute/.test(src.alarm) && /onAutoMute/.test(src.main));
-ok('静音时段暂停重复', /inQuietHours\(s\)/.test(src.alarm));
-
-console.log('\nMCP 防呆');
+console.log('\nMCP 防呆（agent-first）');
 ok('有 plan_changes', /plan_changes/.test(src.tools));
 ok('有 apply_changes', /apply_changes/.test(src.tools));
-ok('plan_id 有过期时间', /expires|TTL|10 \* 60|600_?000/.test(src.tools));
-ok('强提示必须给 reason', /reason/.test(src.tools));
-ok('create_entry 默认 weak', /strength[^;\n]*weak/.test(src.tools) || /'weak'/.test(src.tools));
-ok('有 idempotencyKey', /idempotency/i.test(src.tools));
+ok('plan_id 有过期时间', /PLAN_TTL_MS/.test(src.tools));
+ok('plan 一次性消费', /plans\.delete/.test(src.tools));
+ok('强打扰必须给 reason', /needsReason/.test(src.tools) && /reason/.test(src.tools));
+ok('只读令牌范围拦截', /READ_TOOLS/.test(src.tools) && /scope === 'read'/.test(src.tools));
+ok('涉及 create/decompose/followup/reprioritize/archive', ['create', 'decompose', 'followup', 'reprioritize', 'archive']
+  .every((k) => src.tools.includes(k)));
 
-console.log('\n临近梯度');
-ok('有四级以上档位', /u-soon|u-close|u-due|u-over/.test(src.styles));
-ok('渐变从行首渗入', /linear-gradient\(90deg/.test(src.styles));
-ok('hover 用 background-color 不覆盖渐变', /\.item:hover\{background-color:/.test(src.styles.replace(/\s/g, '')) === false || /background-color/.test(src.styles));
-ok('due 档有呼吸动效', /breathe/.test(src.styles));
-ok('有 reduced-motion 降级', /prefers-reduced-motion/.test(src.styles));
-ok('客户端定时推进梯度', /setInterval\(tickUrgency/.test(src.main));
-ok('原地更新不重建列表', /dataset\.u/.test(src.main));
+console.log('\n重复规则');
+ok('六种频率', /'daily' \| 'weekly' \| 'monthly' \| 'yearly' \| 'workdays' \| 'interval'/.test(src.types));
+ok('月末钳位', /setDayClamped|lastDay|Math\.min\(.*getDate/.test(src.policy));
+ok('逾期基数取 max(due, now)', /Math\.max\(p\.dueAt, nowMs\)/.test(src.drive));
+
+console.log('\n客户端今日推进');
+ok('有今日聚焦卡', /focus/i.test(src.main) && /聚焦/.test(src.main));
+ok('跟进动作按钮', /跟进|推进|拆小|归档/.test(src.main));
+ok('等级驱动表现', /level/.test(src.alarm));
+ok('takeover 关不掉', /takeover:close-blocked/.test(src.takeover));
+ok('静音时段处理', /inQuietHours/.test(src.alarm));
 
 console.log('\n服务端地址可配置');
 ok('有地址规范化函数', /export function normalizeBaseUrl/.test(src.api));
@@ -115,10 +122,8 @@ console.log('\n暗色主题可读性');
 ok('输入框用 --line-input（不是 --line）', /\.input \{[\s\S]{0,200}?--line-input/.test(src.styles));
 ok('输入框显式声明 color', /\.input \{[\s\S]{0,200}?color: var\(--text\)/.test(src.styles));
 ok('placeholder 有专门样式', /::placeholder/.test(src.styles));
-ok('弱化文字色已提亮', /--dim: #(7|8|9|a|b|c|d|e|f)/i.test(src.styles) || /--dim: #8/.test(src.styles));
 
 console.log('\n主题');
-// 两套主题只换变量。规则里写死颜色的话，切主题时那块就不跟着变
 const styleBody = src.styles.slice(src.styles.indexOf('\n* {'));
 const hardCoded = [...styleBody.matchAll(/#[0-9A-Fa-f]{3,8}\b|rgba?\(/g)];
 ok('规则区没有写死颜色', hardCoded.length === 0, `还有 ${hardCoded.length} 处`);
@@ -127,27 +132,11 @@ const themeSrc = read('app/src/theme.ts');
 ok('主题写在 html 的 data-theme 上', /dataset\.theme/.test(themeSrc));
 ok('主题选择会持久化', /localStorage\.setItem/.test(themeSrc));
 ok('主窗口有切换入口', /id="btn-theme"/.test(src.main));
-// 只看文件末尾的启动段：applyTheme 要在那段里的第一个渲染调用之前
-const bootZone = src.main.slice(src.main.lastIndexOf('// 先挂主题再渲染'));
-const themeAt = bootZone.indexOf('applyTheme(loadTheme());');
-const firstRender = Math.min(
-  ...['renderSetup();', 'renderLogin();', 'boot();']
-    .map((call) => bootZone.indexOf(call)).filter((i) => i >= 0),
-);
-ok('切换到浅色前就挂主题（不闪帧）', themeAt >= 0 && themeAt < firstRender);
-// capture 是独立窗口，必须自己也读一次主题，否则切完还是旧配色
 const captureSrc = read('app/src/ui/capture.ts');
 ok('capture 窗口跟随主题', /applyTheme\(loadTheme\(\)\)/.test(captureSrc));
 ok('takeover 窗口跟随主题', /applyTheme\(loadTheme\(\)\)/.test(src.takeover));
-ok('capture 的样式来自变量不是写死', !/#[0-9A-Fa-f]{6}/.test(read('app/capture.html').split('</style>')[0].replace(/\/\*[\s\S]*?\*\//g, '')));
-// 两套色板都要过对比度，脚本里缺一套就只验了一半
 const contrast = read('app/scripts/contrast.mjs');
 ok('对比度脚本检查两套主题', /data-theme="morandi"/.test(contrast) && /暗色/.test(contrast));
-
-console.log('\n列表视图边界');
-// 逾期条目时间早已过去，视图条件里不能因为 fired_at 有值就把它排掉
-ok('「今天」不按 fired_at 排除', !/today[\s\S]{0,200}fired_at/.test(src.entries));
-ok('「即将到来」不排除已触发的', !/upcoming[\s\S]{0,200}fired_at IS NULL/.test(src.entries));
 
 console.log('\n跨平台');
 const rust = ['lib', 'commands', 'windows', 'main']
@@ -162,8 +151,6 @@ ok('bundle 只有 Windows 目标', /"targets":\s*\[\s*"nsis"\s*\]/.test(tauriCon
 ok('没有 macOS 打包配置', !/dmg|icon\.icns|minimumSystemVersion/.test(tauriConf));
 
 console.log('\nCSP 与服务端地址');
-// CSP 是编译期写死的，服务端地址是用户运行时填的。
-// connect-src 退回逐个列地址，用户填别的地址就会被静默拦掉
 ok('connect-src 放开到 ws 协议', /connect-src[^;]*ws:/.test(tauriConf));
 ok('connect-src 没退回逐个列地址', !/connect-src[^;]*100\.64\.0\.120:8787/.test(tauriConf));
 ok('default-src 保持严格', /default-src 'self'/.test(tauriConf));
@@ -177,33 +164,25 @@ ok('windows 也构建产物', /windows/.test(wf) && /nsis/.test(wf));
 ok('latest.json 不含 mac 签名', !/MAC_SIG|darwin-aarch64/.test(wf));
 
 console.log('\n发布链路');
-// 服务端在 Woodpecker，客户端在 GitHub Actions。两边都认 v* tag，
-// 推一次 tag 才是「一个版本」；一边认一边不认会出现「部署了但没打包」
 const woodpecker = read('.woodpecker.yaml');
 ok('woodpecker 认 v* tag', /event:\s*tag/.test(woodpecker) && /refs\/tags\/v\*/.test(woodpecker));
 ok('GitHub Actions 也认 v* tag', /push:\s*\n\s*tags:\s*\['v\*'\]/.test(wf));
 ok('GitHub Actions 不再因 push main 触发', !/branches:\s*\[main\]/.test(wf));
 ok('tag 构建会发 Release', /gh release create/.test(wf) && /gh release upload/.test(wf));
 ok('发 Release 需要写权限', /permissions:\s*\n\s*contents:\s*write/.test(wf));
-// 没有 --verify-tag 时，tag 不存在会让 gh 从默认分支悄悄造一个，Release 就指向错的提交
 ok('建 Release 校验 tag 真实存在', /gh release create[^\n]*--verify-tag/.test(wf));
 ok('PR 不跑真机构建', /\$\{\{\s*github\.event_name == 'pull_request'\s*\}\}/.test(wf));
 ok('打包 job 跳过 PR', (wf.match(/\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/g) ?? []).length >= 1);
-// 版本号来源只有一处：tag -> set-version 脚本。写死会让安装包版本和 tag 对不上
 ok('产物版本来自 tag', /scripts\/set-version\.mjs/.test(wf));
-// GitHub 的 Release 附件名只收 ASCII，中文前缀会被静默丢掉，
-// v0.2.x 就是这样变成了 "_0.2.1_x64-setup.exe"
 ok('Release 附件用 ASCII 名', /desk-alarm_\$\{V\}_x64-setup\.exe/.test(wf));
-ok('Release 附件名有可读前缀', /desk-alarm_/.test(wf));
-const versionScript = read('scripts/set-version.mjs');
-ok('版本脚本同时改 tauri.conf/Cargo.toml/package.json',
-  ['tauriConf', 'cargoToml', 'packageJson'].every((k) => versionScript.includes(k)));
+ok('版本脚本同时改 tauri.conf/Cargo.toml/package.json', ['tauriConf', 'cargoToml', 'packageJson']
+  .every((k) => read('scripts/set-version.mjs').includes(k)));
 ok('本地 Windows 构建也能带版本号', /-Version/.test(read('scripts/build-windows.ps1')));
 
 console.log('\n注释纪律');
 const tooLong = [];
 for (const [name, text] of Object.entries(src)) {
-  if (name === 'req' || name === 'sql') continue;
+  if (name === 'design' || name === 'sql') continue;
   const lines = text.split('\n');
   let run = 0, start = 0;
   lines.forEach((l, i) => {

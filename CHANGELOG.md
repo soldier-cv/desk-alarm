@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v1.0.0] - 2026-11-23
+
 ### Changed（架构重构：从「到点提醒」到「agent-first 推进引擎」）
 - 核心抽象从「提醒条目 Entry」换成「推进项 Pursuit」：有生命周期（收集→拆解→排期→跟进→完成/归档）、显式 importance/energy、步骤进度、情境触发。系统不再只问「到没到点」，而持续问「这件事到哪了、下一步推什么」。
 - 数据模型重做：`entries/deliveries/dismissals` 三表收敛为 `pursuits/steps/followups/nudges`；`nudges` 同时是打扰账本和投递 outbox。提供 `npm run migrate:v2` 做 v1→v2 数据迁移（按用户幂等）。

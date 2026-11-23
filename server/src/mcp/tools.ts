@@ -1,7 +1,6 @@
 /**
- * MCP 工具集（v2 推进引擎）。写操作一律 two-step：先 stage 拿预览与一次性 plan_id，
- * 再用 apply_changes 执行。域操作都调 drive.ts，薄壳不自己实现逻辑。
- * 设计理由见 docs/drive-engine.md「为什么 agent-first」与 docs/mcp-rules.md
+ * MCP 工具集（v2）。写操作一律 two-step：stage 拿预览与 plan_id，再 apply_changes 执行。
+ * 域操作都调 drive.ts，薄壳不自己实现逻辑。理由见 docs/drive-engine.md
  */
 import { randomUUID } from 'node:crypto';
 import type {
