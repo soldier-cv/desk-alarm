@@ -1,6 +1,6 @@
 # DeskAlarm
 
-**agent-first 的自我驱动推进引擎。** 客户端与服务端分离，多用户、数据隔离。它不只是「到点提醒」，而是把每件事当作一个**推进项（Pursuit）**持续跟进：拆解成小步骤、按重要性与停滞排今日聚焦、给不同打扰等级，agent 可全权推进，人通过客户端看和确认。
+**agent-first 的自我驱动推进引擎。** 要解决的就一件事：**怕待办放久了忘掉，及时告知**。客户端与服务端分离，多用户、数据隔离。它不只是「到点提醒」，而是把每件事当作一个**推进项（Pursuit）**持续跟进：拆解成小步骤、按重要性与停滞排今日聚焦、给不同打扰等级，agent 可全权推进，人通过客户端看和确认。
 
 > v2 是架构重构（Entry→Pursuit），数据模型不兼容 v1。升级时先 `npm run db:init` 建新表，再 `npm run migrate:v2` 把旧 `entries/dismissals` 迁进来（按用户幂等）。设计动机与算法见 `docs/drive-engine.md`。
 
@@ -8,7 +8,7 @@
 
 | 模块 | 状态 |
 |---|---|
-| 服务端（Node + Fastify + PostgreSQL） | 完成，**v2 冒烟 84 项 + 重复日期 17 项全通过** |
+| 服务端（Node + Fastify + PostgreSQL） | 完成，**v2 冒烟 100 项 + 重复日期 24 项全通过** |
 | 推进引擎（四循环 / 打扰等级 / 配额 / 跟进） | 完成 |
 | 多用户 / 数据隔离 / 用户管理 | 完成，用户名密码登录，管理员管用户 |
 | Agent 令牌（每用户自助签发） | 完成，独立鉴权，只读/读写 scope，machine-id 可选（云端 agent 可不绑） |
@@ -20,7 +20,7 @@
 
 ## 数据库授权
 
-已有数据库里 `desk_alarm` schema 由服务端启动时自动建表（共 10 张：users / devices / sessions / agent_tokens / entries / idempotency / entry_devices / deliveries / dismissals / settings），幂等可反复跑。生产沿用宿主机 `.env` 里既有的数据库和库名，没有改名。
+已有数据库里 `desk_alarm` schema 由服务端启动时自动建表（共 11 张：users / devices / sessions / agent_tokens / pursuits / steps / followups / nudges / pursuit_devices / idempotency / settings），幂等可反复跑。生产沿用宿主机 `.env` 里既有的数据库和库名，没有改名。
 
 `general_db` 是共用库，同库里还有其它项目的 schema，所以全部表隔离在 `desk_alarm` 这一层，靠 `search_path` 生效，`public` 保持零表。换机器或重建库时需要下面这条，用 `general_db` 的 owner 执行：
 
@@ -45,11 +45,11 @@ CREATE SCHEMA desk_alarm AUTHORIZATION desk_alarm;
                      │  PostgreSQL 18.6   │◄─┘  <PGHOST>:5432
                      │  <PGDATABASE>      │
                      │   └─ schema        │
-                     │     desk_alarm     │  10 张表，public 不被碰
+                     │     desk_alarm     │  11 张表，public 不被碰
                      └────────────────────┘
 ```
 
-**核心规则：服务端是计时的唯一权威。** 客户端不做权威计时，本地预判只让提示提前一点出现，最终以服务端写入的 `fired_at` 为准。
+**核心规则：服务端是计时的唯一权威。** 客户端不做权威计时，倒计时用 `serverNow()`（本地时间与服务端的偏差）。打扰时间由服务端每 tick 算停滞等级并写 `nudges`，`last_activity_at` 只由服务端的跟进/调度写入。
 
 **投递是事务性 outbox。** 引擎只往 `nudges` 表写 pending 记录，投递由独立的轮转器做，判定和送出去是两件不相干的事。`delivered` 的判定标准是「通道确认接收」，不是「我发出去了」。
 
@@ -96,35 +96,40 @@ L4/L5 受每日强打扰配额限制（默认 2 次）：配额用完就降到 L
 ```
 app/                     桌面/Android 共用前端源码（不提供 Web 客户端）
   src/ui/main.ts          主视图 + 应用内开发看板（dashboard 视图）
-  src/ui/takeover.ts      强提示接管窗口
+  src/ui/mobile.ts        Android 端页面
+  src/ui/takeover.ts      接管窗口
   src/ui/capture.ts       快速记录小窗
-mockups/                 设计手稿，仅留在仓库里，不部署
-shared/types.ts          前后端共享契约
+  src/ui/recurrence-form.ts 重复规则字段收敛（与服务端规则一一对应）
+  src/alarm.ts            跟进提醒阶梯 + 弱横幅
+  src/api.ts              HTTP/WS 通信层、乐观锁版本
+  src/styles.css          两套主题（桌面/Android 共用）
+  src-tauri/src/commands.rs  原生命令（含 OS machine-id）
+  src-tauri/src/windows.rs 窗口行为，接管窗口关不掉在这里
+  src-tauri/src/update.rs  应用内升级（Gitee 优先 / GitHub 降级 + 签名校验）
+shared/types.ts          前后端共享契约（状态动作矩阵、临期 P0、重复规则）
 server/
-  src/schema.pg.sql        10 张表结构
+  src/schema.pg.sql        11 张表结构
   src/db.ts                连接池、事务封装、连接诊断
   src/auth.ts              登录会话、Agent 令牌解析、requireHuman/requireAgent/requireAdmin
   src/bootstrap.ts         一次性创建管理员
-  src/repo/                entries / devices / deliveries / settings / users / agent-tokens / stats
+  src/policy.ts            权重 / 等级 / 重复日期（唯一算法来源）
+  src/drive.ts             推进引擎：聚焦、到点通知、跟进、自动归档
+  src/repo/                pursuits / steps / followups / nudges / devices / settings / users / agent-tokens / stats
   src/scheduler.ts         调度器 + 投递轮转器
   src/hub.ts               按用户隔离的 WS 广播
   src/transport/           WebSocket 投递通道（注册表式，便于以后接厂商通道）
   src/mcp/                 工具集与 stdio 入口
-  src/routes/              entries / devices / stream / mcp / admin / agent-tokens
-  scripts/smoke.mjs        v2 冒烟测试（84 项）
-  scripts/verify.mjs       23 项端到端验证（打网关）
+  src/routes/              pursuits / devices / stream / agent-api / mcp / admin / setup
+  scripts/smoke.mjs        v2 冒烟测试（100 项）
+  scripts/repeat-check.mjs 重复日期测试（24 项，月末/季度末钳位）
+  scripts/verify.mjs       端到端验证（打已部署的服务端）
   scripts/isolation-check.mjs  跨用户隔离 / 设备随用户走 / 看板接口
-  src/alarm.ts             升级阶梯 + 弱提示队列
-  src/api.ts               HTTP/WS 通信层、Agent 令牌与用户管理
-  src/styles.css           两套主题（桌面/Android 共用）
-  src-tauri/src/commands.rs  原生命令（含 OS machine-id）
-  src-tauri/src/windows.rs 窗口行为，接管窗口关不掉在这里
-  src-tauri/src/update.rs  应用内升级（Gitee 优先 / GitHub 降级 + 签名校验）
-docs/multi-user-design.md 多用户改造的设计与决策记录
+docs/drive-engine.md      v2 算法与模块边界（当前实现的权威设计）
 docs/android.md          Android 端现状与接入步骤
 docs/mcp.md              MCP 接入（Agent 令牌）
 docs/mcp-rules.md        agent 该守的规矩
-docker/                  nginx + api 镜像
+docs/requirements.md     v1 历史决策，仅作背景，不代表当前行为
+docker/                  api 镜像
 docker-compose.local.yml 本地调试覆盖层（临时 Postgres），生产不用
 ```
 
@@ -157,9 +162,9 @@ docker compose ps
 
 后续用户由管理员在客户端「设置 → 用户管理」里创建（用户名 + 密码 + 角色），也能禁用、删除。
 
-**设置页**：提醒参数、主题、关闭 X 的行为（退出 / 隐藏到托盘）、试响、强/弱提醒测试、用户管理、本地日志策略都在左下角齿轮进入的设置里。左下角另一个下载图标用于检查更新：平时普通色，有更新时变蓝。移动端切后台由常驻通知的前台服务保活，WS 不断线，锁屏也能即时收到提醒。
+**设置页**：推进节奏（打扰等级阈值、每日强打扰配额、静音时段、聚焦推送时刻）、主题、关闭 X 的行为（退出 / 隐藏到托盘）、试响与各等级跟进测试、用户管理、本地日志策略都在左下角齿轮进入的设置里。左下角另一个下载图标用于检查更新：平时普通色，有更新时变蓝。移动端切后台由常驻通知的前台服务保活，WS 不断线，锁屏也能即时收到提醒。
 
-**两个看板**：普通用户有「我的看板」（连续守约天数、近 7 天准时率、每日柱状图，只统计自己）；管理员额外有「系统看板」（服务端与全局业务概览）。
+**两个看板**：普通用户有「推进看板」（连续推进天数、本周完成数、今日聚焦/完成/待跟进，只统计自己）；管理员额外有「系统看板」（服务端与全局业务概览）。
 
 桌面客户端第一次装完要自己填服务端地址（填 `host:port` 或完整 URL 都行）。
 
@@ -314,14 +319,18 @@ connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:
 cd server
 npm run typecheck
 npm run build
-npm run smoke            # v2 冒烟 84 项。会建临时库，跑完删掉
+npm run smoke            # v2 冒烟 100 项。会建临时库，跑完删掉
+npm run repeat           # 24 项。重复规则、月末/季度末钳位、周几选择
 node scripts/verify.mjs  # 含管理员初始化、API、MCP/Agent 令牌
-node scripts/e2e-check.mjs   # 联调自检，真跑一遍调度/确认/忽略/MCP
-npm run repeat           # 17 项。重复规则与月末钳位
-npm run isolation        # 14 项。跨用户隔离 / 设备随用户走 / 看板接口（需栈起着）
+node scripts/e2e-check.mjs   # 联调自检，打已部署的服务端，跑完清测试数据
+npm run isolation        # 跨用户隔离 / 设备随用户走 / 看板接口（需栈起着）
+cd ../app
+npm test                 # Vitest 18 项：状态×动作、临期 P0、重复字段构建
+npx tsc --noEmit && npx vite build
+node scripts/contrast.mjs # 两套主题对比度
 ```
 
-`e2e-check` 不建临时库，打的是真实部署，验证的是调度器到点触发、确认与忽略分开记、被忽略 2 次自动降级、MCP 防呆这几条核心链路。跑完自动清理测试数据。首次运行会先走 `/setup` 初始化管理员，用户名固定 `admin`，密码取 `ADMIN_PASSWORD` 环境变量（默认 `admin123456`）。
+`e2e-check` 不建临时库，打的是真实部署，验证的是到点通知、跟进动作、克隆与 MCP 防呆这几条链路；**它测的是已部署构建，不是本地刚改的代码**。跑完自动清理测试数据。首次运行会先走 `/setup` 初始化管理员，用户名固定 `admin`，密码取 `ADMIN_PASSWORD` 环境变量（默认 `admin123456`）。
 
 本地起好栈后还可以跑 `node scripts/isolation-check.mjs`，验证跨用户隔离、设备随用户走和看板接口。
 
@@ -350,11 +359,11 @@ cd server && SMOKE_PG_PASSWORD=deskalarm npm run smoke
 
 ## MCP 与 Agent 令牌
 
-见 `docs/mcp.md`。三条防呆规则：写操作先 `plan_changes` 再 `apply_changes`、强提示必须给 `reason`、`idempotencyKey` 防重。
+见 `docs/mcp.md`。防呆规则：写操作先 `plan_changes` 再 `apply_changes`、`importance=3`(P0) 必须给 `reason`、写之前先 `get_pursuit` 拿最新 `version`；动作与状态边界见 `docs/drive-engine.md`。
 
 MCP 入口只认**每用户自助签发的 Agent 令牌**，登录 token 会被 403。所有用户都有独立的「Agent 令牌」模块：签发时选只读/读写，machine-id 可选（桌面可绑定本机，云端 agent 不绑），明文只显示一次、服务端只存哈希，随时可撤销。没有全局 `MCP_TOKEN`。
 
-另有一套**独立的 Agent API**：`GET/POST/PATCH/DELETE /api/agent/entries`、`GET /api/agent/devices`、`GET /api/agent/whoami`。它和 `/api/v1` 用户接口分开，只认 Agent 令牌，并按令牌 scope 限制读写；所有操作都限定在签发用户自己的数据里。未来接入 agents 就走这套接口。
+另有一套**独立的 Agent API**：`GET/POST/PATCH/DELETE /api/agent/pursuits`、`POST /api/agent/followup`、`POST /api/agent/clone`、`GET /api/agent/focus`、`GET /api/agent/whoami`。它和 `/api/v1` 用户接口分开，只认 Agent 令牌，并按令牌 scope 限制读写；所有操作都限定在签发用户自己的数据里。未来接入 agents 就走这套接口。
 
 ## 开发看板
 
