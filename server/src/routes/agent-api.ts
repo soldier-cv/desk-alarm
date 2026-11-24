@@ -9,17 +9,18 @@ import type {
   CreatePursuitRequest, FocusResult, FollowupAction, FollowupRequest,
   Pursuit, PursuitStatus, UpdatePursuitRequest,
 } from '../../../shared/types.js';
+import { FOLLOWUP_ACTIONS } from '../../../shared/types.js';
 import { requireAgent } from '../auth.js';
 import { buildFocus, decompose, followUp } from '../drive.js';
 import {
-  createPursuit, deletePursuit, getPursuit, listPursuits, updatePursuit,
+  clonePursuit, createPursuit, deletePursuit, getPursuit, listPursuits, updatePursuit,
 } from '../repo/pursuits.js';
 import { hub } from '../hub.js';
 
 type Scope = 'read' | 'write';
 const msg = (e: unknown) => e instanceof Error ? e.message : String(e);
 const STATUSES: readonly string[] = ['inbox', 'active', 'paused', 'done', 'archived'];
-const FOLLOWUP_ACTIONS: readonly string[] = ['done', 'partial', 'later', 'smaller', 'archive', 'ignored'];
+
 
 function need(scope: Scope) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
@@ -45,8 +46,8 @@ function writeError(reply: FastifyReply, e: unknown) {
   if (/找不到|不存在|NOT_FOUND/.test(message)) {
     return reply.code(404).send({ error: 'NOT_FOUND', message });
   }
-  if (/TERMINAL_STATUS|已完成或归档/.test(message)) {
-    return reply.code(400).send({ error: 'TERMINAL_STATUS', message: '已完成或归档的推进项不能继续跟进' });
+  if (/ACTION_NOT_ALLOWED|当前状态不允许/.test(message)) {
+    return reply.code(400).send({ error: 'ACTION_NOT_ALLOWED', message: '当前状态不允许这个跟进动作' });
   }
   throw e;
 }
@@ -58,13 +59,11 @@ function asMs(v: number | string | null | undefined): number | null {
 }
 
 function needsReason(req: CreatePursuitRequest): boolean {
-  if ((req.importance ?? 0) >= 3) return true;
+  if ((req.importance ?? 1) >= 3) return true;
   if (req.commitment?.date != null) {
     const d = asMs(req.commitment.date);
     if (d !== null && d - Date.now() <= 24 * 3600_000) return true;
   }
-  const due = asMs(req.dueAt);
-  if (req.energy === 'high' && due !== null && due - Date.now() <= 24 * 3600_000) return true;
   return false;
 }
 
@@ -177,6 +176,20 @@ export async function agentApiRoutes(app: FastifyInstance) {
   };
   app.post('/followup', { preHandler: need('write') }, followup);
   app.post('/pursuits/:id/followup', { preHandler: need('write') }, followup);
+
+  const clone = async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id?: string };
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const id = String(params.id ?? body.id ?? '');
+    if (!id) return reply.code(400).send({ error: 'BAD_REQUEST', message: 'id 必填' });
+    const userId = req.session!.user.id;
+    const pursuit = await clonePursuit(id, userId);
+    if (!pursuit) return reply.code(404).send({ error: 'NOT_FOUND', message: '推进项不存在' });
+    hub.broadcastToUser(userId, { t: 'pursuit.created', pursuit });
+    return reply.code(201).send({ pursuit });
+  };
+  app.post('/clone', { preHandler: need('write') }, clone);
+  app.post('/pursuits/:id/clone', { preHandler: need('write') }, clone);
 
   const decomposeH = async (req: FastifyRequest, reply: FastifyReply) => {
     const params = req.params as { id?: string };

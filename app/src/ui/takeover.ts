@@ -61,12 +61,10 @@ function dayAfter(days: number, hour = 9): number {
 }
 
 function renderActions(p: Payload) {
-  const next = p.pursuit.steps.find((s) => s.state !== 'done')?.text ?? '';
   el.acts.innerHTML = `
-    <button class="btn solid" data-act="done">推进 ${next ? `：${esc(next.slice(0, 18))}` : '第一步'}</button>
-    <button class="btn ghost" data-act="partial">推了一点</button>
+    <button class="btn solid" data-act="done">完成</button>
     <button class="btn ghost" data-act="smaller">拆小</button>
-    <button class="btn ghost" data-act="later">改天</button>
+    <button class="btn ghost" data-act="later">延期</button>
     <button class="btn danger" data-act="archive">归档</button>`;
 
   el.snooze.innerHTML = `
@@ -156,7 +154,6 @@ async function act(kind: string, to?: number) {
   if (!p) return;
   switch (kind) {
     case 'done': await send('done'); break;
-    case 'partial': await send('partial'); break;
     case 'smaller': askSteps(); break;
     case 'later': await send('later', { to: to ?? dayAfter(1) }); break;
     case 'archive': await send('archive'); break;

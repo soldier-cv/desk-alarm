@@ -17,10 +17,10 @@ const hint = document.querySelector<HTMLDivElement>('#hint')!;
 const bar = document.querySelector<HTMLDivElement>('#bar')!;
 
 let picked: Parsed = parseInput('');
-let importance: Importance = 0;
+let importance: Importance = 1;
 
-const IMP_LABEL = ['不标', '★', '★★', '★★★'];
-const IMP_TITLE = ['不标：按默认权重排期', '★ 低：略微优先', '★★ 中：优先推进', '★★★ 高：最优先推进'];
+const IMP_LABEL = ['', 'P2', 'P1', 'P0'];
+const IMP_TITLE = ['', 'P2：默认优先级', 'P1：优先推进', 'P0：最高优先级'];
 
 function esc(s: string): string {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
@@ -39,7 +39,7 @@ function renderParse(raw: string) {
       picked.remindAt ? `截止：${picked.timeLabel}` : '没有时间，进收集箱',
     )}</span>
     <span class="chip">重要性</span>
-    ${([0, 1, 2, 3] as Importance[]).map((n) =>
+    ${([3, 2, 1] as Importance[]).map((n) =>
       `<button type="button" class="chip ${importance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${IMP_LABEL[n]}</button>`,
     ).join('')}`;
 }
@@ -59,7 +59,7 @@ parse.addEventListener('click', (ev) => {
 input.addEventListener('keydown', async (ev) => {
   if (ev.key === 'Escape') {
     input.value = '';
-    importance = 0;
+    importance = 1;
     parse.hidden = true;
     await invoke('hide_capture');
   }
@@ -78,7 +78,7 @@ input.addEventListener('keydown', async (ev) => {
 
   // 连记：只清空不清屏，连续按 Enter 能一条接一条地记
   input.value = '';
-  importance = 0;
+  importance = 1;
   parse.hidden = true;
   bar.classList.remove('ready');
   input.focus();

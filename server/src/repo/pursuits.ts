@@ -1,5 +1,5 @@
 import type {
-  Commitment, CreatePursuitRequest, Energy, EntryKind, Importance, Pursuit, PursuitContext,
+  Commitment, CreatePursuitRequest, EntryKind, Importance, Pursuit, PursuitContext,
   PursuitNature, PursuitStatus, RecurrenceRule, Step, UpdatePursuitRequest,
 } from '../../../shared/types.js';
 import { one, rows, toDt, toMs, tx, type Tx } from '../db.js';
@@ -16,7 +16,6 @@ interface PursuitRow {
   path: string | null;
   nature: string;
   importance: number;
-  energy: string;
   due_at: Date | null;
   recurrence: RecurrenceRule | null;
   context: PursuitContext | null;
@@ -47,7 +46,6 @@ export function mapPursuit(row: any, steps: Step[], deviceIds: string[], nowMs: 
     path: r.path,
     nature: r.nature as PursuitNature,
     importance: r.importance as Importance,
-    energy: r.energy as Energy,
     dueAt: toMs(r.due_at),
     recurrence: r.recurrence ?? null,
     context: r.context ?? null,
@@ -139,9 +137,9 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
   const id = await tx(async (q) => {
     const r = await q.one<{ id: string }>(
       `INSERT INTO pursuits
-         (user_id, text, note, kind, url, path, nature, importance, energy, due_at,
+         (user_id, text, note, kind, url, path, nature, importance, due_at,
           recurrence, context, commitment, status, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING id`,
       [userId,
        req.text.trim(),
@@ -151,7 +149,7 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
        req.path ?? null,
        (req.nature ?? 'one_off') as PursuitNature,
        req.importance ?? 1,
-       (req.energy ?? 'medium') as Energy,
+       
        toDt(req.dueAt),
        req.recurrence ?? null,
        req.context ?? null,
@@ -165,6 +163,30 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
     return r.id;
   });
   return (await getPursuit(id, userId))!;
+}
+
+/** 克隆：复制内容，不复制完成状态、截止、跟进历史和步骤完成状态 */
+export async function clonePursuit(id: string, userId: string): Promise<Pursuit | null> {
+  const src = await getPursuit(id, userId);
+  if (!src) return null;
+  const newId = await tx(async (q) => {
+    const r = await q.one<{ id: string }>(
+      `INSERT INTO pursuits
+         (user_id, text, note, kind, url, path, nature, importance, due_at,
+          recurrence, context, commitment, status, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,$9,$10,$11,'active',$12)
+       RETURNING id`,
+      [userId, src.text, src.note, src.kind, src.url, src.path, src.nature,
+        src.importance, src.recurrence, src.context, src.commitment, src.source],
+    );
+    if (!r) throw new Error('INSERT_FAILED');
+    if (src.steps.length) {
+      await insertSteps(q, r.id, userId, src.steps.map((s) => s.text));
+    }
+    if (src.deviceIds.length) await replaceDevices(q, r.id, userId, src.deviceIds);
+    return r.id;
+  });
+  return (await getPursuit(newId, userId))!;
 }
 
 export async function updatePursuit(
@@ -181,7 +203,7 @@ export async function updatePursuit(
     if (req.text !== undefined) add('text', req.text.trim());
     if ('note' in req) add('note', req.note?.trim() || null);
     if (req.importance !== undefined) add('importance', req.importance);
-    if (req.energy !== undefined) add('energy', req.energy);
+
     if (req.nature !== undefined) add('nature', req.nature);
     if ('dueAt' in req) add('due_at', toDt(req.dueAt));
     if ('recurrence' in req) add('recurrence', req.recurrence);

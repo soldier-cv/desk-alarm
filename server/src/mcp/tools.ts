@@ -4,11 +4,12 @@
  */
 import { randomUUID } from 'node:crypto';
 import type {
-  AgentScope, CreatePursuitRequest, Energy, FollowupAction, FollowupRequest,
+  AgentScope, CreatePursuitRequest, FollowupAction, FollowupRequest,
   FocusResult, Importance, Pursuit, PursuitNature, PursuitStatus,
 } from '../../../shared/types.js';
+import { FOLLOWUP_ACTIONS } from '../../../shared/types.js';
 import { buildFocus, decompose, followUp, reprioritize } from '../drive.js';
-import { createPursuit, getPursuit, listPursuits, setStatus } from '../repo/pursuits.js';
+import { clonePursuit, createPursuit, getPursuit, listPursuits, setStatus } from '../repo/pursuits.js';
 import { hub } from '../hub.js';
 
 export interface ToolDef {
@@ -27,10 +28,8 @@ const plans = new Map<string, {
   summary: string;
 }>();
 
-const NATURES: readonly string[] = ['one_off', 'recurring', 'project'];
-const ENERGIES: readonly string[] = ['low', 'medium', 'high'];
+const NATURES: readonly string[] = ['one_off', 'project'];
 const STATUSES: readonly string[] = ['inbox', 'active', 'paused', 'done', 'archived'];
-const FOLLOWUP_ACTIONS: readonly string[] = ['done', 'partial', 'later', 'smaller', 'archive', 'ignored'];
 const READ_TOOLS = new Set(['today_digest', 'list_pursuits', 'get_pursuit']);
 
 export type Op =
@@ -38,7 +37,8 @@ export type Op =
   | { kind: 'decompose'; id: string; texts: string[] }
   | { kind: 'reprioritize'; id: string; importance: Importance }
   | { kind: 'followup'; id: string; req: FollowupRequest }
-  | { kind: 'archive'; id: string };
+  | { kind: 'archive'; id: string }
+  | { kind: 'clone'; id: string };
 
 const msg = (e: unknown) => e instanceof Error ? e.message : String(e);
 
@@ -80,8 +80,8 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'create_pursuit',
     description:
-      '建推进项，steps 可一次给多个步骤。默认 nature=one_off、importance=0、status=inbox，不抢注意力。' +
-      'importance>=3 或会很快升级到强打扰时，必须同时给 reason 说明依据。' +
+      '建推进项，steps 可一次给多个步骤。默认 nature=one_off、importance=1(P2)、status=active。' +
+      'importance=3(P0) 或会很快升级到强打扰时，必须同时给 reason 说明依据。' +
       '本工具只生成预览和 plan_id，不落库；跟用户确认后调 apply_changes 才真正执行。',
     inputSchema: {
       type: 'object',
@@ -91,9 +91,8 @@ export const TOOLS: ToolDef[] = [
         kind: { type: 'string', enum: ['text', 'link', 'path', 'image', 'audio'] },
         url: { type: 'string' },
         path: { type: 'string' },
-        nature: { type: 'string', enum: ['one_off', 'recurring', 'project'] },
-        importance: { type: 'integer', minimum: 0, maximum: 3, description: '默认 0，3 最高' },
-        energy: { type: 'string', enum: ['low', 'medium', 'high'] },
+        nature: { type: 'string', enum: ['one_off', 'project'] },
+        importance: { type: 'integer', minimum: 1, maximum: 3, description: '1=P2 默认，2=P1，3=P0' },
         dueAt: { type: ['integer', 'string', 'null'], description: 'epoch 毫秒或日期字符串' },
         recurrence: { type: 'object' },
         context: { type: 'object' },
@@ -101,7 +100,7 @@ export const TOOLS: ToolDef[] = [
         status: { type: 'string', enum: ['inbox', 'active', 'paused', 'done', 'archived'] },
         steps: { type: 'array', items: { type: 'string' }, description: '拆好的步骤文本' },
         deviceIds: { type: 'array', items: { type: 'string' } },
-        reason: { type: 'string', description: 'importance>=3 或会触发强打扰时必填，写明用户凭什么要求高优先级' },
+        reason: { type: 'string', description: 'importance=3(P0) 或会触发强打扰时必填，写明用户凭什么要求高优先级' },
       },
       required: ['text'],
     },
@@ -120,12 +119,12 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'reprioritize',
-    description: '改一件事的重要性 0..3。引擎会据此重排聚焦。只生成预览，确认后调 apply_changes 执行',
+    description: '改重要性：1=P2、2=P1、3=P0。引擎会据此重排聚焦。只生成预览，确认后调 apply_changes 执行',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
-        importance: { type: 'integer', minimum: 0, maximum: 3 },
+        importance: { type: 'integer', minimum: 1, maximum: 3 },
       },
       required: ['id', 'importance'],
     },
@@ -133,14 +132,14 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'followup',
     description:
-      '回答一次跟进：action 用 FollowupAction（done/partial/later/smaller/archive/ignored）。' +
+      '回答一次跟进：action 用 FollowupAction（done/later/smaller/archive/reopen）。' +
       'version 必填，先 get_pursuit 拿最新版本号，避免覆盖用户刚做的改动。' +
-      'later 可给 to，smaller 可带 steps。只生成预览，确认后调 apply_changes 执行',
+      'later 可给 to，smaller 可带 steps，reopen 只用于把已完成撤回。只生成预览，确认后调 apply_changes 执行',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
-        action: { type: 'string', enum: ['done', 'partial', 'later', 'smaller', 'archive', 'ignored'] },
+        action: { type: 'string', enum: [...FOLLOWUP_ACTIONS] },
         note: { type: 'string' },
         to: { type: ['integer', 'string'] },
         steps: { type: 'array', items: { type: 'string' } },
@@ -151,7 +150,16 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'archive',
-    description: '归档一件事（不删除，可恢复）。只生成预览，确认后调 apply_changes 执行',
+    description: '归档一件事（不删除，归档后只能克隆）。只生成预览，确认后调 apply_changes 执行',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'clone_pursuit',
+    description: '克隆任意状态的事项（含已完成/已归档）。复制内容与步骤，步骤状态重置、截止清空，不复制跟进历史。只生成预览',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -172,13 +180,12 @@ export const TOOLS: ToolDef[] = [
           items: {
             type: 'object',
             properties: {
-              kind: { type: 'string', enum: ['create', 'decompose', 'reprioritize', 'followup', 'archive'] },
+              kind: { type: 'string', enum: ['create', 'decompose', 'reprioritize', 'followup', 'archive', 'clone'] },
               id: { type: 'string', description: '除 create 外都要' },
               text: { type: 'string', description: 'create 用' },
               steps: { type: 'array', items: { type: 'string' } },
               nature: { type: 'string' },
               importance: { type: 'integer' },
-              energy: { type: 'string' },
               dueAt: { type: ['integer', 'string', 'null'] },
               reason: { type: 'string' },
               action: { type: 'string' },
@@ -231,6 +238,7 @@ export async function callTool(
     case 'reprioritize': return toolReprioritize(args, ctx);
     case 'followup': return toolFollowup(args, ctx);
     case 'archive': return toolArchive(args, ctx);
+    case 'clone_pursuit': return toolClone(args, ctx);
     case 'plan_changes': return toolPlan(args, ctx);
     case 'apply_changes': return toolApply(args, ctx);
     default: throw new Error(`未知工具 ${name}`);
@@ -283,8 +291,8 @@ async function toolCreate(args: Record<string, unknown>, ctx: McpCtx) {
   return {
     ...staged,
     防呆说明: needsReason(req)
-      ? 'importance>=3 或会很快升级到强打扰，必须给 reason 说明依据；已记录，确认后再执行'
-      : '默认 importance=0、进收集箱，不抢注意力；确认后再执行',
+      ? 'importance=3(P0) 或会很快升级到强打扰，必须给 reason 说明依据；已记录，确认后再执行'
+      : '默认 importance=1(P2)，不抢注意力；确认后再执行',
   };
 }
 
@@ -325,6 +333,11 @@ async function toolArchive(args: Record<string, unknown>, ctx: McpCtx) {
   return stageOps([op], ctx);
 }
 
+async function toolClone(args: Record<string, unknown>, ctx: McpCtx) {
+  const op: Op = { kind: 'clone', id: String(args.id ?? '') };
+  return stageOps([op], ctx);
+}
+
 /* ---------------------------------------------------------- 两步防呆 */
 
 async function toolPlan(args: Record<string, unknown>, ctx: McpCtx) {
@@ -361,6 +374,7 @@ function opFromRaw(o: Record<string, unknown>): Op {
       return { kind, id: String(o.id ?? ''), req };
     }
     case 'archive':
+    case 'clone':
       return { kind, id: String(o.id ?? '') };
     default:
       throw new Error(`未知操作 ${kind}`);
@@ -402,7 +416,7 @@ function validateOp(op: Op): void {
   switch (op.kind) {
     case 'create':
       if (needsReason(op.req) && !(op.reason ?? '').trim()) {
-        throw new Error('这个推进项重要性>=3 或会很快升级到强打扰，必须给 reason 说明依据');
+        throw new Error('这个推进项 importance=3(P0) 或会很快升级到强打扰，必须给 reason 说明依据');
       }
       break;
     case 'decompose':
@@ -411,7 +425,7 @@ function validateOp(op: Op): void {
       break;
     case 'reprioritize':
       if (!op.id) throw new Error('reprioritize 必须给 id');
-      if (![0, 1, 2, 3].includes(op.importance)) throw new Error('importance 必须是 0..3');
+      if (![1, 2, 3].includes(op.importance)) throw new Error('importance 必须是 1=P2 / 2=P1 / 3=P0');
       break;
     case 'followup':
       if (!op.id) throw new Error('followup 必须给 id');
@@ -420,6 +434,9 @@ function validateOp(op: Op): void {
       break;
     case 'archive':
       if (!op.id) throw new Error('archive 必须给 id');
+      break;
+    case 'clone':
+      if (!op.id) throw new Error('clone 必须给 id');
       break;
   }
 }
@@ -432,9 +449,9 @@ async function describeOp(op: Op, i: number, userId: string): Promise<Record<str
         序号: n, 动作: '新建推进项', 目标: op.req.text,
         详情: {
           性质: op.req.nature ?? 'one_off',
-          重要性: op.req.importance ?? 0,
-          精力: op.req.energy ?? 'medium',
-          状态: op.req.status ?? 'inbox',
+          重要性: op.req.importance ?? 1,
+          
+          状态: op.req.status ?? 'active',
           步骤: op.req.steps ?? [],
           截止: op.req.dueAt ?? null,
           重复: op.req.recurrence ?? null,
@@ -468,6 +485,13 @@ async function describeOp(op: Op, i: number, userId: string): Promise<Record<str
       return {
         序号: n, 动作: '归档', 目标: p.text,
         详情: { 当前状态: p.status, 改为: 'archived' },
+      };
+    }
+    case 'clone': {
+      const p = await mustGet(op.id, userId);
+      return {
+        序号: n, 动作: '克隆', 目标: p.text,
+        详情: { 原状态: p.status, 新状态: 'active', 复制步骤: p.steps.length, 截止: '清空' },
       };
     }
   }
@@ -520,6 +544,12 @@ async function runOp(op: Op, userId: string): Promise<Record<string, unknown>> {
       hub.broadcastToUser(userId, { t: 'pursuit.updated', pursuit: p });
       return { 动作: '归档', id: p.id, text: p.text };
     }
+    case 'clone': {
+      const p = await clonePursuit(op.id, userId);
+      if (!p) throw new Error(`找不到推进项 ${op.id}`);
+      hub.broadcastToUser(userId, { t: 'pursuit.created', pursuit: p });
+      return { 动作: '克隆', id: p.id, text: p.text };
+    }
   }
 }
 
@@ -538,14 +568,12 @@ function asMs(v: number | string | null | undefined): number | null {
 }
 
 function needsReason(req: CreatePursuitRequest): boolean {
-  if ((req.importance ?? 0) >= 3) return true;
-  // 对外承诺、或高精力且临近截止，都会很快爬到 L4/L5 强打扰
+  if ((req.importance ?? 1) >= 3) return true;
+  // 对外承诺临近时会很快爬到 L4/L5 强打扰
   if (req.commitment?.date != null) {
     const d = asMs(req.commitment.date);
     if (d !== null && d - Date.now() <= 24 * 3600_000) return true;
   }
-  const due = asMs(req.dueAt);
-  if (req.energy === 'high' && due !== null && due - Date.now() <= 24 * 3600_000) return true;
   return false;
 }
 
@@ -570,13 +598,8 @@ function buildCreateRequest(args: Record<string, unknown>): CreatePursuitRequest
   }
   if (args.importance !== undefined) {
     const n = Number(args.importance);
-    if (!Number.isInteger(n) || n < 0 || n > 3) throw new Error('importance 必须是 0..3 的整数');
+    if (!Number.isInteger(n) || n < 1 || n > 3) throw new Error('importance 必须是 1=P2 / 2=P1 / 3=P0');
     req.importance = n as Importance;
-  }
-  if (args.energy !== undefined) {
-    const v = String(args.energy);
-    if (!ENERGIES.includes(v)) throw new Error(`未知 energy ${v}`);
-    req.energy = v as Energy;
   }
   if (args.dueAt !== undefined) req.dueAt = args.dueAt as CreatePursuitRequest['dueAt'];
   if (args.recurrence !== undefined) req.recurrence = args.recurrence as CreatePursuitRequest['recurrence'];

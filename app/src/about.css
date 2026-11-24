@@ -18,10 +18,10 @@
   padding: 15px 16px; border-bottom: 1px solid var(--line-soft);
 }
 .abt-mark {
-  width: 28px; height: 28px; flex: none; border-radius: 8px;
-  border: 1.5px solid var(--text); display: grid; place-items: center;
+  width: 28px; height: 28px; flex: none;
+  background: url('../src-tauri/icons/32x32.png') center/contain no-repeat;
 }
-.abt-mark i { width: 11px; height: 11px; border-radius: 3px; background: var(--text); }
+.abt-mark i { display: none; }
 .abt-head b { display: block; font-size: 14px; font-weight: 600; }
 .abt-head small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
 .abt-x {

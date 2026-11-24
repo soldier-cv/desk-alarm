@@ -264,8 +264,8 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
   padding: 0 14px; background: var(--surface); border-bottom: 1px solid var(--line-soft);
   -webkit-app-region: drag; /* 拖动窗口 */
 }
-.topbar .logo { width: 16px; height: 16px; border-radius: 4px; background: var(--flare); display: grid; place-items: center; flex: none; }
-.topbar .logo i { width: 6px; height: 6px; border-radius: 2px; background: var(--bg); }
+.topbar .logo { width: 16px; height: 16px; flex: none; background: url('../src-tauri/icons/32x32.png') center/contain no-repeat; }
+.topbar .logo i { display: none; }
 .topbar b { font-size: 12.5px; font-weight: 600; }
 .topbar .sp { flex: 1; }
 .topbar .no-drag { -webkit-app-region: no-drag; }

@@ -206,7 +206,7 @@ try {
   } });
   ok('建推进项成功', link.status === 201 && !!link.json.pursuit?.id);
   ok('kind 由客户端传入并保存', link.json.pursuit?.kind === 'link');
-  ok('默认 importance=1', link.json.pursuit?.importance === 1);
+  ok('默认 importance=1（P2）', link.json.pursuit?.importance === 1);
   ok('默认 nature=one_off', link.json.pursuit?.nature === 'one_off');
   ok('带 version 供乐观锁', typeof link.json.pursuit?.version === 'number');
   ok('带 progress/staleness/weight 派生量',
@@ -263,16 +263,51 @@ try {
   ok('done 关闭事项', done.json.pursuit?.status === 'done');
   ok('done 写 completedAt', typeof done.json.pursuit?.completedAt === 'number');
 
-  const afterDone = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
-    action: 'done', version: done.json.pursuit.version,
+  const illegalOnDone = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'smaller', version: done.json.pursuit.version,
   } });
-  ok('已完成事项拒绝再次跟进（400，不误报成设备冲突）', afterDone.status === 400,
-    `status=${afterDone.status}`);
+  ok('已完成拒绝拆小/延期', illegalOnDone.status === 400, `status=${illegalOnDone.status}`);
+
+  const reopened = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'reopen', version: done.json.pursuit.version,
+  } });
+  ok('已完成可撤回为进行中',
+    reopened.json.pursuit?.status === 'active' && reopened.json.pursuit?.completedAt === null);
+
+  const redone = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'done', version: reopened.json.pursuit.version,
+  } });
+  ok('撤回后可再次完成', redone.json.pursuit?.status === 'done');
+
+  const archived = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'archive', version: redone.json.pursuit.version,
+  } });
+  ok('已完成可归档', archived.json.pursuit?.status === 'archived');
+
+  const illegalOnArchived = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'reopen', version: archived.json.pursuit.version,
+  } });
+  ok('已归档拒绝撤回/任何跟进', illegalOnArchived.status === 400, `status=${illegalOnArchived.status}`);
+
+  console.log('\n克隆');
+  const cloned = await api(`/pursuits/${projId}/clone`, { method: 'POST', token: ta });
+  const cloneId = cloned.json.pursuit?.id;
+  ok('已归档项仍可克隆', cloned.status === 201 && cloneId && cloneId !== projId);
+  ok('克隆项进进行中、截止清空、完成时间不复制',
+    cloned.json.pursuit?.status === 'active' && cloned.json.pursuit?.dueAt === null &&
+    cloned.json.pursuit?.completedAt === null);
+  ok('克隆项复制步骤文本但重置为 todo',
+    cloned.json.pursuit?.steps?.length === 5 &&
+    cloned.json.pursuit.steps.every((s) => s.state === 'todo'));
+  const cloneFu = await db();
+  const cloneFuRows = await cloneFu.query('SELECT count(*)::int AS n FROM followups WHERE pursuit_id = $1', [cloneId]);
+  ok('克隆项不复制跟进历史', cloneFuRows.rows[0]?.n === 0);
+  await cloneFu.end();
 
   const followups = await db();
   const fuRows = await followups.query('SELECT action FROM followups WHERE pursuit_id = $1 ORDER BY at', [projId]);
-  ok('跟进历史落库（later/smaller/done 三条，stale 被拒不落库）', fuRows.rowCount === 3, `${fuRows.rowCount} 条`);
-  ok('历史动作齐全', ['later', 'smaller', 'done'].every((a) => fuRows.rows.some((r) => r.action === a)));
+  ok('跟进历史落库（含撤回与归档，非法动作不落库）', fuRows.rowCount === 6, `${fuRows.rowCount} 条`);
+  ok('历史动作齐全', ['later', 'smaller', 'done', 'reopen', 'archive'].every((a) => fuRows.rows.some((r) => r.action === a)));
   await followups.end();
 
   /* ---------------------------------------------------------- 聚焦 */
@@ -358,7 +393,7 @@ try {
   /* ---------------------------------------------------------- 重复 */
   console.log('\n重复规则');
   const rep = await api('/pursuits', { method: 'POST', token: ta, body: {
-    text: '每天吃药', nature: 'recurring', recurrence: { freq: 'daily' }, dueAt: Date.now() - 1000,
+    text: '每天吃药', nature: 'one_off', recurrence: { freq: 'daily' }, dueAt: Date.now() - 1000,
   } });
   const repId = rep.json.pursuit.id;
   await waitUntil(async () => {
@@ -448,6 +483,16 @@ try {
   ok('非法 importance 被拒', badEnum.status === 400);
   const badRec = await api('/pursuits', { method: 'POST', token: ta, body: { text: 'x', recurrence: { freq: 'hourly' } } });
   ok('非法重复规则被拒', badRec.status === 400);
+  const ambiguousRec = await api('/pursuits', { method: 'POST', token: ta, body: {
+    text: 'x', recurrence: { freq: 'daily', byMonthday: 2 },
+  } });
+  ok('每天 + 每月几号这种歧义规则被拒', ambiguousRec.status === 400);
+  const badImportance = await api('/pursuits', { method: 'POST', token: ta, body: { text: 'x', importance: 0 } });
+  ok('importance=0 被拒（只允许 P2/P1/P0）', badImportance.status === 400);
+  const obsoleteAction = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'partial', version: archived.json.pursuit.version,
+  } });
+  ok('已删除的 partial 动作被拒', obsoleteAction.status === 400);
   const junk = await fetch(`${BASE}/pursuits`, {
     method: 'POST', headers: { authorization: `Bearer ${ta}`, 'content-type': 'application/json' }, body: '{ 坏 json',
   });

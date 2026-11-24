@@ -45,25 +45,21 @@ export interface Device {
 /* ============================================================ 推进项领域模型 */
 
 /**
- * 推进项的性质。project 指有多个步骤、需要跨天推进的事；one_off 是一次性；
- * recurring 是周期性的。它决定引擎用哪条循环处理。
+ * 推进项的性质。是否重复完全由 recurrence 决定，不再用 nature 表达。
  */
-export type PursuitNature = 'one_off' | 'recurring' | 'project';
+export type PursuitNature = 'one_off' | 'project';
 
-/** 显式重要性，不靠措辞猜。3 = 最高，由用户或 agent 标记 */
-export type Importance = 0 | 1 | 2 | 3;
-
-/** 启动所需精力。引擎用它匹配用户当前状态（情境闸门） */
-export type Energy = 'low' | 'medium' | 'high';
+/** 重要性：3=P0 最高，2=P1，1=P2 默认 */
+export type Importance = 1 | 2 | 3;
 
 export type PursuitStatus = 'inbox' | 'active' | 'paused' | 'done' | 'archived';
 export type StepState = 'todo' | 'doing' | 'done';
 
 /**
- * 跟进动作。这是用户/agent 对一次跟催的回答，会实时改写后续策略。
- * later=改天、smaller=拆小、archive=不要了、partial=推了一点、ignored=没理。
+ * 跟进动作。done=完成、later=延期、smaller=拆小、archive=归档、reopen=已完成撤回。
+ * 克隆不是跟进动作：它不改原项状态，走独立的 /clone 端点。
  */
-export type FollowupAction = 'done' | 'partial' | 'later' | 'smaller' | 'archive' | 'ignored';
+export type FollowupAction = 'done' | 'later' | 'smaller' | 'archive' | 'reopen';
 
 /** 打扰等级。L1 静默 → L5 归档，连续谱替代旧的强/弱二分 */
 export type NudgeLevel = 1 | 2 | 3 | 4 | 5;
@@ -72,17 +68,14 @@ export type NudgeChannel = 'in_app' | 'notification' | 'takeover';
 export type EntryKind = 'text' | 'link' | 'path' | 'image' | 'audio';
 
 /**
- * 通用重复规则。interval 配合 freq 表达「每 3 天」「每 2 周」。
- * byWeekday 0=周日…6=周六；byMonthday 1..31（月末钳位在引擎里做）。
+ * 重复规则。每个频率只带自己用得上的字段，避免「每天 + 每月几号」这类歧义。
+ * byWeekday 0=周日…6=周六；byMonthday 1..31 月末钳位；byMonth 1..12。
  */
 export interface RecurrenceRule {
-  freq: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'workdays' | 'interval';
-  interval?: number;
+  freq: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
   byWeekday?: number[];
   byMonthday?: number;
   byMonth?: number;
-  /** 农历/节气等扩展留空位，先不实现语义 */
-  calendar?: 'lunar' | 'solar';
 }
 
 /** 触发情境。命中时才推，未命中则攒到合适时机 */
@@ -110,7 +103,6 @@ export interface Pursuit {
 
   nature: PursuitNature;
   importance: Importance;
-  energy: Energy;
   dueAt: number | null;
   recurrence: RecurrenceRule | null;
   context: PursuitContext | null;
@@ -229,7 +221,6 @@ export interface CreatePursuitRequest {
   note?: string | null;
   nature?: PursuitNature;
   importance?: Importance;
-  energy?: Energy;
   dueAt?: number | string | null;
   recurrence?: RecurrenceRule | null;
   context?: PursuitContext | null;
@@ -243,7 +234,6 @@ export interface UpdatePursuitRequest {
   text?: string;
   note?: string | null;
   importance?: Importance;
-  energy?: Energy;
   nature?: PursuitNature;
   dueAt?: number | string | null;
   recurrence?: RecurrenceRule | null;
@@ -327,4 +317,24 @@ export interface Overview {
   nudgesToday: Record<NudgeLevel, number>;
   devices: { total: number; online: number; byPlatform: Record<string, number> };
   users: { total: number };
+}
+
+/* ========================================================== 领域规则（前后端共用） */
+
+/** 所有合法跟进动作。界面、服务端、Agent API、MCP 都从这里取，避免分叉 */
+export const FOLLOWUP_ACTIONS: readonly FollowupAction[] = ['done', 'later', 'smaller', 'archive', 'reopen'];
+
+/** 某状态下允许的动作。已完成只能撤回或归档；归档后没有任何跟进动作 */
+export function actionsFor(status: PursuitStatus): FollowupAction[] {
+  if (status === 'archived') return [];
+  if (status === 'done') return ['archive', 'reopen'];
+  return ['done', 'later', 'smaller', 'archive'];
+}
+
+export const P0: Importance = 3;
+
+/** 一天内到期按 P0 排期；只派生、不写回用户配置 */
+export function effectiveImportance(importance: Importance, dueAt: number | null, nowMs: number): Importance {
+  if (dueAt !== null && dueAt - nowMs <= 24 * 3600_000) return Math.max(importance, P0) as Importance;
+  return importance;
 }

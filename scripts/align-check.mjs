@@ -54,8 +54,9 @@ console.log('\n推进引擎');
 ok('有 drive.tick 主循环', /export async function driveTick/.test(src.drive));
 ok('有四循环：聚焦/微步骤/情境/跟进', /buildFocus/.test(src.drive) && /suggestNextStep/.test(src.policy) &&
   /timeWindow/.test(src.drive) && /followUp/.test(src.drive));
-ok('权重含重要性/逾期/停滞/承诺', /importance \* 20/.test(src.policy) && /staleness/.test(src.policy) &&
-  /commitment/.test(src.policy));
+ok('权重含有效重要性/逾期/停滞/承诺',
+  /effectiveImportance\([^)]*\) \* 20/.test(src.policy) &&
+  /staleness/.test(src.policy) && /commitment/.test(src.policy));
 ok('打扰等级 L1-L5', /NudgeLevel = 1 \| 2 \| 3 \| 4 \| 5/.test(src.types));
 ok('等级按停滞时长分级', /escalateAfterMs\.l[2345]/.test(src.policy));
 ok('每日强打扰配额', /dailyStrongBudget/.test(src.drive) && /dailyStrongBudget/.test(src.types));
@@ -64,7 +65,8 @@ ok('情境闸门：时间窗/设备在线', /timeWindow/.test(src.drive) && /hub
 ok('L5 自动归档不删除', /setStatus\(p\.id, userId, 'archived'\)/.test(src.drive));
 
 console.log('\n跟进是信号不是惩罚');
-ok('六种跟进动作', /FollowupAction = 'done' \| 'partial' \| 'later' \| 'smaller' \| 'archive' \| 'ignored'/.test(src.types));
+ok('五种跟进动作（含撤回，无 partial/ignored）',
+  /FollowupAction = 'done' \| 'later' \| 'smaller' \| 'archive' \| 'reopen'/.test(src.types));
 ok('跟进历史独立表', /CREATE TABLE IF NOT EXISTS followups/.test(src.sql));
 ok('不再有忽略降级/建议删除', !/autoDowngradeAfter|neglectedAfter|建议删除/.test(src.drive) &&
   !/dismiss_count/.test(src.sql));
@@ -97,13 +99,14 @@ ok('涉及 create/decompose/followup/reprioritize/archive', ['create', 'decompos
   .every((k) => src.tools.includes(k)));
 
 console.log('\n重复规则');
-ok('六种频率', /'daily' \| 'weekly' \| 'monthly' \| 'yearly' \| 'workdays' \| 'interval'/.test(src.types));
+ok('五种频率（无 interval/workdays，新增 quarterly）',
+  /freq: 'daily' \| 'weekly' \| 'monthly' \| 'quarterly' \| 'yearly'/.test(src.types));
 ok('月末钳位', /setDayClamped|lastDay|Math\.min\(.*getDate/.test(src.policy));
 ok('逾期基数取 max(due, now)', /Math\.max\(p\.dueAt, nowMs\)/.test(src.drive));
 
 console.log('\n客户端今日推进');
 ok('有今日聚焦卡', /focus/i.test(src.main) && /聚焦/.test(src.main));
-ok('跟进动作按钮', /跟进|推进|拆小|归档/.test(src.main));
+ok('跟进动作按钮', /data-act="clone"|actionsFor/.test(src.main));
 ok('等级驱动表现', /level/.test(src.alarm));
 ok('takeover 关不掉', /takeover:close-blocked/.test(src.takeover));
 ok('静音时段处理', /inQuietHours/.test(src.alarm));
@@ -111,17 +114,30 @@ ok('静音时段处理', /inQuietHours/.test(src.alarm));
 console.log('\n界面计数与跟进回归');
 const mobileSrc = read('app/src/ui/mobile.ts');
 ok('全部计数等于各状态之和', /function countAll/.test(src.main) && /Object\.values\(counts\)/.test(src.main));
-ok('已完成/归档不再给推进按钮',
-  /p\.status === 'done' \|\| p\.status === 'archived'/.test(src.main) &&
-  /p\.status === 'done' \|\| p\.status === 'archived'/.test(mobileSrc));
+ok('按钮按状态派生（actionsFor）',
+  /actionsFor\(p\.status\)/.test(src.main) && /actionsFor\(p\.status\)/.test(mobileSrc));
 ok('跟进只有 HTTP 一条写入路径',
   !/rt\?\.followup\(/.test(src.main) && !/rt\?\.followup\(/.test(mobileSrc));
 ok('重复频率显示中文标签',
   /FREQ_LABEL/.test(src.api) && /FREQ_LABEL/.test(src.main) && /FREQ_LABEL/.test(mobileSrc));
-ok('不重复时隐藏重复参数', /f-rule-extra/.test(src.main) && /extra\.hidden = key === 'none'/.test(src.main));
+ok('重复参数按频率显示，不重复时隐藏',
+  /f-rule-extra/.test(src.main) && /fieldsFor\(key\)\.length === 0/.test(src.main));
 ok('本机在线状态跟随实时通道', /linkState === 'open'/.test(src.main));
-ok('服务端拒绝终态跟进',
-  /TERMINAL_STATUS/.test(src.drive) && /TERMINAL_STATUS/.test(read('server/src/routes/pursuits.ts')));
+ok('服务端按状态拒绝非法跟进',
+  /ACTION_NOT_ALLOWED/.test(src.drive) && /ACTION_NOT_ALLOWED/.test(read('server/src/routes/pursuits.ts')));
+ok('全状态可克隆',
+  /\/pursuits\/:id\/clone/.test(read('server/src/routes/pursuits.ts')) &&
+  /data-act="clone"/.test(src.main) && /mobileClone/.test(mobileSrc));
+ok('重要性 P0/P1/P2，默认 P2',
+  /IMPORTANCE_LABEL/.test(src.api) && /Importance = 1 \| 2 \| 3/.test(src.types) &&
+  /effectiveImportance/.test(src.policy));
+ok('启动精力已删除',
+  !/energy/.test(src.types) && !/Energy/.test(src.api) && !/energy/.test(read('server/src/schema.pg.sql')));
+ok('性质不再有 recurring',
+  /PursuitNature = 'one_off' \| 'project'/.test(src.types) &&
+  !/'recurring'/.test(read('server/src/repo/stats.ts')));
+ok('图标复用应用图标', /src-tauri\/icons\/32x32\.png/.test(src.styles) &&
+  /src-tauri\/icons\/32x32\.png/.test(read('app/src/about.css')));
 
 console.log('\n服务端地址可配置');
 ok('有地址规范化函数', /export function normalizeBaseUrl/.test(src.api));

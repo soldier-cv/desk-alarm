@@ -9,11 +9,13 @@ import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   hhmm, hostOf, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer,
   saveConfig, serverNow, staleLabel, switchServer,
-  versionOf, warmthOf, ENERGY_LABEL, FREQ_LABEL, NATURE_LABEL,
+  versionOf, warmthOf, FREQ_LABEL, IMPORTANCE_LABEL, NATURE_LABEL,
   type CountsResult, type Device, type Followup, type FollowupAction, type FocusResult, type Importance,
   type MyStats, type Overview, type Pursuit, type PursuitStatus, type PursuitView,
   type RecurrenceRule, type ServerMessage, type Settings, type StepState, type Urgency,
 } from '../api';
+import { actionsFor, effectiveImportance } from '../../../shared/types';
+import { buildRecurrence, fieldsFor, ruleFields } from './recurrence-form';
 import {
   FollowupController, dropBannerByPursuit, onBannerChange, pushBanner, type Banner,
 } from '../alarm';
@@ -96,8 +98,26 @@ const localHandled = new Map<string, number>();
 let editingLocal = false;
 let platform: 'web' | 'windows' | 'macos' | 'linux' | 'android' = 'web';
 const isDesktop = () => platform === 'windows' || platform === 'macos' || platform === 'linux';
-let captureImportance: Importance = 0;
-const IMP_TITLE = ['不标：按默认权重排期', '★ 低：略微优先', '★★ 中：优先推进', '★★★ 高：最优先推进'];
+let captureImportance: Importance = 1;
+const IMP_TITLE = ['', 'P2：默认优先级', 'P1：优先推进', 'P0：最高优先级，截止 24 小时内自动按 P0 排期'];
+const ACTION_LABEL: Record<FollowupAction, string> = {
+  done: '完成', later: '延期', smaller: '拆小', archive: '归档', reopen: '撤回',
+};
+
+function ruleFieldsHtml(freq: string, rf: { byWeekday: string; byMonthday: string; byMonth: string }): string {
+  const shown = fieldsFor(freq as Parameters<typeof fieldsFor>[0]);
+  const f = freq === 'yearly' ? 'yearly' : freq === 'quarterly' ? 'quarterly' : freq;
+  return `
+    <div class="rule-grid" style="margin-top:8px">
+      ${shown.includes('weekday')
+        ? `<label>周几（0=日，逗号分隔）<input class="input" id="f-byday" value="${esc(rf.byWeekday)}"></label>` : ''}
+      ${shown.includes('month')
+        ? `<label>月份（1-12）<input class="input" id="f-bymonth" type="number" min="1" max="12" value="${esc(rf.byMonth)}"></label>` : ''}
+      ${shown.includes('monthday')
+        ? `<label>${f === 'yearly' ? '几号' : f === 'quarterly' ? '每季度几号' : '每月几号'}<input class="input" id="f-bymonthday" type="number" min="1" max="31" value="${esc(rf.byMonthday)}"></label>` : ''}
+    </div>
+    <div class="set-actions"><button class="btn sm" data-act="save-rule">保存重复</button></div>`;
+}
 
 const control = new FollowupController({
   onSilent: () => { void refresh(); },
@@ -408,8 +428,8 @@ function renderShell() {
       <span class="lb">已识别</span>
       <span class="chip ${p.kind === 'text' ? '' : 'hot'}">${esc(p.kindLabel)}</span>
       <span class="chip ${p.remindAt ? 'hot' : ''}">${esc(p.remindAt ? `截止：${p.timeLabel}` : '进收件箱')}</span>
-      ${([0, 1, 2, 3] as Importance[]).map((n) =>
-        `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${['不标', '★', '★★', '★★★'][n]}</button>`,
+      ${([3, 2, 1] as Importance[]).map((n) =>
+        `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${IMPORTANCE_LABEL[n]}</button>`,
       ).join('')}`;
   };
   cap.addEventListener('input', preview);
@@ -447,8 +467,8 @@ function renderBanners(list: Banner[]) {
     <div class="weak">
       <div class="weak-l"><b>${esc(b.pursuit.text)}</b><span>${esc(b.reason)}</span></div>
       <div class="weak-acts">
-        <button class="btn sm ghost" data-bact="done" data-id="${esc(b.pursuit.id)}">推进</button>
-        <button class="btn sm" data-bact="later" data-id="${esc(b.pursuit.id)}">改天</button>
+        <button class="btn sm ghost" data-bact="done" data-id="${esc(b.pursuit.id)}">完成</button>
+        <button class="btn sm" data-bact="later" data-id="${esc(b.pursuit.id)}">延期</button>
         <button class="btn sm" data-bact="archive" data-id="${esc(b.pursuit.id)}">归档</button>
       </div>
     </div>`).join('')}</div>`;
@@ -569,9 +589,7 @@ function renderSidebar() {
 }
 
 function natureIcon(n: Pursuit['nature']): string {
-  if (n === 'project') return '◫';
-  if (n === 'recurring') return '↻';
-  return '·';
+  return n === 'project' ? '◫' : '·';
 }
 
 function progressHtml(p: Pursuit): string {
@@ -601,9 +619,9 @@ function focusHtml(): string {
         <div class="fi-reason">${esc(it.reason)}</div>
         ${it.suggestedNextStep ? `<div class="fi-next">下一步：${esc(it.suggestedNextStep)}</div>` : ''}
         <div class="fi-acts">
-          <button class="btn sm solid" data-focus-act="done" data-id="${esc(p.id)}">推进完成</button>
+          <button class="btn sm solid" data-focus-act="done" data-id="${esc(p.id)}">完成</button>
           <button class="btn sm" data-focus-act="smaller" data-id="${esc(p.id)}">拆小</button>
-          <button class="btn sm" data-focus-act="later" data-id="${esc(p.id)}">改天</button>
+          <button class="btn sm" data-focus-act="later" data-id="${esc(p.id)}">延期</button>
           <button class="btn sm" data-focus-act="archive" data-id="${esc(p.id)}">归档</button>
         </div>
       </div>`;
@@ -613,27 +631,29 @@ function focusHtml(): string {
 
 function rowHtml(p: Pursuit): string {
   const u = warmthOf(p);
-  const imp = '●'.repeat(p.importance) + '○'.repeat(3 - p.importance);
+  const eff = effectiveImportance(p.importance, p.dueAt, serverNow());
+  const boosted = eff > p.importance;
+  const impLabel = IMPORTANCE_LABEL[eff] + (boosted ? '↑' : '');
+  const primary = p.status === 'archived'
+    ? '<span class="tag">已归档</span>'
+    : p.status === 'done'
+      ? `<button class="btn sm" data-follow="reopen" data-id="${esc(p.id)}">撤回</button>`
+      : `<button class="btn sm" data-follow="done" data-id="${esc(p.id)}">完成</button>`;
   return `
   <div class="item u-${u}${state.selected === p.id ? ' on' : ''}" data-id="${esc(p.id)}">
-    <div class="p-imp" title="重要性 ${p.importance}">${imp}</div>
+    <div class="p-imp" title="${boosted ? '截止 24 小时内，自动按 P0 排期' : `重要性 ${IMPORTANCE_LABEL[p.importance]}`}">${impLabel}</div>
     <div>
       <div class="it-time">${u === 'none' ? '' : `<i class="udot ${u}"></i>`}
         <span>${esc(dueLabel(p))} · ${esc(staleLabel(p))}</span></div>
       <div class="it-title">${esc(p.text)}</div>
       <div class="it-meta">
         <span class="tag" title="${NATURE_LABEL[p.nature]}">${natureIcon(p.nature)} ${NATURE_LABEL[p.nature]}</span>
-        <span class="tag">精力 ${ENERGY_LABEL[p.energy]}</span>
         ${progressHtml(p)}
         ${p.url ? `<span class="tag host" title="${esc(p.url)}">${esc(hostOf(p.url))}</span>` : ''}
         ${p.path ? `<span class="tag path" title="${esc(p.path)}">${esc(p.path)}</span>` : ''}
       </div>
     </div>
-    <div class="it-act">
-      ${p.status === 'done' || p.status === 'archived'
-        ? `<span class="tag">${p.status === 'done' ? '已完成' : '已归档'}</span>`
-        : `<button class="btn sm" data-follow="done" data-id="${esc(p.id)}">推进</button>`}
-    </div>
+    <div class="it-act">${primary}</div>
   </div>`;
 }
 
@@ -681,7 +701,8 @@ function renderEditor() {
   }
 
   const freq = p.recurrence?.freq ?? 'none';
-  const terminal = p.status === 'done' || p.status === 'archived';
+  const rf = ruleFields(p.recurrence);
+  const ruleFieldsShown = fieldsFor(freq);
   const due = p.dueAt === null ? '没有截止' : `${dayLabel(p.dueAt)} ${hhmm(p.dueAt)}`;
   box.innerHTML = `
     <div class="ed-head">推进详情</div>
@@ -707,17 +728,14 @@ function renderEditor() {
         <textarea class="input ed-textarea" id="f-note" rows="3" placeholder="相关背景、上下文">${esc(p.note ?? '')}</textarea></div>
 
       <div class="fld"><label>重要性</label>
-        <div class="seg">${([0, 1, 2, 3] as Importance[]).map((n) =>
-          `<button data-imp="${n}" class="${p.importance === n ? 'on' : ''}" title="${IMP_TITLE[n]}">${n === 0 ? '不标' : '★'.repeat(n)}</button>`,
-        ).join('')}</div></div>
-
-      <div class="fld"><label>启动精力</label>
-        <div class="seg">${(['low', 'medium', 'high'] as const).map((e) =>
-          `<button data-energy="${e}" class="${p.energy === e ? 'on' : ''}">${ENERGY_LABEL[e]}</button>`,
-        ).join('')}</div></div>
+        <div class="seg">${([3, 2, 1] as Importance[]).map((n) =>
+          `<button data-imp="${n}" class="${p.importance === n ? 'on' : ''}" title="${IMP_TITLE[n]}">${IMPORTANCE_LABEL[n]}</button>`,
+        ).join('')}</div>
+        ${effectiveImportance(p.importance, p.dueAt, serverNow()) > p.importance
+          ? '<div class="hint">截止 24 小时内，排期自动按 P0 计算（不改动你选的值）</div>' : ''}</div>
 
       <div class="fld"><label>性质</label>
-        <div class="seg">${(['one_off', 'recurring', 'project'] as const).map((n) =>
+        <div class="seg">${(['one_off', 'project'] as const).map((n) =>
           `<button data-nature="${n}" class="${p.nature === n ? 'on' : ''}">${NATURE_LABEL[n]}</button>`,
         ).join('')}</div></div>
 
@@ -730,14 +748,7 @@ function renderEditor() {
         <button type="button" class="input sm trigger" id="f-freq" data-v="${freq}">
           <span class="trigger-label">${FREQ_LABEL[freq]}</span>
           <span class="trigger-arrow">⌄</span></button>
-        <div id="f-rule-extra" ${freq === 'none' ? 'hidden' : ''}>
-          <div class="rule-grid" style="margin-top:8px">
-            <label>间隔<input class="input" id="f-interval" type="number" min="1" max="365" value="${p.recurrence?.interval ?? 1}"></label>
-            <label>周几（0=日，逗号分隔）<input class="input" id="f-byday" value="${(p.recurrence?.byWeekday ?? []).join(',')}"></label>
-            <label>每月几号<input class="input" id="f-bymonthday" type="number" min="1" max="31" value="${p.recurrence?.byMonthday ?? ''}"></label>
-          </div>
-          <div class="set-actions"><button class="btn sm" data-act="save-rule">保存重复</button></div>
-        </div></div>
+        <div id="f-rule-extra" ${ruleFieldsShown.length === 0 ? 'hidden' : ''}>${ruleFieldsHtml(freq, rf)}</div></div>
 
       <div class="fld"><label>跟进历史</label>
         ${state.followups.length ? `<div class="fu-list">${state.followups.map((f) => `
@@ -748,13 +759,10 @@ function renderEditor() {
       </div>
     </div>
     <div class="ed-foot">
-      ${terminal
-        ? `<span class="hint">${p.status === 'done' ? '已完成' : '已归档'}，无需继续推进</span>`
-        : `<button class="btn solid" data-act="follow-done">推进</button>
-           <button class="btn" data-act="follow-partial">推了一点</button>
-           <button class="btn" data-act="follow-later">改天</button>
-           <button class="btn" data-act="follow-smaller">拆小</button>
-           <button class="btn danger sp-left" data-act="archive">归档</button>`}
+      ${actionsFor(p.status).map((a) =>
+        `<button class="btn ${a === 'done' ? 'solid' : a === 'archive' ? 'danger sp-left' : ''}" data-act="follow-${a}">${ACTION_LABEL[a]}</button>`,
+      ).join('')}
+      <button class="btn sp-left" data-act="clone">克隆</button>
     </div>`;
 
   const when = $<HTMLButtonElement>('#f-when');
@@ -765,11 +773,19 @@ function renderEditor() {
       .map((v) => ({ value: v, label: FREQ_LABEL[v] }));
     openDropdown(ev.currentTarget as HTMLElement, items, freq, (v) => {
       const key = v as keyof typeof FREQ_LABEL;
+      const current = {
+        byWeekday: $<HTMLInputElement>('#f-byday')?.value ?? rf.byWeekday,
+        byMonthday: $<HTMLInputElement>('#f-bymonthday')?.value ?? rf.byMonthday,
+        byMonth: $<HTMLInputElement>('#f-bymonth')?.value ?? rf.byMonth,
+      };
       freqBtn.dataset.v = v;
       const label = freqBtn.querySelector<HTMLElement>('.trigger-label');
       if (label) label.textContent = FREQ_LABEL[key];
       const extra = $<HTMLElement>('#f-rule-extra');
-      if (extra) extra.hidden = key === 'none';
+      if (extra) {
+        extra.innerHTML = ruleFieldsHtml(v, current);
+        extra.hidden = fieldsFor(key).length === 0;
+      }
     });
   };
 }
@@ -1035,7 +1051,7 @@ function testFollowup(level: 2 | 3 | 4 | 5) {
   const fake: Pursuit = {
     id: `test-${level}-${now}`, userId: '', text: `L${level} 跟进测试：这件事已经停了一阵子`,
     note: null, kind: 'text', url: null, path: null,
-    nature: 'project', importance: 2, energy: 'low', dueAt: null,
+    nature: 'project', importance: 2, dueAt: null,
     recurrence: null, context: null, commitment: null,
     status: 'active', importanceSort: 0, version: 1, createdAt: now, updatedAt: now,
     completedAt: null, lastActivityAt: now - 4 * 86400_000,
@@ -1514,7 +1530,7 @@ async function submitCapture(raw: string) {
     });
     const cap = $<HTMLInputElement>('#cap');
     if (cap) { cap.value = ''; $<HTMLElement>('#parse').hidden = true; }
-    captureImportance = 0;
+    captureImportance = 1;
     flash('已记下');
     void refresh();
   } catch (e) {
@@ -1535,7 +1551,7 @@ async function askLater(id: string) {
   host.className = 'panel-mask';
   host.innerHTML = `
     <div class="panel panel-sm" role="dialog" aria-modal="true">
-      <div class="panel-head"><b>改天推进「${esc((p?.text ?? '').slice(0, 24))}」</b></div>
+      <div class="panel-head"><b>延期「${esc((p?.text ?? '').slice(0, 24))}」</b></div>
       <div class="panel-body">
         <div class="snooze-opts">
           <button class="nav" data-to="${at(1)}">明天 9:00</button>
@@ -1559,8 +1575,8 @@ async function askLater(id: string) {
 async function runFollowup(id: string, action: FollowupAction, extra: Record<string, unknown> = {}) {
   const p = findPursuit(id);
   if (!p && !extra.silent) { flash('这条已经不在了'); return; }
-  if (p && (p.status === 'done' || p.status === 'archived')) {
-    flash('这条已经' + (p.status === 'done' ? '完成' : '归档') + '，不能继续推进');
+  if (p && !actionsFor(p.status).includes(action)) {
+    flash('当前状态不允许这个操作');
     void refresh();
     return;
   }
@@ -1596,6 +1612,17 @@ async function runFollowup(id: string, action: FollowupAction, extra: Record<str
   }
 }
 
+async function runClone(id: string) {
+  try {
+    const r = await api.clone(id);
+    flash('已克隆，步骤状态已重置、截止已清空');
+    state.selected = r.pursuit.id;
+    void refresh();
+  } catch (e) {
+    flash('克隆失败：' + msgOf(e));
+  }
+}
+
 function onListClick(ev: Event) {
   const t = ev.target as HTMLElement;
   const fa = t.closest<HTMLElement>('[data-follow]');
@@ -1608,7 +1635,7 @@ function onListClick(ev: Event) {
 
 function onEditorClick(ev: Event) {
   const t = (ev.target as HTMLElement).closest<HTMLElement>(
-    '[data-act],[data-imp],[data-energy],[data-nature]',
+    '[data-act],[data-imp],[data-nature]',
   );
   const p = findPursuit(state.selected);
   if (!t || !p) return;
@@ -1619,7 +1646,6 @@ function onEditorClick(ev: Event) {
   };
 
   if (t.dataset.imp !== undefined) { savePatch({ importance: Number(t.dataset.imp) }); return; }
-  if (t.dataset.energy) { savePatch({ energy: t.dataset.energy }); return; }
   if (t.dataset.nature) { savePatch({ nature: t.dataset.nature }); return; }
 
   const act = t.dataset.act;
@@ -1635,23 +1661,22 @@ function onEditorClick(ev: Event) {
     case 'clear-due': savePatch({ dueAt: null }); return;
     case 'save-rule': {
       const freq = $<HTMLButtonElement>('#f-freq').dataset.v ?? 'none';
-      const interval = Number($<HTMLInputElement>('#f-interval').value) || 1;
-      const byday = $<HTMLInputElement>('#f-byday').value.trim();
-      const monthday = Number($<HTMLInputElement>('#f-bymonthday').value) || 0;
-      let rule: RecurrenceRule | null = null;
-      if (freq !== 'none') {
-        rule = { freq: freq as RecurrenceRule['freq'], interval };
-        if (byday) rule.byWeekday = byday.split(/[,，\s]+/).map(Number).filter((n) => !Number.isNaN(n));
-        if (monthday) rule.byMonthday = monthday;
-      }
-      savePatch({ recurrence: rule });
+      const fields = {
+        byWeekday: $<HTMLInputElement>('#f-byday')?.value?.trim() ?? '',
+        byMonthday: $<HTMLInputElement>('#f-bymonthday')?.value?.trim() ?? '',
+        byMonth: $<HTMLInputElement>('#f-bymonth')?.value?.trim() ?? '',
+      };
+      savePatch({ recurrence: buildRecurrence(freq as Parameters<typeof buildRecurrence>[0], fields) });
       return;
     }
-    case 'follow-done': void runFollowup(p.id, 'done'); return;
-    case 'follow-partial': void runFollowup(p.id, 'partial'); return;
+    case 'clone': void runClone(p.id); return;
     case 'follow-later': void askLater(p.id); return;
-    case 'follow-smaller': void runFollowup(p.id, 'smaller'); return;
-    case 'archive': void runFollowup(p.id, 'archive'); return;
+    case 'follow-done':
+    case 'follow-smaller':
+    case 'follow-archive':
+    case 'follow-reopen':
+      void runFollowup(p.id, act.slice(7) as FollowupAction);
+      return;
   }
 }
 

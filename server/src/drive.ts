@@ -1,4 +1,5 @@
 import type { FollowupRequest, FocusResult, Importance, Pursuit, PursuitStatus } from '../../shared/types.js';
+import { actionsFor } from '../../shared/types.js';
 import { now, toDt, tx } from './db.js';
 import { hub } from './hub.js';
 import { log } from './log.js';
@@ -105,7 +106,7 @@ async function driveUser(userId: string, nowMs: number): Promise<{ active: numbe
     }
 
     // 静音里别推进循环的到期日，否则静音结束后原截止已被改掉，补发就丢了
-    if (p.nature === 'recurring' && p.dueAt !== null && p.dueAt <= nowMs && p.recurrence && !quiet) {
+    if (p.dueAt !== null && p.dueAt <= nowMs && p.recurrence && !quiet) {
       const next = nextOccurrence(Math.max(p.dueAt, nowMs), p.recurrence);
       if (next !== null) {
         await setDueAt(p.id, userId, next);
@@ -170,7 +171,7 @@ export async function followUp(
   const nowMs = now();
   const p = await getPursuit(pursuitId, userId);
   if (!p) throw new Error('NOT_FOUND');
-  if (p.status === 'done' || p.status === 'archived') throw new Error('TERMINAL_STATUS');
+  if (!actionsFor(p.status).includes(req.action)) throw new Error('ACTION_NOT_ALLOWED');
   const settings = await getSettings(userId);
   const level = levelFor(stalenessOf(p.lastActivityAt, nowMs), settings);
 
@@ -185,6 +186,10 @@ export async function followUp(
       status = 'done';
       completedAt = new Date(nowMs);
       break;
+    case 'reopen':
+      status = 'active';
+      completedAt = null;
+      break;
     case 'archive':
       status = 'archived';
       break;
@@ -197,8 +202,6 @@ export async function followUp(
     }
     case 'smaller':
       extraSteps = req.steps ?? [];
-      break;
-    default:
       break;
   }
 
