@@ -4,8 +4,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { getVersion } from '@tauri-apps/api/app';
+import { autoUpdateEnabled, initUpdater, onUpdateChange, openAbout, setAutoUpdate, updateBadge } from '../about';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   hhmm, hostOf, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer,
@@ -155,6 +154,12 @@ function renderLogin() {
         <div class="login-err" id="err"></div>
         <button class="btn solid login-go" id="go">登录</button>
       </form>
+      <div class="login-foot">
+        DeskAlarm · 把想做却总被搁置的事推进下去
+        <div class="login-row" style="margin-top:8px">
+          <button type="button" class="btn sm" id="about-link">关于 / 检查更新</button>
+        </div>
+      </div>
     </div>
   </div>`;
 
@@ -207,6 +212,7 @@ function renderLogin() {
 
   $<HTMLFormElement>('#form')!.addEventListener('submit', (ev) => { ev.preventDefault(); void submit(); });
   go.addEventListener('click', () => void submit());
+  $<HTMLButtonElement>('#about-link')!.onclick = () => openAbout();
 }
 
 function renderSetup() {
@@ -238,6 +244,7 @@ function renderSetup() {
         密码至少 8 位，两次输入必须一致。
         <div class="login-row" style="margin-top:8px">
           <button type="button" class="btn sm" id="to-login">服务端已有管理员？去登录</button>
+          <button type="button" class="btn sm" id="about-link">关于 / 检查更新</button>
         </div>
       </div>
     </div>
@@ -290,6 +297,7 @@ function renderSetup() {
   $<HTMLFormElement>('#form').addEventListener('submit', (ev) => { ev.preventDefault(); void submit(); });
   go.addEventListener('click', () => void submit());
   $<HTMLButtonElement>('#to-login')!.onclick = () => renderLogin();
+  $<HTMLButtonElement>('#about-link')!.onclick = () => openAbout();
 }
 
 /* ------------------------------------------------------------ 主题 */
@@ -365,7 +373,7 @@ function renderShell() {
   </div>`;
 
   if (isDesktop()) $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
-  $<HTMLButtonElement>('#btn-update')!.onclick = () => onTopUpdateClick();
+  $<HTMLButtonElement>('#btn-update')!.onclick = () => openAbout();
   $<HTMLButtonElement>('#btn-settings')!.onclick = () => setView('settings');
   $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
   renderThemeButton();
@@ -440,185 +448,18 @@ function renderBanners(list: Banner[]) {
   };
 }
 
-/* -------------------------------------------------- 更新（桌面专属） */
+/* -------------------------------------------------- 更新状态（顶栏） */
 
-interface UpdateInfo {
-  available: boolean;
-  currentVersion: string;
-  latestVersion: string;
-  source: string;
-  sourceUrl: string;
-  mirrorStale: boolean;
-  message: string;
-  releasePage: string;
-}
-
-const UPDATE_RESULT_KEY = 'deskalarm.updateResult';
-const AUTO_INTERVAL_MS = 30 * 60_000;
-const AUTO_UPDATE_KEY = 'deskalarm.autoUpdate';
-
-interface UpdateResult { at: number; available: boolean; version: string; message: string }
-let downloadedVersion: string | null = null;
-
-function lastUpdateResult(): UpdateResult | null {
-  try {
-    return JSON.parse(localStorage.getItem(UPDATE_RESULT_KEY) ?? 'null') as UpdateResult | null;
-  } catch { return null; }
-}
-
-function renderUpdateStatus() {
-  const r = lastUpdateResult();
-  const ready = !!r?.available && downloadedVersion === r.version;
-  const status = $<HTMLElement>('#update-status');
-  if (status) {
-    status.textContent = !r ? '尚未检查'
-      : !r.available ? `上次检查 ${new Date(r.at).toLocaleString('zh-CN')}：${r.message || '已是最新'}`
-      : ready ? `v${r.version} 已下载，点左下角图标安装`
-      : `发现 v${r.version}，点左下角下载图标更新`;
-  }
-  const install = $<HTMLButtonElement>('#set-install');
-  if (install) {
-    install.hidden = !r?.available;
-    install.textContent = !r?.available ? '' : ready ? `安装 v${r.version}` : `下载 v${r.version}`;
-  }
+function renderUpdateBadge() {
   const btn = $<HTMLButtonElement>('#btn-update');
-  if (btn) {
-    btn.classList.toggle('has-update', !!r?.available);
-    btn.title = !r?.available ? '检查更新' : ready ? `安装 v${r.version}` : `下载更新 v${r.version}`;
-    btn.setAttribute('aria-label', btn.title);
-  }
+  if (!btn) return;
+  const s = updateBadge();
+  btn.classList.toggle('has-update', s.available);
+  const title = !s.available ? '检查更新' : s.ready ? `安装 v${s.version}` : `下载更新 v${s.version}`;
+  btn.title = title;
+  btn.setAttribute('aria-label', title);
 }
-
-async function invalidateStaleUpdateResult() {
-  const r = lastUpdateResult();
-  if (!r?.available || !hasTauri()) return;
-  try {
-    const cur = await getVersion();
-    if (!versionNewer(r.version, cur)) {
-      localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify({
-        ...r, available: false, message: `当前已是最新版本 v${cur}`,
-      }));
-      downloadedVersion = null;
-    }
-  } catch { /* 拿不到版本就保留原样 */ }
-}
-
-function versionNewer(a: string, b: string): boolean {
-  const parse = (s: string) => s.replace(/^[vV]/, '').split('.').map((p) => parseInt(p, 10) || 0);
-  const x = parse(a), y = parse(b);
-  const n = Math.max(x.length, y.length);
-  for (let i = 0; i < n; i++) {
-    const l = x[i] ?? 0, r = y[i] ?? 0;
-    if (l !== r) return l > r;
-  }
-  return false;
-}
-
-function rememberResult(info: UpdateInfo): UpdateResult {
-  const prev = lastUpdateResult();
-  if (!info.available || (prev && prev.version !== info.latestVersion)) downloadedVersion = null;
-  const r: UpdateResult = {
-    at: Date.now(), available: info.available,
-    version: info.latestVersion, message: info.message,
-  };
-  localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify(r));
-  renderUpdateStatus();
-  return r;
-}
-
-function autoCheckUpdate(force = false) {
-  if (!force && localStorage.getItem(AUTO_UPDATE_KEY) !== 'on') return;
-  if (!hasTauri()) return;
-  void invoke<UpdateInfo>('check_update')
-    .then((info) => {
-      if (!info) return;
-      const r = rememberResult(info);
-      if (r.available) flash(`发现新版本 v${r.version}，点左下角下载图标更新`);
-    })
-    .catch(() => { /* 后台检查失败不该打扰用户 */ });
-}
-
-async function checkUpdate() {
-  const btn = $<HTMLButtonElement>('#btn-update');
-  const setBtn = $<HTMLButtonElement>('#set-update');
-  if (!hasTauri()) { flash('检查更新只在客户端里能用'); return; }
-  const oldSet = setBtn?.textContent ?? '';
-  if (btn) btn.disabled = true;
-  if (setBtn) { setBtn.disabled = true; setBtn.textContent = '检查中…'; }
-  try {
-    const info = await invoke<UpdateInfo>('check_update');
-    if (!info) return;
-    const r = rememberResult(info);
-    flash(r.available ? `发现新版本 v${r.version}，点左下角下载图标更新` : (info.message || '当前已是最新版本'));
-  } catch (err) {
-    flash('检查更新失败：' + (err instanceof Error ? err.message : String(err)));
-  } finally {
-    if (btn) btn.disabled = false;
-    if (setBtn) { setBtn.disabled = false; setBtn.textContent = oldSet || '检查更新'; }
-    renderUpdateStatus();
-  }
-}
-
-async function downloadUpdate() {
-  if (!hasTauri()) return;
-  const top = $<HTMLButtonElement>('#btn-update');
-  const set = $<HTMLButtonElement>('#set-install');
-  if (top) top.disabled = true;
-  if (set) { set.disabled = true; set.textContent = '下载中…'; }
-  try {
-    const version = await invoke<string>('download_update');
-    if (!version) return;
-    downloadedVersion = version;
-    flash(`v${version} 下载完成，点「安装」开始安装`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('已是最新')) {
-      const prev = lastUpdateResult();
-      if (prev) localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify({ ...prev, available: false, message: msg }));
-      downloadedVersion = null;
-    }
-    flash('下载失败：' + msg);
-  } finally {
-    if (top) top.disabled = false;
-    renderUpdateStatus();
-  }
-}
-
-async function installUpdate() {
-  if (!hasTauri()) return;
-  const top = $<HTMLButtonElement>('#btn-update');
-  const set = $<HTMLButtonElement>('#set-install');
-  if (top) top.disabled = true;
-  if (set) { set.disabled = true; set.textContent = '安装中…'; }
-  const prev = lastUpdateResult();
-  if (prev) localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify({ ...prev, available: false }));
-  downloadedVersion = null;
-  try {
-    const done = await invoke<string>('install_update');
-    flash(done || '更新已安装，重启后生效');
-    await relaunch();
-  } catch (err) {
-    if (prev) localStorage.setItem(UPDATE_RESULT_KEY, JSON.stringify(prev));
-    flash('安装失败：' + (err instanceof Error ? err.message : String(err)));
-  } finally {
-    if (top) top.disabled = false;
-    renderUpdateStatus();
-  }
-}
-
-function onTopUpdateClick() {
-  const r = lastUpdateResult();
-  if (!r?.available) void checkUpdate();
-  else if (downloadedVersion === r.version) void installUpdate();
-  else void downloadUpdate();
-}
-
-function onInstallClick() {
-  const r = lastUpdateResult();
-  if (!r?.available) return;
-  if (downloadedVersion === r.version) void installUpdate();
-  else void downloadUpdate();
-}
+onUpdateChange(renderUpdateBadge);
 
 /* ------------------------------------------------------------ 提示 */
 
@@ -1000,9 +841,8 @@ function renderSettingsView(box: HTMLElement) {
         <input type="checkbox" class="switch" id="set-auto"></div>` : ''}
       <div class="set-row"><div><b>自动检查更新</b><small>可选。开启后启动时和每 30 分钟检查一次，只提示不安装</small></div>
         <input type="checkbox" class="switch" id="set-auto-update"></div>
-      <div class="set-row"><div><b>更新</b><small id="update-status">尚未检查</small></div>
-        <div class="set-actions"><button class="btn sm" id="set-update">检查更新</button>
-          <button class="btn solid sm" id="set-install" hidden></button></div></div>
+      <div class="set-row"><div><b>关于 / 更新</b><small>项目简介、版本信息，检查与安装最新版</small></div>
+        <button class="btn sm" id="set-about">打开</button></div>
     </section>
 
     <section class="set-card" id="set-pace">
@@ -1080,11 +920,8 @@ function renderSettingsView(box: HTMLElement) {
     });
   };
   const autoUpdate = $<HTMLInputElement>('#set-auto-update');
-  autoUpdate.checked = localStorage.getItem(AUTO_UPDATE_KEY) === 'on';
-  autoUpdate.onchange = () => {
-    localStorage.setItem(AUTO_UPDATE_KEY, autoUpdate.checked ? 'on' : 'off');
-    if (autoUpdate.checked) autoCheckUpdate(true);
-  };
+  autoUpdate.checked = autoUpdateEnabled();
+  autoUpdate.onchange = () => setAutoUpdate(autoUpdate.checked);
   for (const id of ['set-quiet-start', 'set-quiet-end', 'set-focus-at'] as const) {
     $<HTMLButtonElement>(`#${id}`).onclick = (ev) => {
       const b = ev.currentTarget as HTMLElement;
@@ -1114,14 +951,13 @@ function renderSettingsView(box: HTMLElement) {
       b.querySelector<HTMLElement>('.trigger-label')!.textContent = v;
     });
   };
-  renderUpdateStatus();
+  renderUpdateBadge();
   const auto = $<HTMLInputElement>('#set-auto');
   if (auto) {
     void native<boolean>('is_autostart_enabled').then((on) => { if (on !== null) auto.checked = on; });
     auto.onchange = () => void native('set_autostart', { enable: auto.checked });
   }
-  $<HTMLButtonElement>('#set-update').onclick = () => void checkUpdate();
-  $<HTMLButtonElement>('#set-install').onclick = () => onInstallClick();
+  $<HTMLButtonElement>('#set-about').onclick = () => openAbout();
   $<HTMLButtonElement>('#set-ping').onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
   $<HTMLButtonElement>('#set-save').onclick = () => void saveSettingsForm();
   $<HTMLButtonElement>('#log-save').onclick = () => void saveLogPolicy();
@@ -1984,7 +1820,6 @@ function wireEvents() {
 function boot() {
   renderShell();
   wireEvents();
-  void invalidateStaleUpdateResult().then(renderUpdateStatus);
   setLink('connecting');
   if (hasTauri()) {
     if (isDesktop()) void native('set_close_behavior', { behavior: closeBehavior() });
@@ -1996,11 +1831,7 @@ function boot() {
 
   if (!loadConfig().device) window.setInterval(() => void refresh(), 10_000);
 
-  renderUpdateStatus();
-  autoCheckUpdate();
-  if (localStorage.getItem(AUTO_UPDATE_KEY) === 'on') {
-    window.setInterval(() => autoCheckUpdate(), AUTO_INTERVAL_MS);
-  }
+  renderUpdateBadge();
   tickUrgency();
   window.setInterval(tickUrgency, 20_000);
 }
@@ -2056,6 +1887,7 @@ onUnauthorized(() => { rt?.close(); location.reload(); });
 
 (async () => {
   platform = await getPlatform();
+  initUpdater(platform, flash);
   const cfg = loadConfig();
   if (!cfg.token && !cfg.baseUrl) { renderSetup(); return; }
   try {

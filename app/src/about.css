@@ -1,0 +1,46 @@
+/* 关于 / 更新弹层。两端共用，颜色只引用各自主题里都有的变量。 */
+[hidden] { display: none !important; }
+.abt-mask {
+  position: fixed; inset: 0; z-index: 60;
+  background: var(--scrim);
+  display: grid; place-items: center; padding: 20px;
+}
+.abt-card {
+  width: min(420px, 100%);
+  max-height: 85dvh; overflow-y: auto;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--line-input);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+}
+.abt-head {
+  display: flex; align-items: center; gap: 11px;
+  padding: 15px 16px; border-bottom: 1px solid var(--line-soft);
+}
+.abt-mark {
+  width: 28px; height: 28px; flex: none; border-radius: 8px;
+  border: 1.5px solid var(--text); display: grid; place-items: center;
+}
+.abt-mark i { width: 11px; height: 11px; border-radius: 3px; background: var(--text); }
+.abt-head b { display: block; font-size: 14px; font-weight: 600; }
+.abt-head small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.abt-x {
+  margin-left: auto; width: 28px; height: 28px; flex: none;
+  display: grid; place-items: center; font-size: 19px; line-height: 1;
+  background: none; border: none;
+  color: var(--muted); border-radius: var(--r-sm);
+}
+.abt-x:hover { background: var(--hover); color: var(--text); }
+.abt-body { padding: 16px; }
+.abt-desc { font-size: 12.5px; line-height: 1.75; color: var(--muted); }
+.abt-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.abt-links a {
+  font-size: 12px; color: var(--text); text-decoration: none;
+  border: 1px solid var(--line-input); border-radius: var(--r-sm);
+  padding: 5px 9px; background: var(--raised);
+}
+.abt-links a:hover { background: var(--hover); }
+.abt-update { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line-soft); }
+.abt-sec-title { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.abt-status { font-size: 12px; color: var(--muted); line-height: 1.6; min-height: 20px; }
+.abt-acts { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }

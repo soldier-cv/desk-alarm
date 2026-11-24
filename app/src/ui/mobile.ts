@@ -3,12 +3,12 @@
  * 布局按手机重做：顶部状态 + 随手记 / 今天 / 设置，点推进项进详情页。
  */
 import { invoke } from '@tauri-apps/api/core';
-import { getVersion } from '@tauri-apps/api/app';
+import { initUpdater, openAbout } from '../about';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer, saveConfig,
   serverNow, staleLabel, switchServer, versionOf, warmthOf, ENERGY_LABEL, NATURE_LABEL,
-  type Followup, type FollowupAction, type FocusResult, type Importance,
+  type ClientPlatform, type Followup, type FollowupAction, type FocusResult, type Importance,
   type NudgeLevel, type Pursuit, type PursuitStatus, type RecurrenceRule,
   type ServerMessage, type Settings, type StepState,
 } from '../api';
@@ -21,7 +21,7 @@ const app = document.getElementById('app')!;
 type View = 'capture' | 'today' | 'detail' | 'settings';
 type ListKind = 'today' | 'inbox' | 'all';
 
-let platform = 'android';
+let platform: ClientPlatform = 'android';
 let view: View = 'capture';
 let listKind: ListKind = 'today';
 let rt: Realtime | null = null;
@@ -554,12 +554,9 @@ function renderSettings() {
         </select></div>
     </div>
     <div class="set-group">
-      <h3>应用更新</h3>
-      <div class="set-row"><div><div class="lbl">当前版本</div><div class="sub">检查并安装最新版</div></div>
-        <span class="set-val" id="curver">v—</span></div>
-      <div class="set-row"><div><div class="lbl" id="upd-status">检查结果会显示在这里</div></div></div>
-      <button class="btn block" id="check-upd" style="margin-top:8px">检查更新</button>
-      <button class="btn solid block" id="do-upd" style="margin-top:8px;display:none">下载并安装</button>
+      <h3>关于 / 更新</h3>
+      <div class="set-row"><div><div class="lbl">项目信息、版本与更新</div><div class="sub">查看简介，检查并安装最新版</div></div></div>
+      <button class="btn block" id="open-about" style="margin-top:8px">打开关于</button>
     </div>
     <div class="set-group">
       <button class="btn block" id="ping">测试通知（确认能提醒）</button>
@@ -601,42 +598,10 @@ function renderSettings() {
       pfMsg.textContent = '保存失败，检查服务端连接'; pfMsg.className = 'probe bad';
     }
   };
-  if (hasTauri()) void getVersion().then((v) => {
-    const el = document.getElementById('curver');
-    if (el) el.textContent = 'v' + v;
-  }).catch(() => {});
   document.getElementById('theme')!.onchange = (ev) => {
     saveTheme((ev.target as HTMLSelectElement).value as 'dark' | 'morandi');
   };
-  let pendingApk: { url: string; name: string } | null = null;
-  const statusEl = document.getElementById('upd-status')!;
-  document.getElementById('check-upd')!.onclick = async () => {
-    statusEl.textContent = '检查中…';
-    try {
-      const r = await invoke<{ available: boolean; currentVersion: string; latestVersion: string; sourceUrl: string; message: string }>('check_update');
-      document.getElementById('curver')!.textContent = 'v' + r.currentVersion;
-      if (!r.available) { statusEl.textContent = r.message || '当前已是最新版本'; pendingApk = null; return; }
-      statusEl.textContent = '发现新版本 v' + r.latestVersion + '，可下载安装';
-      pendingApk = {
-        url: r.sourceUrl,
-        name: 'deskalarm_' + r.latestVersion.replace(/^v/, '') + '_android-universal.apk',
-      };
-      (document.getElementById('do-upd') as HTMLElement).style.display = 'flex';
-    } catch (e) {
-      statusEl.textContent = '检查失败：' + msgOf(e);
-    }
-  };
-  document.getElementById('do-upd')!.onclick = async () => {
-    if (!pendingApk) return;
-    statusEl.textContent = '开始下载，请在通知栏查看进度…';
-    try {
-      await invoke('plugin:apk-installer|download_and_install', pendingApk);
-      statusEl.textContent = '下载完成，请在系统安装器中确认安装';
-    } catch (e) {
-      const msg = msgOf(e);
-      statusEl.textContent = msg === 'NEED_INSTALL_PERMISSION' ? '请先允许「安装未知应用」后重试' : '安装失败：' + msg;
-    }
-  };
+  document.getElementById('open-about')!.onclick = () => openAbout();
   document.getElementById('ping')!.onclick = () => { notify('试响', '如果你看到这条通知，说明手机通知正常'); toast('已发通知'); };
   document.getElementById('logout')!.onclick = () => {
     rt?.close(); clearToken(); location.reload();
@@ -744,6 +709,7 @@ function renderAuth(needed: boolean) {
       <div class="err" id="err"></div>
       <button class="btn solid" id="go">${needed ? '创建管理员' : '登录'}</button>
       ${needed ? '<div class="foot">服务端已有管理员？<a id="to-login">去登录</a></div>' : ''}
+      <button type="button" class="btn block" id="about-link" style="margin-top:12px;min-height:38px;font-size:13px">关于 / 检查更新</button>
     </div>
   </div>`;
 
@@ -751,6 +717,7 @@ function renderAuth(needed: boolean) {
   const base = document.getElementById('base') as HTMLInputElement;
   const probeEl = document.getElementById('probe')!;
   document.getElementById('to-login')?.addEventListener('click', () => renderAuth(false));
+  document.getElementById('about-link')!.onclick = () => openAbout();
 
   const testConn = async () => {
     const norm = normalizeBaseUrl(base.value);
@@ -823,6 +790,7 @@ onUnauthorized(() => { rt?.close(); location.reload(); });
 (async () => {
   applyTheme(loadTheme());
   platform = await getPlatform();
+  initUpdater(platform, toast);
   const cfg = loadConfig();
   if (!cfg.token) {
     try {
