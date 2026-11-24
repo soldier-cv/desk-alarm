@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v1.1.2] - 2026-11-24
+
+### Fixed
+- L4 测试接管窗口不弹出时不再静默失败：invoke 错误改为可见提示；接管页加载完补发一次 payload，避免亮窗早于监听注册时事件丢失。
+
 ## [v1.1.1] - 2026-11-24
 
 ### Added
