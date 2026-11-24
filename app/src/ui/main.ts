@@ -113,7 +113,8 @@ const control = new FollowupController({
       serverTs: serverNow(), stage: 'banner', muted: false,
     };
     lastTakeover = payload;
-    void invoke('show_takeover', payload).catch((err: unknown) => {
+    // Rust 命令签名是 show_takeover(payload)，Tauri 按参数名取键，别把字段摊到顶层
+    void invoke('show_takeover', { payload }).catch((err: unknown) => {
       flash('接管窗口启动失败：' + (err instanceof Error ? err.message : String(err)));
     });
   },

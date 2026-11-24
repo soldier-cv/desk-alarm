@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v1.1.3] - 2026-11-24
+
+### Fixed
+- 桌面端 L4 接管窗口启动失败：`show_takeover` 的 invoke 参数没按 Rust 命令签名包进 `payload` 键，Tauri 反序列化直接报错，窗口弹不出来；现已按参数名传参，接管窗口恢复正常。
+
 ## [v1.1.2] - 2026-11-24
 
 ### Fixed
