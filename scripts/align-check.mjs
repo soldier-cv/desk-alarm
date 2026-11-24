@@ -108,6 +108,21 @@ ok('等级驱动表现', /level/.test(src.alarm));
 ok('takeover 关不掉', /takeover:close-blocked/.test(src.takeover));
 ok('静音时段处理', /inQuietHours/.test(src.alarm));
 
+console.log('\n界面计数与跟进回归');
+const mobileSrc = read('app/src/ui/mobile.ts');
+ok('全部计数等于各状态之和', /function countAll/.test(src.main) && /Object\.values\(counts\)/.test(src.main));
+ok('已完成/归档不再给推进按钮',
+  /p\.status === 'done' \|\| p\.status === 'archived'/.test(src.main) &&
+  /p\.status === 'done' \|\| p\.status === 'archived'/.test(mobileSrc));
+ok('跟进只有 HTTP 一条写入路径',
+  !/rt\?\.followup\(/.test(src.main) && !/rt\?\.followup\(/.test(mobileSrc));
+ok('重复频率显示中文标签',
+  /FREQ_LABEL/.test(src.api) && /FREQ_LABEL/.test(src.main) && /FREQ_LABEL/.test(mobileSrc));
+ok('不重复时隐藏重复参数', /f-rule-extra/.test(src.main) && /extra\.hidden = key === 'none'/.test(src.main));
+ok('本机在线状态跟随实时通道', /linkState === 'open'/.test(src.main));
+ok('服务端拒绝终态跟进',
+  /TERMINAL_STATUS/.test(src.drive) && /TERMINAL_STATUS/.test(read('server/src/routes/pursuits.ts')));
+
 console.log('\n服务端地址可配置');
 ok('有地址规范化函数', /export function normalizeBaseUrl/.test(src.api));
 ok('有连通性探测', /export async function probeServer/.test(src.api));

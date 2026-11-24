@@ -214,6 +214,11 @@ export async function pursuitRoutes(app: FastifyInstance) {
       if (err instanceof Error && err.message === 'NOT_FOUND') {
         return reply.code(404).send({ error: 'NOT_FOUND', message: '推进项不存在' });
       }
+      if (err instanceof Error && err.message === 'TERMINAL_STATUS') {
+        return reply.code(400).send({
+          error: 'TERMINAL_STATUS', message: '已完成或归档的推进项不能继续跟进',
+        });
+      }
       throw err;
     }
   });

@@ -45,6 +45,9 @@ function writeError(reply: FastifyReply, e: unknown) {
   if (/找不到|不存在|NOT_FOUND/.test(message)) {
     return reply.code(404).send({ error: 'NOT_FOUND', message });
   }
+  if (/TERMINAL_STATUS|已完成或归档/.test(message)) {
+    return reply.code(400).send({ error: 'TERMINAL_STATUS', message: '已完成或归档的推进项不能继续跟进' });
+  }
   throw e;
 }
 

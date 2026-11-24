@@ -6,8 +6,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AddStepRequest, AgentScope, AgentToken, CreatePursuitRequest, Device, Followup,
   FollowupAction, FollowupRequest, FocusResult, Importance, LoginResponse, MyStats,
-  NudgeLevel, Overview, Pursuit, PursuitStatus, Role, ServerMessage, Settings, Step, StepState,
-  UpdatePursuitRequest, UpdateStepRequest, User,
+  NudgeLevel, Overview, Pursuit, PursuitStatus, RecurrenceRule, Role, ServerMessage, Settings,
+  Step, StepState, UpdatePursuitRequest, UpdateStepRequest, User,
 } from '../../shared/types';
 
 export type {
@@ -599,4 +599,9 @@ export const NATURE_LABEL: Record<Pursuit['nature'], string> = {
 
 export const ENERGY_LABEL: Record<Pursuit['energy'], string> = {
   low: '低', medium: '中', high: '高',
+};
+
+export const FREQ_LABEL: Record<RecurrenceRule['freq'] | 'none', string> = {
+  none: '不重复', daily: '每天', weekly: '每周', monthly: '每月',
+  yearly: '每年', workdays: '工作日', interval: '按间隔天数',
 };

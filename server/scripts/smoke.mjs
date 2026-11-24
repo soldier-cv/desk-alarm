@@ -263,6 +263,12 @@ try {
   ok('done 关闭事项', done.json.pursuit?.status === 'done');
   ok('done 写 completedAt', typeof done.json.pursuit?.completedAt === 'number');
 
+  const afterDone = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'done', version: done.json.pursuit.version,
+  } });
+  ok('已完成事项拒绝再次跟进（400，不误报成设备冲突）', afterDone.status === 400,
+    `status=${afterDone.status}`);
+
   const followups = await db();
   const fuRows = await followups.query('SELECT action FROM followups WHERE pursuit_id = $1 ORDER BY at', [projId]);
   ok('跟进历史落库（later/smaller/done 三条，stale 被拒不落库）', fuRows.rowCount === 3, `${fuRows.rowCount} 条`);

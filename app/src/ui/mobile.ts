@@ -7,7 +7,7 @@ import { initUpdater, openAbout } from '../about';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer, saveConfig,
-  serverNow, staleLabel, switchServer, versionOf, warmthOf, ENERGY_LABEL, NATURE_LABEL,
+  serverNow, staleLabel, switchServer, versionOf, warmthOf, ENERGY_LABEL, FREQ_LABEL, NATURE_LABEL,
   type ClientPlatform, type Followup, type FollowupAction, type FocusResult, type Importance,
   type NudgeLevel, type Pursuit, type PursuitStatus, type RecurrenceRule,
   type ServerMessage, type Settings, type StepState,
@@ -366,8 +366,8 @@ function renderDetail() {
       <div class="set-group">
         <h3>重复规则</h3>
         <select id="rule-freq" class="m-select">
-          ${(['none', 'daily', 'weekly', 'monthly', 'yearly', 'workdays', 'interval'] as const).map((f) =>
-            `<option value="${f}" ${(p.recurrence?.freq ?? 'none') === f ? 'selected' : ''}>${f === 'none' ? '不重复' : f}</option>`).join('')}
+          ${(Object.keys(FREQ_LABEL) as Array<keyof typeof FREQ_LABEL>).map((f) =>
+            `<option value="${f}" ${(p.recurrence?.freq ?? 'none') === f ? 'selected' : ''}>${FREQ_LABEL[f]}</option>`).join('')}
         </select>
         <input class="input" id="rule-interval" type="number" min="1" value="${p.recurrence?.interval ?? 1}" placeholder="间隔天数">
         <button class="btn block" id="save-rule" style="margin-top:10px">保存重复</button>
@@ -455,6 +455,10 @@ async function patchPursuit(p: Pursuit, patch: Record<string, unknown>) {
 async function mobileFollowup(id: string, action: FollowupAction, extra: Record<string, unknown> = {}) {
   const p = findPursuit(id);
   if (!p) { toast('这条已经不在了'); return; }
+  if (p.status === 'done' || p.status === 'archived') {
+    toast('这条已经' + (p.status === 'done' ? '完成' : '归档') + '，不能继续推进');
+    return;
+  }
   if (action === 'smaller' && !extra.steps) {
     const value = window.prompt('拆成 2-3 个能立刻动手的小步骤，用换行分隔', p.text);
     if (value === null) return;
@@ -470,7 +474,7 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
   }
   try {
     localHandled.set(id, Date.now());
-    if (!extra.steps && !extra.to) rt?.followup(id, action, versionOf(p));
+    // 跟进只有 HTTP 一条写入路径；WS 再发一次会用同一个 version 触发乐观锁冲突
     await api.followup(id, {
       action, version: versionOf(p),
       ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),

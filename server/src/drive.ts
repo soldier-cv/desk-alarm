@@ -1,4 +1,4 @@
-import type { FollowupRequest, FocusResult, Importance, Pursuit } from '../../shared/types.js';
+import type { FollowupRequest, FocusResult, Importance, Pursuit, PursuitStatus } from '../../shared/types.js';
 import { now, toDt, tx } from './db.js';
 import { hub } from './hub.js';
 import { log } from './log.js';
@@ -170,12 +170,13 @@ export async function followUp(
   const nowMs = now();
   const p = await getPursuit(pursuitId, userId);
   if (!p) throw new Error('NOT_FOUND');
+  if (p.status === 'done' || p.status === 'archived') throw new Error('TERMINAL_STATUS');
   const settings = await getSettings(userId);
   const level = levelFor(stalenessOf(p.lastActivityAt, nowMs), settings);
 
   const requested = typeof req.to === 'number' ? req.to : req.to ? Date.parse(req.to) : Number.NaN;
   let dueAt = toDt(p.dueAt);
-  let status = p.status;
+  let status: PursuitStatus = p.status;
   let completedAt = toDt(p.completedAt);
   let extraSteps: string[] = [];
 
