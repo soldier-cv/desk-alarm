@@ -185,6 +185,9 @@ document.addEventListener('keydown', (ev) => {
 
 listen<Payload>('takeover:show', (ev) => render(ev.payload));
 
+// 本页加载完成；亮窗那一刻若事件发生在前，主窗口会据此补发一次
+void emit('takeover:ready');
+
 listen('takeover:close-blocked', () => {
   el.root.classList.add('shake');
 });

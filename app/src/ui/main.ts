@@ -84,6 +84,12 @@ const state = {
 };
 
 let rt: Realtime | null = null;
+type TakeoverPayload = Record<string, unknown>;
+/** 接管窗口的 webview 未必在亮窗时已加载完；它加载完会说一声，这里补发一次 payload */
+let lastTakeover: TakeoverPayload | null = null;
+listen('takeover:ready', () => {
+  if (lastTakeover) void emit('takeover:show', lastTakeover);
+});
 /** 本机刚处理过的项，别把服务端广播误报成"别的设备处理了" */
 const localHandled = new Map<string, number>();
 let editingLocal = false;
@@ -102,9 +108,13 @@ const control = new FollowupController({
   },
   onBanner: (p, level, reason) => pushBanner(p, reason, level),
   onTakeover: (p, level, reason) => {
-    quiet('show_takeover', {
+    const payload: TakeoverPayload = {
       pursuit: p, level, channel: 'takeover', reason,
       serverTs: serverNow(), stage: 'banner', muted: false,
+    };
+    lastTakeover = payload;
+    void invoke('show_takeover', payload).catch((err: unknown) => {
+      flash('接管窗口启动失败：' + (err instanceof Error ? err.message : String(err)));
     });
   },
   onArchive: (p) => {
@@ -112,6 +122,7 @@ const control = new FollowupController({
     void refresh();
   },
   onStop: (p, reason) => {
+    lastTakeover = null;
     quiet('hide_takeover');
     dropBannerByPursuit(p.id);
     if (reason === 'elsewhere' && Date.now() - (localHandled.get(p.id) ?? 0) > 3000) {
