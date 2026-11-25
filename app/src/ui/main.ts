@@ -7,18 +7,17 @@ import { emit, listen } from '@tauri-apps/api/event';
 import { autoUpdateEnabled, initUpdater, onUpdateChange, openAbout, setAutoUpdate, updateBadge } from '../about';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
-  hhmm, hostOf, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer,
-  saveConfig, serverNow, staleLabel, switchServer,
-  versionOf, warmthOf, ENERGY_LABEL, NATURE_LABEL,
-  type CountsResult, type Device, type Followup, type FollowupAction, type FocusResult, type Importance,
+  hhmm, hostOf, levelForStrength, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized,
+  parseInput, probeServer, saveConfig, serverNow, staleLabel, switchServer,
+  versionOf, warmthOf, ENERGY_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL,
+  type CountsResult, type Device, type Followup, type FollowupAction, type FocusResult,
   type MyStats, type Overview, type Pursuit, type PursuitStatus, type PursuitView,
+  type ReminderStrength,
   type RecurrenceRule, type ServerMessage, type Settings, type StepState, type Urgency,
 } from '../api';
-import {
-  FollowupController, dropBannerByPursuit, onBannerChange, pushBanner, type Banner,
-} from '../alarm';
+import { FollowupController } from '../alarm';
 import { THEMES, applyTheme, loadTheme, saveTheme } from '../theme';
-import { openDropdown, openTimePicker } from '../widgets';
+import { openDropdown, openStepsDialog, openTimePicker } from '../widgets';
 import '../styles.css';
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -84,9 +83,46 @@ const state = {
 };
 
 let rt: Realtime | null = null;
-type TakeoverPayload = Record<string, unknown>;
-/** 接管窗口的 webview 未必在亮窗时已加载完；它加载完会说一声，这里补发一次 payload */
+interface TakeoverPayload {
+  items: Pursuit[];
+  index: number;
+  reason: string;
+  serverTs: number;
+  muted: boolean;
+}
+/** 同时到点的强提醒合并成一个队列，逐条处理；队列空了才允许关窗 */
+let takeoverQueue: Pursuit[] = [];
+let takeoverReason = '';
 let lastTakeover: TakeoverPayload | null = null;
+let takeoverTimer: number | null = null;
+
+function showTakeover() {
+  if (!takeoverQueue.length) {
+    lastTakeover = null;
+    quiet('hide_takeover');
+    return;
+  }
+  lastTakeover = {
+    items: [...takeoverQueue],
+    index: Math.min(lastTakeover?.index ?? 0, takeoverQueue.length - 1),
+    reason: takeoverReason,
+    serverTs: serverNow(),
+    muted: false,
+  };
+  // Rust 命令签名是 show_takeover(payload)，Tauri 按参数名取键，别把字段摊到顶层
+  void invoke('show_takeover', { payload: lastTakeover }).catch((err: unknown) => {
+    flash('接管窗口启动失败：' + (err instanceof Error ? err.message : String(err)));
+  });
+}
+
+function dropTakeoverItem(id: string) {
+  const i = takeoverQueue.findIndex((p) => p.id === id);
+  if (i < 0) return false;
+  takeoverQueue.splice(i, 1);
+  return true;
+}
+
+/** 接管窗口的 webview 未必在亮窗时已加载完；它加载完会说一声，这里补发一次 payload */
 listen('takeover:ready', () => {
   if (lastTakeover) void emit('takeover:show', lastTakeover);
 });
@@ -95,37 +131,27 @@ const localHandled = new Map<string, number>();
 let editingLocal = false;
 let platform: 'web' | 'windows' | 'macos' | 'linux' | 'android' = 'web';
 const isDesktop = () => platform === 'windows' || platform === 'macos' || platform === 'linux';
-let captureImportance: Importance = 0;
-const IMP_TITLE = ['不标：按默认权重排期', '★ 低：略微优先', '★★ 中：优先推进', '★★★ 高：最优先推进'];
+let captureStrength: ReminderStrength = 'weak';
 
 const control = new FollowupController({
-  onSilent: () => { void refresh(); },
-  onNotify: (p, _level, reason, attempt) => {
+  onNotify: (p, reason, attempt) => {
     ringPing({
       title: p.text,
       body: `${reason}${attempt > 1 ? ` · 第 ${attempt} 次` : ''}`,
     });
   },
-  onBanner: (p, level, reason) => pushBanner(p, reason, level),
-  onTakeover: (p, level, reason) => {
-    const payload: TakeoverPayload = {
-      pursuit: p, level, channel: 'takeover', reason,
-      serverTs: serverNow(), stage: 'banner', muted: false,
-    };
-    lastTakeover = payload;
-    // Rust 命令签名是 show_takeover(payload)，Tauri 按参数名取键，别把字段摊到顶层
-    void invoke('show_takeover', { payload }).catch((err: unknown) => {
-      flash('接管窗口启动失败：' + (err instanceof Error ? err.message : String(err)));
-    });
-  },
-  onArchive: (p) => {
-    flash(`长期停滞，已自动归档：${p.text}`);
-    void refresh();
+  onTakeover: (p, reason) => {
+    if (!takeoverQueue.some((x) => x.id === p.id)) takeoverQueue.push(p);
+    takeoverReason = reason;
+    if (takeoverTimer !== null) clearTimeout(takeoverTimer);
+    // 同一 tick 多条强提醒合并成一次亮窗，避免排队连弹
+    takeoverTimer = window.setTimeout(() => {
+      takeoverTimer = null;
+      showTakeover();
+    }, 400);
   },
   onStop: (p, reason) => {
-    lastTakeover = null;
-    quiet('hide_takeover');
-    dropBannerByPursuit(p.id);
+    if (dropTakeoverItem(p.id)) showTakeover();
     if (reason === 'elsewhere' && Date.now() - (localHandled.get(p.id) ?? 0) > 3000) {
       flash('这条已在别的设备上处理掉了');
     }
@@ -345,8 +371,6 @@ function renderShell() {
       <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>` : ''}
     </div>
 
-    <div id="banner-host"></div>
-
     <div class="capture-bar">
       <div class="capture-in">
         <span class="prompt">&gt;</span>
@@ -407,15 +431,14 @@ function renderShell() {
       <span class="lb">已识别</span>
       <span class="chip ${p.kind === 'text' ? '' : 'hot'}">${esc(p.kindLabel)}</span>
       <span class="chip ${p.remindAt ? 'hot' : ''}">${esc(p.remindAt ? `截止：${p.timeLabel}` : '进收件箱')}</span>
-      ${([0, 1, 2, 3] as Importance[]).map((n) =>
-        `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${['不标', '★', '★★', '★★★'][n]}</button>`,
-      ).join('')}`;
+      <button type="button" class="chip ${captureStrength === 'weak' ? 'hot' : ''}" data-strength="weak">弱提醒</button>
+      <button type="button" class="chip ${captureStrength === 'strong' ? 'hot' : ''}" data-strength="strong">强提醒</button>`;
   };
   cap.addEventListener('input', preview);
   parse.addEventListener('click', (ev) => {
-    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-imp]');
+    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-strength]');
     if (!b) return;
-    captureImportance = Number(b.dataset.imp) as Importance;
+    captureStrength = b.dataset.strength as ReminderStrength;
     preview();
   });
   cap.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') void submitCapture(cap.value); });
@@ -432,32 +455,7 @@ function renderShell() {
   $<HTMLElement>('#editor').addEventListener('input', onEditorInput);
   $<HTMLElement>('#editor').addEventListener('keydown', onEditorKeydown);
 
-  onBannerChange(renderBanners);
   renderDeviceStatus();
-}
-
-/* -------------------------------------------------------- 跟进横幅 */
-
-function renderBanners(list: Banner[]) {
-  const host = $<HTMLElement>('#banner-host');
-  if (!host) return;
-  if (!list.length) { host.innerHTML = ''; return; }
-  host.innerHTML = `<div class="weak-host">${list.map((b) => `
-    <div class="weak">
-      <div class="weak-l"><b>${esc(b.pursuit.text)}</b><span>${esc(b.reason)}</span></div>
-      <div class="weak-acts">
-        <button class="btn sm ghost" data-bact="done" data-id="${esc(b.pursuit.id)}">推进</button>
-        <button class="btn sm" data-bact="later" data-id="${esc(b.pursuit.id)}">改天</button>
-        <button class="btn sm" data-bact="archive" data-id="${esc(b.pursuit.id)}">归档</button>
-      </div>
-    </div>`).join('')}</div>`;
-  host.onclick = (ev) => {
-    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-bact]');
-    if (!b) return;
-    const action = b.dataset.bact as FollowupAction;
-    if (action === 'later') void askLater(b.dataset.id!);
-    else void runFollowup(b.dataset.id!, action);
-  };
 }
 
 /* -------------------------------------------------- 更新状态（顶栏） */
@@ -583,10 +581,10 @@ function focusHtml(): string {
       <div class="focus-empty">今天没有需要强推的事。安静推进就好。</div></div>`;
   }
   return `<div class="focus-card">
-    <div class="focus-head"><b>今日聚焦</b>
-      <span>今日剩余强打扰额度 <b class="mono">${f.budgetLeft}</b></span></div>
+    <div class="focus-head"><b>今日聚焦</b><span>按截止时间排序</span></div>
     ${f.items.map((it) => {
       const p = it.pursuit;
+      const nextStep = p.steps.find((s) => s.state !== 'done');
       return `<div class="focus-item ${state.selected === p.id ? 'on' : ''}" data-id="${esc(p.id)}">
         <div class="fi-top">
           <span class="fi-nature" title="${NATURE_LABEL[p.nature]}">${natureIcon(p.nature)}</span>
@@ -595,9 +593,9 @@ function focusHtml(): string {
         <div class="fi-reason">${esc(it.reason)}</div>
         ${it.suggestedNextStep ? `<div class="fi-next">下一步：${esc(it.suggestedNextStep)}</div>` : ''}
         <div class="fi-acts">
-          <button class="btn sm solid" data-focus-act="done" data-id="${esc(p.id)}">推进（完成第一步）</button>
+          <button class="btn sm solid" data-focus-act="done" data-id="${esc(p.id)}" data-step="${esc(nextStep?.id ?? '')}">${nextStep ? '完成第一步' : '完成'}</button>
           <button class="btn sm" data-focus-act="smaller" data-id="${esc(p.id)}">拆小</button>
-          <button class="btn sm" data-focus-act="later" data-id="${esc(p.id)}">改天</button>
+          <button class="btn sm" data-focus-act="later" data-id="${esc(p.id)}">延期</button>
           <button class="btn sm" data-focus-act="archive" data-id="${esc(p.id)}">归档</button>
         </div>
       </div>`;
@@ -607,10 +605,9 @@ function focusHtml(): string {
 
 function rowHtml(p: Pursuit): string {
   const u = warmthOf(p);
-  const imp = '●'.repeat(p.importance) + '○'.repeat(3 - p.importance);
   return `
   <div class="item u-${u}${state.selected === p.id ? ' on' : ''}" data-id="${esc(p.id)}">
-    <div class="p-imp" title="重要性 ${p.importance}">${imp}</div>
+    <div class="p-imp" title="${p.strength === 'strong' ? '强提醒' : '弱提醒'}">${p.strength === 'strong' ? '强' : '弱'}</div>
     <div>
       <div class="it-time">${u === 'none' ? '' : `<i class="udot ${u}"></i>`}
         <span>${esc(dueLabel(p))} · ${esc(staleLabel(p))}</span></div>
@@ -624,7 +621,7 @@ function rowHtml(p: Pursuit): string {
       </div>
     </div>
     <div class="it-act">
-      <button class="btn sm" data-follow="done" data-id="${esc(p.id)}">推进</button>
+      <button class="btn sm" data-follow="done" data-id="${esc(p.id)}">完成</button>
     </div>
   </div>`;
 }
@@ -668,7 +665,7 @@ function renderEditor() {
   if (!p) {
     box.innerHTML = `<div class="ed-head">推进详情</div>
       <div class="ed-empty"><b>没有选中的推进项</b>
-        <p>点左边任意一条来拆解步骤、改重要性和排期。</p></div>`;
+        <p>点左边任意一条来拆解步骤、改提醒类型和排期。</p></div>`;
     return;
   }
 
@@ -697,10 +694,11 @@ function renderEditor() {
       <div class="fld"><label for="f-note">备注</label>
         <textarea class="input ed-textarea" id="f-note" rows="3" placeholder="相关背景、上下文">${esc(p.note ?? '')}</textarea></div>
 
-      <div class="fld"><label>重要性</label>
-        <div class="seg">${([0, 1, 2, 3] as Importance[]).map((n) =>
-          `<button data-imp="${n}" class="${p.importance === n ? 'on' : ''}" title="${IMP_TITLE[n]}">${n === 0 ? '不标' : '★'.repeat(n)}</button>`,
-        ).join('')}</div></div>
+      <div class="fld"><label>提醒类型</label>
+        <div class="seg">
+          <button data-strength="weak" class="${p.strength === 'weak' ? 'on' : ''}" title="到点发通知，没填时间默认 1 天后">弱提醒</button>
+          <button data-strength="strong" class="${p.strength === 'strong' ? 'on' : ''}" title="到点弹窗，没填时间默认 2 小时后">强提醒</button>
+        </div></div>
 
       <div class="fld"><label>启动精力</label>
         <div class="seg">${(['low', 'medium', 'high'] as const).map((e) =>
@@ -731,15 +729,14 @@ function renderEditor() {
       <div class="fld"><label>跟进历史</label>
         ${state.followups.length ? `<div class="fu-list">${state.followups.map((f) => `
           <div class="fu-row"><span class="mono">${esc(new Date(f.at).toLocaleString('zh-CN'))}</span>
-            <span class="tag">L${f.level}</span><b>${esc(f.action)}</b>
+            <span class="tag">${f.level === 4 ? '强提醒' : '弱提醒'}</span><b>${esc(FOLLOWUP_ACTION_LABEL[f.action] ?? f.action)}</b>
             ${f.note ? `<span>${esc(f.note)}</span>` : ''}</div>`).join('')}</div>`
           : '<div class="hint">还没有跟进记录。</div>'}
       </div>
     </div>
     <div class="ed-foot">
-      <button class="btn solid" data-act="follow-done">推进</button>
-      <button class="btn" data-act="follow-partial">推了一点</button>
-      <button class="btn" data-act="follow-later">改天</button>
+      <button class="btn solid" data-act="follow-done" data-step="${esc(p.steps.find((s) => s.state !== 'done')?.id ?? '')}">完成${p.steps.some((s) => s.state !== 'done') ? '这一步' : ''}</button>
+      <button class="btn" data-act="follow-later">延期</button>
       <button class="btn" data-act="follow-smaller">拆小</button>
       <button class="btn danger sp-left" data-act="archive">归档</button>
     </div>`;
@@ -771,10 +768,7 @@ function renderAll() {
   $<HTMLElement>('.body')!.classList.toggle('wide', wide);
   const v = VIEWS[state.view];
   $<HTMLElement>('#vtitle')!.textContent = v.title;
-  $<HTMLElement>('#vsub')!.textContent =
-    state.view === 'today'
-      ? `${state.focus?.items.length ?? 0} 项聚焦 · 剩余强打扰额度 ${state.focus?.budgetLeft ?? 0}`
-      : v.sub;
+  $<HTMLElement>('#vsub')!.textContent = v.sub;
   const listTop = document.querySelector<HTMLElement>('.list-scroll')?.scrollTop ?? 0;
   const editorTop = document.querySelector<HTMLElement>('.ed-body')?.scrollTop ?? 0;
   renderSidebar();
@@ -860,11 +854,7 @@ function renderSettingsView(box: HTMLElement) {
     <section class="set-card" id="set-pace">
       <h2>推进节奏</h2>
       <div class="set-grid">
-        <label>每日强打扰额度<input class="input" id="set-budget" type="number" min="0" max="20" value="${s.dailyStrongBudget}"></label>
-        <label>L2 停滞阈值（小时）<input class="input" id="set-l2" type="number" min="0" value="${Math.round(s.escalateAfterMs.l2 / 3600000)}"></label>
-        <label>L3 停滞阈值（小时）<input class="input" id="set-l3" type="number" min="0" value="${Math.round(s.escalateAfterMs.l3 / 3600000)}"></label>
-        <label>L4 停滞阈值（小时）<input class="input" id="set-l4" type="number" min="0" value="${Math.round(s.escalateAfterMs.l4 / 3600000)}"></label>
-        <label>L5 停滞阈值（小时）<input class="input" id="set-l5" type="number" min="0" value="${Math.round(s.escalateAfterMs.l5 / 3600000)}"></label>
+        <label>逾期多少天自动归档<input class="input" id="set-archive-days" type="number" min="1" value="${s.archiveAfterDays}"></label>
         <label>每日聚焦时刻<button type="button" class="input sm trigger" id="set-focus-at" data-v="${hhmmOfMin(s.focusAtMin)}"><span class="trigger-label">${hhmmOfMin(s.focusAtMin)}</span><span class="trigger-arrow">◷</span></button></label>
         <label>静音开始<button type="button" class="input sm trigger" id="set-quiet-start" data-v="${hhmmOfMin(s.quietStartMin)}"><span class="trigger-label">${hhmmOfMin(s.quietStartMin)}</span><span class="trigger-arrow">◷</span></button></label>
         <label>静音结束<button type="button" class="input sm trigger" id="set-quiet-end" data-v="${hhmmOfMin(s.quietEndMin)}"><span class="trigger-label">${hhmmOfMin(s.quietEndMin)}</span><span class="trigger-arrow">◷</span></button></label>
@@ -875,9 +865,10 @@ function renderSettingsView(box: HTMLElement) {
 
     <section class="set-card">
       <h2>测试跟进表现</h2>
-      <div class="hint" style="margin-bottom:10px">按当前设置实际走一次跟进链路，确认各等级表现符合预期。</div>
+      <div class="hint" style="margin-bottom:10px">强提醒弹接管窗，弱提醒发通知；逾期归档由服务端按截止时间处理。</div>
       <div class="set-actions">
-        ${([2, 3, 4, 5] as const).map((n) => `<button class="btn sm" data-test-level="${n}">测试 L${n}</button>`).join('')}
+        <button class="btn sm" data-test-strength="weak">测试弱提醒</button>
+        <button class="btn sm" data-test-strength="strong">测试强提醒</button>
       </div>
     </section>
 
@@ -973,8 +964,8 @@ function renderSettingsView(box: HTMLElement) {
   $<HTMLButtonElement>('#set-ping').onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
   $<HTMLButtonElement>('#set-save').onclick = () => void saveSettingsForm();
   $<HTMLButtonElement>('#log-save').onclick = () => void saveLogPolicy();
-  box.querySelectorAll<HTMLElement>('[data-test-level]').forEach((b) => {
-    b.onclick = () => testFollowup(Number(b.dataset.testLevel) as 2 | 3 | 4 | 5);
+  box.querySelectorAll<HTMLElement>('[data-test-strength]').forEach((b) => {
+    b.onclick = () => testFollowup(b.dataset.testStrength === 'strong' ? 'strong' : 'weak');
   });
   if (admin) {
     $<HTMLButtonElement>('#usr-add').onclick = () => void addUser();
@@ -998,12 +989,8 @@ function renderSettingsView(box: HTMLElement) {
 async function saveSettingsForm() {
   const msg = $<HTMLElement>('#set-msg');
   const val = (id: string) => $<HTMLInputElement>(`#${id}`).value;
-  const hrs = (id: string) => Math.max(0, Number(val(id))) * 3_600_000;
   const patch: Partial<Settings> = {
-    dailyStrongBudget: Math.max(0, Number(val('set-budget'))),
-    escalateAfterMs: {
-      l2: hrs('set-l2'), l3: hrs('set-l3'), l4: hrs('set-l4'), l5: hrs('set-l5'),
-    },
+    archiveAfterDays: Math.max(1, Number(val('set-archive-days'))),
     quietStartMin: minOfHhmm($<HTMLButtonElement>('#set-quiet-start').dataset.v ?? '23:30'),
     quietEndMin: minOfHhmm($<HTMLButtonElement>('#set-quiet-end').dataset.v ?? '07:00'),
     focusAtMin: minOfHhmm($<HTMLButtonElement>('#set-focus-at').dataset.v ?? '09:00'),
@@ -1017,21 +1004,22 @@ async function saveSettingsForm() {
   } catch (e) { msg.textContent = msgOf(e); }
 }
 
-function testFollowup(level: 2 | 3 | 4 | 5) {
+function testFollowup(strength: 'strong' | 'weak') {
   const now = serverNow();
+  const id = `test-${strength}-${now}`;
   const fake: Pursuit = {
-    id: `test-${level}-${now}`, userId: '', text: `L${level} 跟进测试：这件事已经停了一阵子`,
+    id, userId: '', text: `${strength === 'strong' ? '强' : '弱'}提醒测试：到点了`,
     note: null, kind: 'text', url: null, path: null,
-    nature: 'project', importance: 2, energy: 'low', dueAt: null,
+    nature: 'project', strength, importance: strength === 'strong' ? 3 : 0, energy: 'low', dueAt: now,
     recurrence: null, context: null, commitment: null,
     status: 'active', importanceSort: 0, version: 1, createdAt: now, updatedAt: now,
-    completedAt: null, lastActivityAt: now - 4 * 86400_000,
-    progress: 0.3, stalenessMs: 4 * 86400_000, weight: 40,
-    steps: [{ id: 't1', pursuitId: `test-${level}-${now}`, text: '先把第一步做了', position: 0, state: 'todo', doneAt: null, createdAt: now }],
+    completedAt: null, lastActivityAt: now,
+    progress: 0.3, stalenessMs: 0, weight: 0,
+    steps: [{ id: 't1', pursuitId: id, text: '先把第一步做了', position: 0, state: 'todo', doneAt: null, createdAt: now }],
     deviceIds: [], source: 'app',
   };
-  control.fire(fake, level, '这是测试，不会改你的数据', 'in_app');
-  flash(`L${level} 跟进已触发`);
+  control.fire(fake, levelForStrength(strength), '这是测试，不会改你的数据', 'in_app');
+  flash(`${strength === 'strong' ? '强' : '弱'}提醒已触发`);
 }
 
 async function loadSettingsForm() {
@@ -1212,8 +1200,8 @@ async function loadOverview() {
       <div>进行中 ${o.pursuits.active ?? 0} · 收件箱 ${o.pursuits.inbox ?? 0}</div>
       <div>已完成 ${o.pursuits.done ?? 0} · 归档 ${o.pursuits.archived ?? 0}</div>
       <div>暂停 ${o.pursuits.paused ?? 0}</div>`);
-    const levels = ([1, 2, 3, 4, 5] as const).map((n) => `L${n} ${o.nudgesToday[n] ?? 0}`).join(' · ');
-    put('dash-deliveries', `<div>今日各等级打扰次数</div><div>${esc(levels)}</div>`);
+    const counts = `弱提醒 ${o.nudgesToday[2] ?? 0} · 强提醒 ${o.nudgesToday[4] ?? 0}`;
+    put('dash-deliveries', `<div>今日提醒次数</div><div>${esc(counts)}</div>`);
     const plats = Object.entries(o.devices.byPlatform).map(([k, v]) => `${k} ${v}`).join(' · ') || '无';
     put('dash-devices', `<div>总数 <b>${o.devices.total}</b> · 在线 ${o.devices.online}</div><div>${esc(plats)}</div>`);
     put('dash-users', `<div>总数 <b>${o.users.total}</b></div>`);
@@ -1474,7 +1462,8 @@ async function refresh() {
   try {
     const r = await api.pursuits(view as PursuitView);
     if (gen !== refreshGen || state.view !== view) return;
-    state.pursuits = [...r.pursuits].sort((a, b) => b.weight - a.weight);
+    state.pursuits = [...r.pursuits].sort((a, b) =>
+      (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity) || a.importanceSort - b.importanceSort);
     if (state.selected && !findPursuit(state.selected)) state.selected = null;
     renderAll();
   } catch (err) {
@@ -1496,12 +1485,12 @@ async function submitCapture(raw: string) {
       url: p.kind === 'link' ? text : null,
       path: p.kind === 'path' ? text : null,
       dueAt: p.remindAt,
-      importance: captureImportance,
+      strength: captureStrength,
       nature: 'one_off',
     });
     const cap = $<HTMLInputElement>('#cap');
     if (cap) { cap.value = ''; $<HTMLElement>('#parse').hidden = true; }
-    captureImportance = 0;
+    captureStrength = 'weak';
     flash('已记下');
     void refresh();
   } catch (e) {
@@ -1522,7 +1511,7 @@ async function askLater(id: string) {
   host.className = 'panel-mask';
   host.innerHTML = `
     <div class="panel panel-sm" role="dialog" aria-modal="true">
-      <div class="panel-head"><b>改天推进「${esc((p?.text ?? '').slice(0, 24))}」</b></div>
+      <div class="panel-head"><b>延期「${esc((p?.text ?? '').slice(0, 24))}」</b></div>
       <div class="panel-body">
         <div class="snooze-opts">
           <button class="nav" data-to="${at(1)}">明天 9:00</button>
@@ -1549,24 +1538,23 @@ async function runFollowup(id: string, action: FollowupAction, extra: Record<str
   const version = p ? versionOf(p) : 0;
   if (action === 'smaller' && !extra.steps) {
     const next = p?.steps.find((s) => s.state !== 'done')?.text ?? p?.text ?? '';
-    const value = window.prompt('把这件事拆成 2-3 个能立刻动手的小步骤，用换行分隔', next);
-    if (value === null) return;
-    const steps = value.split(/\r?\n|；|;/).map((s) => s.trim()).filter(Boolean);
-    if (!steps.length) return;
+    const steps = await openStepsDialog(next ? [next] : []);
+    if (!steps) return;
     extra.steps = steps;
   }
   if (action === 'later' && !extra.to) { await askLater(id); return; }
 
   const body = { action, version, ...(extra.note ? { note: String(extra.note) } : {}),
     ...(extra.to ? { to: Number(extra.to) } : {}),
-    ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}) };
+    ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),
+    ...(extra.stepId ? { stepId: String(extra.stepId) } : {}) };
   try {
     localHandled.set(id, Date.now());
     if (!extra.steps && !extra.to) rt?.followup(id, action, version);
     await api.followup(id, body);
     noteFollowup(id, action);
     control.acknowledge(action);
-    dropBannerByPursuit(id);
+    if (dropTakeoverItem(id)) showTakeover();
     void refresh();
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {
@@ -1583,14 +1571,18 @@ function onListClick(ev: Event) {
   const fa = t.closest<HTMLElement>('[data-follow]');
   if (fa) { void runFollowup(fa.dataset.id!, fa.dataset.follow as FollowupAction); return; }
   const f = t.closest<HTMLElement>('[data-focus-act]');
-  if (f) { void runFollowup(f.dataset.id!, f.dataset.focusAct as FollowupAction); return; }
+  if (f) {
+    void runFollowup(f.dataset.id!, f.dataset.focusAct as FollowupAction,
+      f.dataset.step ? { stepId: f.dataset.step } : {});
+    return;
+  }
   const row = t.closest<HTMLElement>('[data-id]');
   if (row) selectPursuit(row.dataset.id!);
 }
 
 function onEditorClick(ev: Event) {
   const t = (ev.target as HTMLElement).closest<HTMLElement>(
-    '[data-act],[data-imp],[data-energy],[data-nature]',
+    '[data-act],[data-strength],[data-energy],[data-nature]',
   );
   const p = findPursuit(state.selected);
   if (!t || !p) return;
@@ -1600,7 +1592,7 @@ function onEditorClick(ev: Event) {
       .then(refresh).catch((err) => flashConflict(err, p.id));
   };
 
-  if (t.dataset.imp !== undefined) { savePatch({ importance: Number(t.dataset.imp) }); return; }
+  if (t.dataset.strength) { savePatch({ strength: t.dataset.strength }); return; }
   if (t.dataset.energy) { savePatch({ energy: t.dataset.energy }); return; }
   if (t.dataset.nature) { savePatch({ nature: t.dataset.nature }); return; }
 
@@ -1629,8 +1621,9 @@ function onEditorClick(ev: Event) {
       savePatch({ recurrence: rule });
       return;
     }
-    case 'follow-done': void runFollowup(p.id, 'done'); return;
-    case 'follow-partial': void runFollowup(p.id, 'partial'); return;
+    case 'follow-done':
+      void runFollowup(p.id, 'done', t.dataset.step ? { stepId: t.dataset.step } : {});
+      return;
     case 'follow-later': void askLater(p.id); return;
     case 'follow-smaller': void runFollowup(p.id, 'smaller'); return;
     case 'archive': void runFollowup(p.id, 'archive'); return;
@@ -1790,28 +1783,32 @@ function openServerPanel() {
 
 function wireEvents() {
   if (!hasTauri()) return;
-  listen<{ pursuitId: string; action: FollowupAction; version?: number; note?: string; to?: number; steps?: string[] }>(
+  listen<{ pursuitId: string; action: FollowupAction; note?: string; to?: number; steps?: string[]; stepId?: string }>(
     'takeover:action', async (ev) => {
-      const { pursuitId, action, note, to, steps } = ev.payload;
-      control.acknowledge(action);
+      const { pursuitId, action, note, to, steps, stepId } = ev.payload;
       await runFollowup(pursuitId, action, {
-        ...(note ? { note } : {}), ...(to ? { to } : {}), ...(steps ? { steps } : {}),
+        ...(note ? { note } : {}), ...(to ? { to } : {}),
+        ...(steps ? { steps } : {}), ...(stepId ? { stepId } : {}),
       });
     },
   );
-  listen<{ pursuitId: string; url: string }>('takeover:open-url', async (ev) => {
-    const { pursuitId, url } = ev.payload;
-    control.acknowledge('done');
-    await runFollowup(pursuitId, 'done');
-    quiet('open_external', { url });
+  listen('takeover:next', () => {
+    if (!lastTakeover) return;
+    lastTakeover = {
+      ...lastTakeover,
+      index: Math.min(lastTakeover.index + 1, lastTakeover.items.length - 1),
+    };
+    void emit('takeover:show', lastTakeover);
   });
-  listen<{ text: string; dueAt: number | null; kind: string; importance: number }>(
+  listen<{ pursuitId: string; url: string }>('takeover:open-url', async (ev) => {
+    quiet('open_external', { url: ev.payload.url });
+  });
+  listen<{ text: string; dueAt: number | null; kind: string; strength: ReminderStrength }>(
     'capture:submit', async (ev) => {
-      const { text, dueAt, kind, importance } = ev.payload;
+      const { text, dueAt, kind, strength } = ev.payload;
       try {
         await api.create({
-          text, kind: kind as 'text' | 'link' | 'path', dueAt,
-          importance: importance as Importance,
+          text, kind: kind as 'text' | 'link' | 'path', dueAt, strength,
           url: kind === 'link' ? text : null,
           path: kind === 'path' ? text : null,
         });
@@ -1863,22 +1860,20 @@ function onRealtime(msg: ServerMessage) {
     case 'pursuit.created':
     case 'pursuit.updated':
     case 'pursuit.stepped':
-      control.dismissedElsewhere(msg.pursuit.id);
-      dropBannerByPursuit(msg.pursuit.id);
       void refresh();
       break;
     case 'pursuit.followed':
-      noteFollowup(msg.pursuit.id, msg.action);
+      noteFollowup(msg.pursuit.id, msg.action, levelForStrength(msg.pursuit.strength));
       control.dismissedElsewhere(msg.pursuit.id);
-      dropBannerByPursuit(msg.pursuit.id);
+      if (dropTakeoverItem(msg.pursuit.id)) showTakeover();
       void refresh();
       break;
     case 'pursuit.deleted':
-      dropBannerByPursuit(msg.pursuitId);
+      if (dropTakeoverItem(msg.pursuitId)) showTakeover();
       void refresh();
       break;
     case 'pursuit.focused':
-      state.focus = { serverTs: serverNow(), items: msg.items, budgetLeft: msg.budgetLeft };
+      state.focus = { serverTs: serverNow(), items: msg.items };
       renderAll();
       break;
     case 'pursuit.nudge':

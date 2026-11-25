@@ -35,11 +35,9 @@ export interface Transport {
   send(deviceId: string, msg: ServerMessage): Promise<SendResult>;
 }
 
-// 表现由等级决定：L4/L5 接管，L2/L3 走通知（客户端按 level 决定是否加横幅），L1 静默在应用内
-function presentationChannel(level: NudgeLevel, requested: NudgeChannel): NudgeChannel {
-  if (level >= 4) return 'takeover';
-  if (level === 1) return 'in_app';
-  return requested === 'in_app' ? 'in_app' : 'notification';
+// 只有强弱两种表现：强提醒弹接管窗，弱提醒走通知
+function presentationChannel(level: NudgeLevel, _requested: NudgeChannel): NudgeChannel {
+  return level === 4 ? 'takeover' : 'notification';
 }
 
 function nudgeMessage(p: NudgePayload): ServerMessage {

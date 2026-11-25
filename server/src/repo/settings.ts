@@ -2,8 +2,7 @@ import type { Settings } from '../../../shared/types.js';
 import { rows, run } from '../db.js';
 
 const DEFAULTS: Settings = {
-  dailyStrongBudget: 2,
-  escalateAfterMs: { l2: 7_200_000, l3: 86_400_000, l4: 259_200_000, l5: 604_800_000 },
+  archiveAfterDays: 30,
   quietStartMin: 1410,
   quietEndMin: 420,
   focusAtMin: 480,
@@ -19,25 +18,9 @@ function num(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function escalation(raw: string | undefined): Settings['escalateAfterMs'] {
-  if (!raw) return { ...DEFAULTS.escalateAfterMs };
-  try {
-    const v = JSON.parse(raw) as Partial<Settings['escalateAfterMs']>;
-    return {
-      l2: num(String(v.l2), DEFAULTS.escalateAfterMs.l2),
-      l3: num(String(v.l3), DEFAULTS.escalateAfterMs.l3),
-      l4: num(String(v.l4), DEFAULTS.escalateAfterMs.l4),
-      l5: num(String(v.l5), DEFAULTS.escalateAfterMs.l5),
-    };
-  } catch {
-    return { ...DEFAULTS.escalateAfterMs };
-  }
-}
-
 function defaultsAsPairs(): Array<[string, string]> {
   return [
-    ['dailyStrongBudget', String(DEFAULTS.dailyStrongBudget)],
-    ['escalateAfterMs', JSON.stringify(DEFAULTS.escalateAfterMs)],
+    ['archiveAfterDays', String(DEFAULTS.archiveAfterDays)],
     ['quietStartMin', String(DEFAULTS.quietStartMin)],
     ['quietEndMin', String(DEFAULTS.quietEndMin)],
     ['focusAtMin', String(DEFAULTS.focusAtMin)],
@@ -66,8 +49,7 @@ export async function getSettings(userId: string): Promise<Settings> {
   const map = new Map(rs.map((x) => [x.key, x.value]));
   const sound = map.get('sound');
   const out: Settings = {
-    dailyStrongBudget: Math.max(0, Math.floor(num(map.get('dailyStrongBudget'), DEFAULTS.dailyStrongBudget))),
-    escalateAfterMs: escalation(map.get('escalateAfterMs')),
+    archiveAfterDays: Math.max(1, Math.floor(num(map.get('archiveAfterDays'), DEFAULTS.archiveAfterDays))),
     quietStartMin: num(map.get('quietStartMin'), DEFAULTS.quietStartMin),
     quietEndMin: num(map.get('quietEndMin'), DEFAULTS.quietEndMin),
     focusAtMin: num(map.get('focusAtMin'), DEFAULTS.focusAtMin),
@@ -79,19 +61,10 @@ export async function getSettings(userId: string): Promise<Settings> {
 
 /** PATCH 用：只写合法字段。非法值忽略而不是整批报错，避免一个坏字段拖垮整次保存 */
 export async function saveSettings(userId: string, patch: Partial<Settings>): Promise<Settings> {
-  const current = await getSettings(userId);
   const pairs: Array<[string, string]> = [];
 
-  if (typeof patch.dailyStrongBudget === 'number' && Number.isFinite(patch.dailyStrongBudget)) {
-    pairs.push(['dailyStrongBudget', String(Math.max(0, Math.floor(patch.dailyStrongBudget)))]);
-  }
-  if (patch.escalateAfterMs) {
-    const merged = { ...current.escalateAfterMs };
-    for (const k of ['l2', 'l3', 'l4', 'l5'] as const) {
-      const v = patch.escalateAfterMs[k];
-      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) merged[k] = v;
-    }
-    pairs.push(['escalateAfterMs', JSON.stringify(merged)]);
+  if (typeof patch.archiveAfterDays === 'number' && Number.isFinite(patch.archiveAfterDays) && patch.archiveAfterDays >= 1) {
+    pairs.push(['archiveAfterDays', String(Math.floor(patch.archiveAfterDays))]);
   }
   for (const k of ['quietStartMin', 'quietEndMin', 'focusAtMin'] as const) {
     const v = patch[k];

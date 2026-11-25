@@ -1,5 +1,5 @@
 /**
- * v2 需求对齐自检。把 docs/drive-engine.md 里写成硬规则的那些条，
+ * 提醒模型对齐自检。把 docs/reminder-model.md 里写成硬规则的那些条，
  * 逐条对着代码验一遍。需求改了这里也要改。
  *
  * 用法：node scripts/align-check.mjs
@@ -23,7 +23,7 @@ const src = {
   styles: read('app/src/styles.css'),
   sql: read('server/src/schema.pg.sql'),
   types: read('shared/types.ts'),
-  design: read('docs/drive-engine.md'),
+  design: read('docs/reminder-model.md'),
 };
 
 let pass = 0, fail = 0;
@@ -32,7 +32,7 @@ const ok = (rule, cond, detail = '') => {
   else { fail++; console.log(`  FAIL  ${rule}  ${detail}`); }
 };
 
-console.log('v2 需求对齐自检\n');
+console.log('提醒模型对齐自检\n');
 
 console.log('数据库隔离');
 ok('表不写死 public. 前缀', !/\bpublic\s*\./i.test(src.sql));
@@ -47,21 +47,22 @@ ok('所有业务表带 user_id', ['pursuits', 'steps', 'followups', 'nudges', 'p
 
 console.log('\n服务端是唯一计时权威');
 ok('fired_at 已由 last_activity 取代，不再有 fired_at 列', !/\bfired_at\b/.test(src.sql));
-ok('等级由引擎算不是客户端', /levelFor/.test(src.drive) && /levelFor/.test(src.policy));
-ok('客户端只按 nudge.level 表现，不自己判触发', /level/.test(src.alarm) && !/setInterval[\s\S]{0,200}?showTakeover/.test(src.api));
+ok('强弱由引擎算不是客户端', /levelForStrength/.test(src.drive) && /strengthOfImportance/.test(src.types));
+ok('客户端只按 nudge.level 表现，不自己判触发', /strengthOfLevel/.test(src.alarm) && !/setInterval[\s\S]{0,200}?showTakeover/.test(src.api));
 
 console.log('\n推进引擎');
 ok('有 drive.tick 主循环', /export async function driveTick/.test(src.drive));
-ok('有四循环：聚焦/微步骤/情境/跟进', /buildFocus/.test(src.drive) && /suggestNextStep/.test(src.policy) &&
-  /timeWindow/.test(src.drive) && /followUp/.test(src.drive));
-ok('权重含重要性/逾期/停滞/承诺', /importance \* 20/.test(src.policy) && /staleness/.test(src.policy) &&
-  /commitment/.test(src.policy));
-ok('打扰等级 L1-L5', /NudgeLevel = 1 \| 2 \| 3 \| 4 \| 5/.test(src.types));
-ok('等级按停滞时长分级', /escalateAfterMs\.l[2345]/.test(src.policy));
-ok('每日强打扰配额', /dailyStrongBudget/.test(src.drive) && /dailyStrongBudget/.test(src.types));
-ok('静音时段 L4 降 L2', /inQuietHours/.test(src.drive) && /level = 2/.test(src.drive));
+ok('有聚焦/情境/到点/跟进四段', /buildFocus/.test(src.drive) && /timeWindow/.test(src.drive) &&
+  /dueAt > nowMs\) continue/.test(src.drive) && /followUp/.test(src.drive));
+ok('按截止时间排序', /sort\(byDue\)/.test(src.drive) && /function byDue/.test(src.drive));
+ok('强弱只有两档', /NudgeLevel = 2 \| 4/.test(src.types) && !/NudgeLevel = 1 \| 2 \| 3/.test(src.types));
+ok('强弱是记录的一等字段，不用星标/关键词', /strength: ReminderStrength/.test(src.types) && /p\.strength/.test(src.drive) && /data-strength/.test(read('app/src/ui/capture.ts')));
+ok('没填截止时间按强弱给默认值', /defaultDueMs/.test(src.types) && /defaultDueMs/.test(src.pursuits));
+ok('到点直接强弹窗或弱通知', /createNudge\(/.test(src.drive) && /channelFor\(strength\)/.test(src.drive));
+ok('静音时段延后不降级', /inQuietHours/.test(src.drive) && /if \(quiet\) continue/.test(src.drive));
 ok('情境闸门：时间窗/设备在线', /timeWindow/.test(src.drive) && /hub\.isOnline/.test(src.drive));
-ok('L5 自动归档不删除', /setStatus\(p\.id, userId, 'archived'\)/.test(src.drive));
+ok('逾期自动归档并写明原因', /archiveAfterDays/.test(src.drive) && /自动归档/.test(src.drive) &&
+  /setStatus\(p\.id, userId, 'archived'\)/.test(src.drive));
 
 console.log('\n跟进是信号不是惩罚');
 ok('六种跟进动作', /FollowupAction = 'done' \| 'partial' \| 'later' \| 'smaller' \| 'archive' \| 'ignored'/.test(src.types));
@@ -76,8 +77,8 @@ console.log('\n打扰账本 = 投递 outbox');
 ok('nudges 表是唯一 outbox', /CREATE TABLE IF NOT EXISTS nudges/.test(src.sql) && !/CREATE TABLE IF NOT EXISTS deliveries/.test(src.sql));
 ok('有 markDelivered', /markDelivered/.test(src.nudges));
 ok('轮转器独立于 tick', /rotate/.test(src.scheduler));
-ok('fire_key 去重', /fire_key/.test(src.sql) && /key =/.test(src.drive));
-ok('推送范围为空时广播全体在线设备', /broadcastToUser/.test(src.scheduler));
+ok('fire_key 去重', /fire_key/.test(src.sql) && /createNudge\(/.test(src.drive) && /-due-\$\{p\.dueAt\}/.test(src.drive));
+ok('无在线设备时保持 pending 等补发', /hasOnline/.test(src.scheduler) && /markFailed\(n\.id, '设备不在线'\)/.test(src.scheduler));
 ok('失败记 last_error 不抛异常', /last_error/.test(src.sql) && /markFailed/.test(src.scheduler));
 
 console.log('\n乐观锁与隔离');
@@ -103,8 +104,10 @@ ok('逾期基数取 max(due, now)', /Math\.max\(p\.dueAt, nowMs\)/.test(src.driv
 
 console.log('\n客户端今日推进');
 ok('有今日聚焦卡', /focus/i.test(src.main) && /聚焦/.test(src.main));
-ok('跟进动作按钮', /跟进|推进|拆小|归档/.test(src.main));
-ok('等级驱动表现', /level/.test(src.alarm));
+ok('跟进动作按钮', /完成|延期|拆小|归档/.test(src.main));
+ok('强弱驱动表现', /strengthOfLevel/.test(src.alarm) && /onNotify/.test(src.alarm) && /onTakeover/.test(src.alarm));
+ok('弱提醒重复 1/10/30/60 后每 120 分钟', /120 \* 60_000/.test(src.alarm));
+ok('强提醒多条合并逐条处理', /takeoverQueue/.test(src.main) && /items: Pursuit\[\]/.test(src.takeover));
 ok('takeover 关不掉', /takeover:close-blocked/.test(src.takeover));
 ok('静音时段处理', /inQuietHours/.test(src.alarm));
 

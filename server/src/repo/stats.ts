@@ -3,7 +3,7 @@ import { one, rows } from '../db.js';
 import { schedulerStats } from '../scheduler.js';
 
 const STATUSES: PursuitStatus[] = ['inbox', 'active', 'paused', 'done', 'archived'];
-const LEVELS: NudgeLevel[] = [1, 2, 3, 4, 5];
+const LEVELS: NudgeLevel[] = [2, 4];
 const NATURES: PursuitNature[] = ['one_off', 'recurring', 'project'];
 
 export async function getOverview(): Promise<Overview> {
@@ -19,7 +19,7 @@ export async function getOverview(): Promise<Overview> {
     `SELECT level, count(*)::int AS n FROM nudges
       WHERE at >= date_trunc('day', now()) GROUP BY level`,
   );
-  const nudgesToday: Record<NudgeLevel, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  const nudgesToday: Record<NudgeLevel, number> = { 2: 0, 4: 0 };
   for (const r of levelRows) if (LEVELS.includes(r.level as NudgeLevel)) {
     nudgesToday[r.level as NudgeLevel] = r.n;
   }

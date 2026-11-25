@@ -1,9 +1,10 @@
-import type {
-  Commitment, CreatePursuitRequest, Energy, EntryKind, Importance, Pursuit, PursuitContext,
-  PursuitNature, PursuitStatus, RecurrenceRule, Step, UpdatePursuitRequest,
+import {
+  defaultDueMs, importanceForStrength, strengthOfImportance,
+  type Commitment, type CreatePursuitRequest, type Energy, type EntryKind, type Importance,
+  type Pursuit, type PursuitContext, type PursuitNature, type PursuitStatus, type RecurrenceRule,
+  type Step, type UpdatePursuitRequest,
 } from '../../../shared/types.js';
 import { one, rows, toDt, toMs, tx, type Tx } from '../db.js';
-import { weightOf } from '../policy.js';
 import { insertSteps, mapStep, type StepRow } from './steps.js';
 
 interface PursuitRow {
@@ -46,6 +47,7 @@ export function mapPursuit(row: any, steps: Step[], deviceIds: string[], nowMs: 
     url: r.url,
     path: r.path,
     nature: r.nature as PursuitNature,
+    strength: r.importance >= 2 ? 'strong' : 'weak',
     importance: r.importance as Importance,
     energy: r.energy as Energy,
     dueAt: toMs(r.due_at),
@@ -66,7 +68,6 @@ export function mapPursuit(row: any, steps: Step[], deviceIds: string[], nowMs: 
     deviceIds,
     source: r.source === 'mcp' ? 'mcp' : 'app',
   };
-  p.weight = weightOf(p, nowMs);
   return p;
 }
 
@@ -136,6 +137,8 @@ async function replaceDevices(q: Tx, pursuitId: string, userId: string, deviceId
 }
 
 export async function createPursuit(userId: string, req: CreatePursuitRequest): Promise<Pursuit> {
+  const importance = req.strength ? importanceForStrength(req.strength) : req.importance ?? 1;
+  const dueAt = toDt(req.dueAt) ?? new Date(defaultDueMs(strengthOfImportance(importance), Date.now()));
   const id = await tx(async (q) => {
     const r = await q.one<{ id: string }>(
       `INSERT INTO pursuits
@@ -150,9 +153,9 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
        req.url ?? null,
        req.path ?? null,
        (req.nature ?? 'one_off') as PursuitNature,
-       req.importance ?? 1,
+       importance,
        (req.energy ?? 'medium') as Energy,
-       toDt(req.dueAt),
+       dueAt,
        req.recurrence ?? null,
        req.context ?? null,
        req.commitment ?? null,
@@ -180,7 +183,8 @@ export async function updatePursuit(
 
     if (req.text !== undefined) add('text', req.text.trim());
     if ('note' in req) add('note', req.note?.trim() || null);
-    if (req.importance !== undefined) add('importance', req.importance);
+    if (req.strength !== undefined) add('importance', importanceForStrength(req.strength));
+    else if (req.importance !== undefined) add('importance', req.importance);
     if (req.energy !== undefined) add('energy', req.energy);
     if (req.nature !== undefined) add('nature', req.nature);
     if ('dueAt' in req) add('due_at', toDt(req.dueAt));

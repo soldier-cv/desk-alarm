@@ -27,8 +27,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 常驻前台服务：原生层持有 WebSocket 与心跳，锁屏后 WebView 的 JS 被冻结也不受影响。
- * v2 只认 pursuit.nudge：L1 静默，L2+ 弹通知并按等级阶梯重复，直到用户处理。
- * 重复间隔与 app/src/alarm.ts 的 REPEAT_LADDER 一致，没有次数上限。
+ * 只认 pursuit.nudge：level=4 是强提醒（常驻通知等处理），level=2 是弱提醒（通知并按节奏重复）。
+ * 弱提醒重复间隔与 app/src/alarm.ts 的 WEAK_REPEAT 一致：1/10/30/60 分钟后每 120 分钟一次。
  */
 class DeskAlarmKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -139,23 +139,20 @@ class DeskAlarmKeepAliveService : Service() {
                 }
                 // missed 是 Nudge，没有事项正文；合成一条汇总，不按条数连轰
                 val missed = msg.optJSONArray("missed") ?: JSONArray()
-                val strong = (0 until missed.length()).any {
-                    (missed.optJSONObject(it)?.optInt("level", 0) ?: 0) >= 2
-                }
-                if (strong) postMissed(missed.length())
+                if (missed.length() > 0) postMissed(missed.length())
             }
             "pursuit.nudge" -> {
                 val pursuit = msg.optJSONObject("pursuit") ?: return
                 val id = pursuit.optString("id")
                 val text = pursuit.optString("text")
                 if (id.isEmpty() || text.isEmpty()) return
-                val level = msg.optInt("level", 1)
-                // L1 只进聚焦列表，不弹通知；L2+ 才提醒
-                if (level < 2) return
+                val level = msg.optInt("level", 2)
+                if (level != 2 && level != 4) return
                 val reason = msg.optString("reason")
                 cancelled[id] = false
                 post(id, text, reason, level)
-                scheduleRepeat(id, text, reason, level)
+                // 强提醒的接管窗由 WebView 承载，原生层只发常驻通知，不做本地重复
+                if (level == 2) scheduleRepeat(id, text, reason, level)
             }
             "pursuit.followed" -> cancel(msg.optJSONObject("pursuit")?.optString("id") ?: "")
             "pursuit.deleted" -> cancel(msg.optString("pursuitId"))
@@ -179,13 +176,14 @@ class DeskAlarmKeepAliveService : Service() {
         val nid = notifyId(pursuitId)
         main.post {
             val body = if (attempt > 1) "$reason · 第 $attempt 次" else reason
-            val n = NotificationCompat.Builder(this, CH_STRONG)
+            val channel = if (level == 4) CH_STRONG else CH_WEAK
+            val n = NotificationCompat.Builder(this, channel)
                 .setSmallIcon(R.drawable.ic_stat_notify)
                 .setContentTitle(text)
                 .setContentText(body)
                 .setContentIntent(openIntent())
-                .setAutoCancel(level < 4)
-                .setOngoing(level >= 4)
+                .setAutoCancel(level != 4)
+                .setOngoing(level == 4)
                 .build()
             try { nm.notify(nid, n) } catch (_: Exception) {}
         }
@@ -213,11 +211,9 @@ class DeskAlarmKeepAliveService : Service() {
         else m >= quietStartMin || m < quietEndMin
     }
 
-    /** 秒；与 alarm.ts 的 REPEAT_LADDER 对齐，最后一级保持重复直到用户处理 */
+    /** 秒；弱提醒 1/10/30/60 分钟后每 120 分钟一次 */
     private fun ladderFor(level: Int): LongArray = when (level) {
-        2 -> longArrayOf(60, 180, 600, 1800, 3600)
-        3 -> longArrayOf(120, 600, 1800, 3600)
-        4 -> longArrayOf(60, 300, 900, 3600)
+        2 -> longArrayOf(60, 600, 1800, 3600, 7200)
         else -> longArrayOf()
     }
 

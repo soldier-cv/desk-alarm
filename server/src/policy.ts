@@ -1,37 +1,9 @@
-import type { NudgeLevel, Pursuit, RecurrenceRule, Settings } from '../../shared/types.js';
+import type { Pursuit, RecurrenceRule, Settings } from '../../shared/types.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
 export function stalenessOf(lastActivityAt: number, nowMs: number): number {
   return Math.max(0, nowMs - lastActivityAt);
-}
-
-export function weightOf(p: Pursuit, nowMs: number): number {
-  let w = p.importance * 20;
-
-  if (p.dueAt !== null) {
-    const delta = p.dueAt - nowMs;
-    if (delta < 0) w += 60;
-    else if (delta <= DAY) w += 40;
-    else if (delta <= 3 * DAY) w += 20;
-  }
-
-  w += Math.min(Math.floor(stalenessOf(p.lastActivityAt, nowMs) / DAY) * 8, 40);
-
-  if (p.commitment !== null && p.commitment.date !== undefined && p.commitment.date !== null) {
-    w += 25;
-  }
-  if (p.progress > 0 && p.progress < 1) w += 15;
-
-  return w;
-}
-
-export function levelFor(stalenessMs: number, s: Settings): NudgeLevel {
-  if (stalenessMs >= s.escalateAfterMs.l5) return 5;
-  if (stalenessMs >= s.escalateAfterMs.l4) return 4;
-  if (stalenessMs >= s.escalateAfterMs.l3) return 3;
-  if (stalenessMs >= s.escalateAfterMs.l2) return 2;
-  return 1;
 }
 
 export function inQuietHours(s: Settings, atMs = Date.now()): boolean {
@@ -51,15 +23,12 @@ export function suggestNextStep(p: Pursuit): string | null {
 }
 
 export function focusReason(p: Pursuit): string {
+  if (p.dueAt === null) return '还没定截止时间，点开定一个';
   const nowMs = Date.now();
-  if (p.stalenessMs >= 7 * DAY) return '拖了太久，要么定个时间要么放手';
-  if (p.dueAt !== null && p.dueAt < nowMs) return '已逾期，优先处理';
-  if (p.commitment !== null && p.commitment.date !== undefined && p.commitment.date !== null) {
-    return '有承诺在身，别失约';
-  }
-  if (p.stalenessMs >= 3 * DAY) return `已停滞 ${Math.floor(p.stalenessMs / DAY)} 天，该推进了`;
-  if (p.progress > 0 && p.progress < 1) return `已完成 ${Math.round(p.progress * 100)}%，趁热打铁`;
-  return `重要性 ${p.importance}，排入今日聚焦`;
+  if (p.dueAt < nowMs) return '已逾期，优先处理';
+  if (p.dueAt - nowMs <= DAY) return '快到点了，先准备一下';
+  const next = p.steps.find((s) => s.state !== 'done');
+  return next ? `下一步：${next.text}` : `截止 ${new Date(p.dueAt).toLocaleString('zh-CN')}`;
 }
 
 function setDayClamped(d: Date, day: number): void {

@@ -75,7 +75,7 @@ async function handle(rpc: Rpc) {
           'DeskAlarm 是 agent-first 的推进引擎，主力操作员是 agent。',
           '',
           '用法上的硬规矩：',
-          '1. 先调 today_digest 看今日聚焦和剩余强打扰额度，别凭上下文里的印象动手。',
+          '1. 先调 today_digest 看今日聚焦（按截止时间排序），别凭上下文里的印象动手。',
           '2. 写操作一律两步：create_pursuit / decompose / reprioritize / followup / archive',
           '   或 plan_changes 只生成预览和 plan_id；给用户看过并确认后，再调 apply_changes 执行。',
           '   plan_id 只能用一次且十分钟过期。',

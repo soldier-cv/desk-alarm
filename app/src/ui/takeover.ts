@@ -1,23 +1,22 @@
 /**
- * L4 接管窗口。无边框、置顶、关不掉，只有跟进动作能结束它。
+ * 强提醒接管窗口。无边框、置顶、关不掉，只有跟进动作能结束它。
  * 与主窗口不共享全局变量，动作全靠 Tauri 事件发给主窗口（WS 在那边）。
  */
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import { dayLabel, hhmm, hostOf, serverNow, type FollowupAction, type NudgeChannel, type NudgeLevel, type Pursuit } from '../api';
+import { dayLabel, hhmm, hostOf, serverNow, type FollowupAction, type Pursuit } from '../api';
 import { applyTheme, loadTheme } from '../theme';
+import { openStepsDialog } from '../widgets';
 import '../styles.css';
 
 applyTheme(loadTheme());
 listen<{ theme: 'dark' | 'morandi' }>('theme:changed', (ev) => applyTheme(ev.payload.theme));
 
 interface Payload {
-  pursuit: Pursuit;
-  level: NudgeLevel;
-  channel: NudgeChannel;
+  items: Pursuit[];
+  index: number;
   reason: string;
   serverTs: number;
-  stage: 'banner' | 'escalated';
   muted: boolean;
 }
 
@@ -60,17 +59,22 @@ function dayAfter(days: number, hour = 9): number {
   return d.getTime();
 }
 
-function renderActions(p: Payload) {
-  const next = p.pursuit.steps.find((s) => s.state !== 'done')?.text ?? '';
+function item(): Pursuit | null {
+  return current?.items[current.index] ?? null;
+}
+
+function renderActions(p: Payload, it: Pursuit) {
+  const next = it.steps.find((s) => s.state !== 'done');
+  const more = p.index < p.items.length - 1;
   el.acts.innerHTML = `
-    <button class="btn solid" data-act="done">推进 ${next ? `：${esc(next.slice(0, 18))}` : '第一步'}</button>
-    <button class="btn ghost" data-act="partial">推了一点</button>
+    <button class="btn solid" data-act="done" data-step="${esc(next?.id ?? '')}">${next ? `完成：${esc(next.text.slice(0, 18))}` : '完成'}</button>
     <button class="btn ghost" data-act="smaller">拆小</button>
-    <button class="btn ghost" data-act="later">改天</button>
-    <button class="btn danger" data-act="archive">归档</button>`;
+    <button class="btn ghost" data-act="later">延期</button>
+    <button class="btn danger" data-act="archive">归档</button>
+    ${more ? `<button class="btn ghost" data-act="next">下一条（${p.items.length - p.index - 1}）</button>` : ''}`;
 
   el.snooze.innerHTML = `
-    <span class="lb">${esc(p.reason || '这件事停太久了，先决定下一步')}</span>
+    <span class="lb">${esc(p.reason || '到点了，先给它一个去向')}</span>
     <button class="btn sm ghost" data-act="later" data-to="${dayAfter(1)}">明天 9:00</button>
     <button class="btn sm ghost" data-act="later" data-to="${dayAfter(3)}">3 天后</button>
     <button class="btn sm ghost" data-act="later" data-to="${dayAfter(7)}">下周</button>`;
@@ -78,43 +82,41 @@ function renderActions(p: Payload) {
 
 function render(p: Payload) {
   current = p;
-  const item = p.pursuit;
+  const it = item();
+  if (!it) return;
   startedAt = Date.now();
 
-  el.root.classList.toggle('shake', p.stage === 'escalated');
   el.root.classList.remove('entering');
   void el.root.offsetWidth;
   el.root.classList.add('entering');
 
-  const at = item.dueAt ?? serverNow();
+  const at = it.dueAt ?? serverNow();
   el.clock.innerHTML = `${hhmm(at)}<span>${esc(dayLabel(at))}</span>`;
-  el.title.textContent = item.text;
-  el.note.textContent = item.note ?? '';
-  el.note.hidden = !item.note;
+  el.title.textContent = it.text;
+  el.note.textContent = it.note ?? '';
+  el.note.hidden = !it.note;
 
   const targets: string[] = [];
-  if (item.url) {
-    targets.push(`<div class="t">${ICON.link}<span>${esc(hostOf(item.url))}</span><button class="btn sm ghost act" data-act="open">打开</button></div>`);
+  if (it.url) {
+    targets.push(`<div class="t">${ICON.link}<span>${esc(hostOf(it.url))}</span><button class="btn sm ghost act" data-act="open">打开</button></div>`);
   }
-  if (item.path) {
-    targets.push(`<div class="t path">${ICON.folder}<span>${esc(item.path)}</span></div>`);
+  if (it.path) {
+    targets.push(`<div class="t path">${ICON.folder}<span>${esc(it.path)}</span></div>`);
   }
   el.target.innerHTML = targets.join('');
 
-  el.where.textContent = item.deviceIds.length
-    ? `同步到 ${item.deviceIds.length} 台设备`
+  el.where.textContent = it.deviceIds.length
+    ? `同步到 ${it.deviceIds.length} 台设备`
     : '这条在所有设备可见';
 
   el.escNote.textContent = p.muted
     ? '静音时段内，窗口会自己收起'
     : '关不掉，只能选一个跟进动作';
 
-  el.stage.textContent = p.stage === 'escalated'
-    ? '已升级：关不掉，会继续跟催'
-    : `L${p.level} 接管：这件事已经停滞，先给它一个去向`;
-  el.stage.setAttribute('data-stage', p.stage);
+  el.stage.textContent = `强提醒 · ${p.index + 1}/${p.items.length}：到点了，先给它一个去向`;
+  el.stage.setAttribute('data-stage', 'banner');
 
-  renderActions(p);
+  renderActions(p, it);
 
   if (tickTimer !== null) clearInterval(tickTimer);
   tickTimer = window.setInterval(() => {
@@ -129,54 +131,55 @@ function render(p: Payload) {
 /* -------------------------------------------------------- 动作派发 */
 
 async function send(action: FollowupAction, extra: Record<string, unknown> = {}) {
-  const p = current;
-  if (!p) return;
+  const it = item();
+  if (!it) return;
   await emit('takeover:action', {
-    pursuitId: p.pursuit.id,
+    pursuitId: it.id,
     action,
-    version: p.pursuit.version,
+    version: it.version,
     ...extra,
   });
-  await invoke('hide_takeover');
 }
 
-function askSteps() {
-  const p = current;
-  if (!p) return;
-  const next = p.pursuit.steps.find((s) => s.state !== 'done')?.text ?? p.pursuit.text;
-  const value = window.prompt('把这件事拆成 2-3 个能立刻动手的小步骤，用换行分隔', next);
-  if (value === null) return;
-  const steps = value.split(/\r?\n|；|;/).map((s) => s.trim()).filter(Boolean);
-  if (!steps.length) return;
-  void send('smaller', { steps });
+async function askSteps() {
+  const it = item();
+  if (!it) return;
+  const next = it.steps.find((s) => s.state !== 'done')?.text ?? it.text;
+  const steps = await openStepsDialog(next ? [next] : []);
+  if (!steps) return;
+  await send('smaller', { steps });
 }
 
-async function act(kind: string, to?: number) {
-  const p = current;
-  if (!p) return;
+async function act(kind: string, to?: number, stepId?: string) {
+  const it = item();
+  if (!it) return;
   switch (kind) {
-    case 'done': await send('done'); break;
-    case 'partial': await send('partial'); break;
-    case 'smaller': askSteps(); break;
+    case 'done': await send('done', stepId ? { stepId } : {}); break;
+    case 'smaller': await askSteps(); break;
     case 'later': await send('later', { to: to ?? dayAfter(1) }); break;
     case 'archive': await send('archive'); break;
-    case 'open':
-      if (p.pursuit.url) {
-        await emit('takeover:open-url', { pursuitId: p.pursuit.id, url: p.pursuit.url });
-        await invoke('hide_takeover');
+    case 'next':
+      if (current && current.index < current.items.length - 1) {
+        await emit('takeover:next', {});
       }
+      break;
+    case 'open':
+      if (it.url) await emit('takeover:open-url', { pursuitId: it.id, url: it.url });
       break;
   }
 }
 
 document.addEventListener('click', (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-act]');
-  if (b) void act(b.dataset.act!, b.dataset.to ? Number(b.dataset.to) : undefined);
+  if (b) void act(b.dataset.act!, b.dataset.to ? Number(b.dataset.to) : undefined, b.dataset.step);
 });
 
-// Esc 不结束提醒。这是设计意图：让主窗口把升级程度往上抬
+// Esc 不结束提醒。这是设计意图：只有跟进动作能关掉
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Enter' && current) void act('done');
+  if (ev.key === 'Enter' && item()) {
+    const next = item()!.steps.find((s) => s.state !== 'done');
+    void act('done', undefined, next?.id);
+  }
   if (ev.key === 'Escape') {
     void emit('takeover:close-blocked', {});
     el.root.classList.add('shake');

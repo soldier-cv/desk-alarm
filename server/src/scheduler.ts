@@ -35,9 +35,13 @@ async function rotate(): Promise<void> {
           await markFailed(n.id, '推进项已不存在');
           continue;
         }
-        // device_id 为 null 表示「推送范围=全部在线设备」，不是「没人收」。
-        // 直接广播到该用户所有在线设备，避免默认事项的提醒被静默丢弃
+        // device_id 为 null 表示「推送范围=全部在线设备」。一台都不在线时保持 pending，
+        // 否则会 markDelivered 让这条永远进不了 missed，用户再也收不到
         if (!deviceId) {
+          if (!hub.hasOnline(n.userId)) {
+            await markFailed(n.id, '设备不在线');
+            continue;
+          }
           hub.broadcastToUser(n.userId, {
             t: 'pursuit.nudge', pursuit,
             level: n.level, channel: n.channel, reason: n.reason, serverTs: Date.now(),

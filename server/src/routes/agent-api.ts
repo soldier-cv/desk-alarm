@@ -55,7 +55,7 @@ function asMs(v: number | string | null | undefined): number | null {
 }
 
 function needsReason(req: CreatePursuitRequest): boolean {
-  if ((req.importance ?? 0) >= 3) return true;
+  if (req.strength === 'strong' || (req.importance ?? 0) >= 3) return true;
   if (req.commitment?.date != null) {
     const d = asMs(req.commitment.date);
     if (d !== null && d - Date.now() <= 24 * 3600_000) return true;

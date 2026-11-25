@@ -72,6 +72,9 @@ export async function pursuitRoutes(app: FastifyInstance) {
     if (body.nature !== undefined && !oneOf(NATURES, body.nature)) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'nature 取值不合法' });
     }
+    if (body.strength !== undefined && !['strong', 'weak'].includes(body.strength)) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'strength 只能是 strong 或 weak' });
+    }
     if (body.importance !== undefined && ![0, 1, 2, 3].includes(body.importance)) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'importance 只能是 0..3' });
     }
@@ -107,6 +110,9 @@ export async function pursuitRoutes(app: FastifyInstance) {
     }
     if (body.nature !== undefined && !oneOf(NATURES, body.nature)) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'nature 取值不合法' });
+    }
+    if (body.strength !== undefined && !['strong', 'weak'].includes(body.strength)) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'strength 只能是 strong 或 weak' });
     }
     if (body.importance !== undefined && ![0, 1, 2, 3].includes(body.importance)) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'importance 只能是 0..3' });

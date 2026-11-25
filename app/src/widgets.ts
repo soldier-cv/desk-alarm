@@ -262,6 +262,103 @@ export function openTimePicker(
   el.focus();
 }
 
+/**
+ * 拆小步骤输入。逐行录入，Enter 追加新行；三处入口共用，避免各写一份 prompt。
+ */
+export function openStepsDialog(initial: string[]): Promise<string[] | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0', zIndex: '9999', background: 'rgba(0,0,0,.55)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+    });
+    const box = document.createElement('div');
+    Object.assign(box.style, {
+      background: 'var(--card, #fff)', color: 'var(--foreground, inherit)',
+      borderRadius: '12px', padding: '18px', width: 'min(440px, 100%)',
+      maxHeight: '90vh', overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,.35)',
+    });
+    box.innerHTML = `
+      <h3 style="margin:0 0 6px">拆成小步骤</h3>
+      <p class="hint" style="margin:0 0 12px">每行一步，按 Enter 加新行；空行会忽略。</p>`;
+    const rows = document.createElement('div');
+    rows.style.display = 'grid';
+    rows.style.gap = '8px';
+    box.appendChild(rows);
+
+    const close = (value: string[] | null) => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(value);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') close(null);
+    };
+    document.addEventListener('keydown', onKey);
+
+    const addRow = (value = '', focus = false) => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.gap = '8px';
+      const input = document.createElement('input');
+      input.className = 'input';
+      input.value = value;
+      input.placeholder = '这一步要做什么';
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          addRow('', true);
+        }
+      });
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn sm ghost';
+      del.textContent = '×';
+      del.title = '删掉这一行';
+      del.onclick = () => {
+        if (rows.children.length > 1) row.remove();
+        else input.value = '';
+      };
+      row.append(input, del);
+      rows.appendChild(row);
+      if (focus) input.focus();
+    };
+
+    initial.forEach((v) => addRow(v));
+    if (!initial.length) addRow('', true);
+
+    const actions = document.createElement('div');
+    actions.className = 'set-actions';
+    actions.style.marginTop = '14px';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'btn sm';
+    add.textContent = '+ 添加一行';
+    add.onclick = () => addRow('', true);
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn sm ghost';
+    cancel.textContent = '取消';
+    cancel.onclick = () => close(null);
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'btn solid sm';
+    save.textContent = '保存';
+    save.onclick = () => {
+      const list = [...rows.querySelectorAll('input')]
+        .map((i) => i.value.trim()).filter(Boolean);
+      close(list.length ? list : null);
+    };
+    actions.append(add, cancel, save);
+    box.appendChild(actions);
+    overlay.appendChild(box);
+    overlay.addEventListener('mousedown', (ev) => {
+      if (ev.target === overlay) close(null);
+    });
+    document.body.appendChild(overlay);
+  });
+}
+
 function esc(s: string): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => (
     c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;'

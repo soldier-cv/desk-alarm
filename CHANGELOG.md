@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Changed
+- 移除 L1–L5 停滞阶梯、每日强打扰额度与 L3 横幅队列，改为「强弱二值 + 截止时间单一时钟」：弱提醒（通知，1/10/30/60 分钟后每 120 分钟重复）、强提醒（到点接管弹窗，多条合并逐条处理）。去掉「重要性」星标，用户直接选强/弱；没填截止时间默认强 2 小时、弱 1 天。
+- 跟进动作收敛为完成 / 延期 / 拆小 / 归档；拆小插入步骤并重设截止时间，`partial` 不再作为 UI 动作。
+- 新增 `archiveAfterDays` 配置（默认 30 天），按截止时间逾期自动归档并写明原因。
+- 客户端、Android 常驻服务与文档同步到新模型；无在线设备时 nudge 保持 pending 等重连补发。
+
 ## [v1.1.3] - 2026-11-24
 
 ### Fixed

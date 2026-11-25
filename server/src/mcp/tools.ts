@@ -53,7 +53,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'today_digest',
     description:
-      '今日聚焦：引擎按重要性、逾期、停滞和承诺排出的该推的事，以及今天还剩几次强打扰额度。' +
+      '今日聚焦：引擎按截止时间排出的该推的事，逾期在前。' +
       'agent 开工先调它，别凭上下文里的印象动手。',
     inputSchema: { type: 'object', properties: {} },
   },
@@ -243,7 +243,6 @@ async function todayDigest(userId: string) {
   const focus: FocusResult = await buildFocus(userId);
   return {
     serverTs: focus.serverTs,
-    剩余强打扰额度: focus.budgetLeft,
     聚焦数: focus.items.length,
     聚焦: focus.items.map((it) => ({
       id: it.pursuit.id,
@@ -539,7 +538,7 @@ function asMs(v: number | string | null | undefined): number | null {
 
 function needsReason(req: CreatePursuitRequest): boolean {
   if ((req.importance ?? 0) >= 3) return true;
-  // 对外承诺、或高精力且临近截止，都会很快爬到 L4/L5 强打扰
+  // 强提醒在截止时间到点弹窗，弱提醒到点发通知
   if (req.commitment?.date != null) {
     const d = asMs(req.commitment.date);
     if (d !== null && d - Date.now() <= 24 * 3600_000) return true;

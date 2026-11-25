@@ -61,13 +61,40 @@ export type StepState = 'todo' | 'doing' | 'done';
 
 /**
  * 跟进动作。这是用户/agent 对一次跟催的回答，会实时改写后续策略。
- * later=改天、smaller=拆小、archive=不要了、partial=推了一点、ignored=没理。
+ * later=延期、smaller=拆小、archive=归档、ignored=忽略；partial 只在历史记录里保留。
  */
 export type FollowupAction = 'done' | 'partial' | 'later' | 'smaller' | 'archive' | 'ignored';
 
-/** 打扰等级。L1 静默 → L5 归档，连续谱替代旧的强/弱二分 */
-export type NudgeLevel = 1 | 2 | 3 | 4 | 5;
+/** 提醒强弱。2=弱提醒（通知），4=强提醒（接管弹窗），不再有 L1/L3/L5 */
+export type NudgeLevel = 2 | 4;
+export type ReminderStrength = 'strong' | 'weak';
 export type NudgeChannel = 'in_app' | 'notification' | 'takeover';
+
+export const WEAK_LEVEL: NudgeLevel = 2;
+export const STRONG_LEVEL: NudgeLevel = 4;
+
+/** 星标 0/1 是弱提醒，2/3 是强提醒；措辞不参与判定 */
+export function strengthOfImportance(i: Importance): ReminderStrength {
+  return i >= 2 ? 'strong' : 'weak';
+}
+
+export function strengthOfLevel(level: NudgeLevel): ReminderStrength {
+  return level === STRONG_LEVEL ? 'strong' : 'weak';
+}
+
+export function levelForStrength(strength: ReminderStrength): NudgeLevel {
+  return strength === 'strong' ? STRONG_LEVEL : WEAK_LEVEL;
+}
+
+/** 兼容旧列：强提醒存 3，弱提醒存 0 */
+export function importanceForStrength(strength: ReminderStrength): Importance {
+  return strength === 'strong' ? 3 : 0;
+}
+
+/** 没填截止时间时的默认值：强 2 小时、弱 1 天 */
+export function defaultDueMs(strength: ReminderStrength, now: number): number {
+  return now + (strength === 'strong' ? 2 * 60 * 60_000 : 24 * 60 * 60_000);
+}
 
 export type EntryKind = 'text' | 'link' | 'path' | 'image' | 'audio';
 
@@ -109,6 +136,8 @@ export interface Pursuit {
   path: string | null;
 
   nature: PursuitNature;
+  /** 提醒强弱；内部仍沿用 importance 列存储（0/1 弱、2/3 强），前端不再暴露重要性概念 */
+  strength: ReminderStrength;
   importance: Importance;
   energy: Energy;
   dueAt: number | null;
@@ -177,14 +206,12 @@ export interface FocusItem {
 export interface FocusResult {
   serverTs: number;
   items: FocusItem[];
-  /** 今天还剩多少次强打扰额度 */
-  budgetLeft: number;
 }
 
-/** 跟进入口：引擎对一条停滞项给出的下一步动作建议 */
+/** 跟进入口：引擎对一条待办给出的下一步动作建议 */
 export interface FollowupPrompt {
   pursuit: Pursuit;
-  level: NudgeLevel;
+  strength: ReminderStrength;
   question: string;
   actions: FollowupAction[];
 }
@@ -192,10 +219,8 @@ export interface FollowupPrompt {
 /* ============================================================ 设置 */
 
 export interface Settings {
-  /** 每天 L4/L5 强打扰上限。配额制从根上避免全都喊 */
-  dailyStrongBudget: number;
-  /** 各等级的触发阈值（停滞毫秒数），索引 0 对应 L2 */
-  escalateAfterMs: { l2: number; l3: number; l4: number; l5: number };
+  /** 截止过了多少天自动归档，强弱一视同仁 */
+  archiveAfterDays: number;
   /** 静音时段，分钟数，跨零点时 end < start */
   quietStartMin: number;
   quietEndMin: number;
@@ -228,6 +253,7 @@ export interface CreatePursuitRequest {
   path?: string | null;
   note?: string | null;
   nature?: PursuitNature;
+  strength?: ReminderStrength;
   importance?: Importance;
   energy?: Energy;
   dueAt?: number | string | null;
@@ -242,6 +268,7 @@ export interface CreatePursuitRequest {
 export interface UpdatePursuitRequest {
   text?: string;
   note?: string | null;
+  strength?: ReminderStrength;
   importance?: Importance;
   energy?: Energy;
   nature?: PursuitNature;
@@ -260,9 +287,11 @@ export interface UpdateStepRequest { text?: string; state?: StepState }
 export interface FollowupRequest {
   action: FollowupAction;
   note?: string;
-  /** later 时给的新时间；smaller 时可带 agent 拆好的步骤 */
+  /** later 延期时给的新时间；smaller 拆小时可带 agent 拆好的步骤 */
   to?: number | string;
   steps?: string[];
+  /** done 时只完成这一条步骤，还有未完成步骤则整条保持 active 并重排截止时间 */
+  stepId?: string;
   version: number;
 }
 
@@ -288,7 +317,7 @@ export type ServerMessage =
   | { t: 'pursuit.created'; pursuit: Pursuit }
   | { t: 'pursuit.updated'; pursuit: Pursuit }
   | { t: 'pursuit.deleted'; pursuitId: string }
-  | { t: 'pursuit.focused'; items: FocusItem[]; budgetLeft: number }
+  | { t: 'pursuit.focused'; items: FocusItem[] }
   | { t: 'pursuit.nudge'; pursuit: Pursuit; level: NudgeLevel; channel: NudgeChannel; reason: string; serverTs: number }
   | { t: 'pursuit.stepped'; pursuit: Pursuit }
   | { t: 'pursuit.followed'; pursuit: Pursuit; action: FollowupAction }

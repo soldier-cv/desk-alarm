@@ -15,8 +15,13 @@ export type {
   Device, Energy, EntryKind, Followup, FollowupAction, FollowupPrompt, FollowupRequest,
   FocusItem, FocusResult, Importance, LoginResponse, MyStats, Nudge, NudgeChannel,
   NudgeLevel, Overview, Platform, Pursuit, PursuitContext, PursuitNature, PursuitStatus,
+  ReminderStrength,
   RecurrenceRule, Role, ServerMessage, Settings, Step, StepState, TransportName,
   UpdatePursuitRequest, UpdateStepRequest, User,
+} from '../../shared/types';
+
+export {
+  importanceForStrength, levelForStrength, strengthOfImportance, strengthOfLevel,
 } from '../../shared/types';
 
 export type PursuitView = 'today' | 'all' | 'inbox' | 'done' | 'archived';
@@ -74,13 +79,7 @@ export interface Config {
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  dailyStrongBudget: 3,
-  escalateAfterMs: {
-    l2: 2 * 60 * 60_000,
-    l3: 24 * 60 * 60_000,
-    l4: 3 * 24 * 60 * 60_000,
-    l5: 7 * 24 * 60 * 60_000,
-  },
+  archiveAfterDays: 30,
   quietStartMin: 23 * 60 + 30,
   quietEndMin: 7 * 60,
   focusAtMin: 9 * 60,
@@ -107,11 +106,7 @@ export function loadConfig(): Config {
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
-      settings: {
-        ...DEFAULT_SETTINGS,
-        ...s,
-        escalateAfterMs: { ...DEFAULT_SETTINGS.escalateAfterMs, ...(s.escalateAfterMs ?? {}) },
-      },
+      settings: { ...DEFAULT_SETTINGS, ...s },
     };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -226,7 +221,7 @@ export function versionOf(p: Pursuit): number {
 /** 服务端还没有跟进历史路由，会话内先记住本机做过的和广播收到的动作 */
 const followupLog = new Map<string, Followup[]>();
 
-export function noteFollowup(pursuitId: string, action: FollowupAction, level: NudgeLevel = 1, note: string | null = null) {
+export function noteFollowup(pursuitId: string, action: FollowupAction, level: NudgeLevel = 2, note: string | null = null) {
   const list = followupLog.get(pursuitId) ?? [];
   // 本机动作会收到服务端广播，同一个动作记两次只会让历史变吵
   if (list[0] && list[0].action === action && serverNow() - list[0].at < 2000) return;
@@ -423,9 +418,7 @@ export interface Parsed {
   kindLabel: string;
   remindAt: number | null;
   timeLabel: string;
-  /** 捕获窗一键标注的显式重要性，不靠关键词猜 */
-  importance: Importance;
-  /** 只用于提示：关键词命中不代表替用户定了重要性 */
+  /** 解析结果只给默认值，强弱由用户在捕获窗直接选 */
   strength: 'strong' | 'weak';
 }
 
@@ -448,14 +441,12 @@ function cnNumber(s: string): number | null {
   return CN_DIGIT[s] ?? null;
 }
 
-const URGENT_RE = /一定要|必须|别忘|不要忘|别忘了|务必|千万|记得|重要|紧急|马上|立刻|立即|尽快|截止|deadline/i;
-
 export function parseInput(raw: string, now = serverNow()): Parsed {
   const s = raw.trim();
   const out: Parsed = {
     kind: 'text', kindLabel: '普通文本',
     remindAt: null, timeLabel: '没有时间，进收集箱',
-    importance: 0, strength: 'weak',
+    strength: 'weak',
   };
   if (!s) return out;
 
@@ -478,7 +469,6 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
   const rel = s.match(/(半|\d+|[零〇一二两三四五六七八九十]+)\s*(分钟|分|小时|时|钟头)\s*(之?后)?/);
   const abs = s.match(/(今天|明天|后天|大后天|周[一二三四五六日天])[^\d]{0,4}(\d{1,2})\s*[:：点]\s*(\d{2})?/);
   const clock = s.match(/^\s*(\d{1,2})[:：](\d{2})\s*$/);
-  const urgent = URGENT_RE.test(s);
 
   if (dated) {
     const p = (n: number) => String(n).padStart(2, '0');
@@ -515,7 +505,8 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
     out.timeLabel = `今天 ${clock[1]}:${clock[2]}`;
   }
 
-  out.strength = urgent ? 'strong' : 'weak';
+  // 强弱由用户直接选，不由措辞推断；没填时间由服务端按最终选的强弱补默认值
+  if (out.remindAt === null) out.timeLabel = '没填时间，按提醒类型给默认值';
   return out;
 }
 
@@ -563,11 +554,6 @@ export function warmthOf(p: Pursuit, now = serverNow()): Urgency {
     if (ms <= 60 * 60_000) return 'close';
     if (ms <= 24 * 60 * 60_000) return 'soon';
   }
-  const stale = now - p.lastActivityAt;
-  const t = loadConfig().settings.escalateAfterMs;
-  if (stale >= t.l4) return 'due';
-  if (stale >= t.l3) return 'close';
-  if (stale >= t.l2) return 'soon';
   return 'none';
 }
 
@@ -600,3 +586,13 @@ export const NATURE_LABEL: Record<Pursuit['nature'], string> = {
 export const ENERGY_LABEL: Record<Pursuit['energy'], string> = {
   low: '低', medium: '中', high: '高',
 };
+
+export const FOLLOWUP_ACTION_LABEL: Record<FollowupAction, string> = {
+  done: '完成', partial: '推了一点（未完成）', later: '延期',
+  smaller: '拆小', archive: '归档', ignored: '忽略',
+};
+
+/** 用户常用逗号分隔，别让多个步骤挤成一条 */
+export function parseSteps(value: string): string[] {
+  return value.split(/\r?\n|[,，;；]/).map((s) => s.trim()).filter(Boolean);
+}

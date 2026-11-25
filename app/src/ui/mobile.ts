@@ -7,13 +7,15 @@ import { initUpdater, openAbout } from '../about';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer, saveConfig,
-  serverNow, staleLabel, switchServer, versionOf, warmthOf, ENERGY_LABEL, NATURE_LABEL,
-  type ClientPlatform, type Followup, type FollowupAction, type FocusResult, type Importance,
-  type NudgeLevel, type Pursuit, type PursuitStatus, type RecurrenceRule,
+  serverNow, staleLabel, switchServer, versionOf, warmthOf,
+  ENERGY_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, levelForStrength,
+  type ClientPlatform, type Followup, type FollowupAction, type FocusResult,
+  type Pursuit, type PursuitStatus, type RecurrenceRule, type ReminderStrength,
   type ServerMessage, type Settings, type StepState,
 } from '../api';
-import { FollowupController, dropBannerByPursuit } from '../alarm';
+import { FollowupController } from '../alarm';
 import { applyTheme, loadTheme, saveTheme, THEMES } from '../theme';
+import { openStepsDialog } from '../widgets';
 import '../styles-mobile.css';
 
 const app = document.getElementById('app')!;
@@ -30,22 +32,34 @@ let pursuits: Pursuit[] = [];
 let followups: Followup[] = [];
 let counts: Partial<Record<PursuitStatus, number>> = {};
 let selectedId: string | null = null;
-let captureImportance: Importance = 0;
-const IMP_TITLE = ['不标：按默认权重排期', '★ 低：略微优先', '★★ 中：优先推进', '★★★ 高：最优先推进'];
+let captureStrength: ReminderStrength = 'weak';
 const localHandled = new Map<string, number>();
 
+const mobileTakeoverQueue: Pursuit[] = [];
+
+function showNextMobileTakeover() {
+  if (!mobileTakeoverQueue.length) {
+    document.getElementById('m-takeover')?.remove();
+    return;
+  }
+  showMobileTakeover(mobileTakeoverQueue[0], mobileTakeoverQueue.length);
+}
+
 const control = new FollowupController({
-  onSilent: () => { void refresh(); },
-  onNotify: (p, _level, reason, attempt) => {
+  onNotify: (p, reason, attempt) => {
     void notify(p.text, `${reason}${attempt > 1 ? ` · 第 ${attempt} 次` : ''}`);
     toast(`${p.text} · ${reason}`);
   },
-  onBanner: (p, _level, reason) => toast(`${p.text} · ${reason}`),
-  onTakeover: (p, level, reason) => showMobileTakeover(p, level, reason),
-  onArchive: (p) => { toast(`长期停滞，已自动归档：${p.text}`); void refresh(); },
+  onTakeover: (p) => {
+    if (!mobileTakeoverQueue.some((x) => x.id === p.id)) mobileTakeoverQueue.push(p);
+    showNextMobileTakeover();
+  },
   onStop: (p, reason) => {
-    document.getElementById('m-takeover')?.remove();
-    dropBannerByPursuit(p.id);
+    const i = mobileTakeoverQueue.findIndex((x) => x.id === p.id);
+    if (i >= 0) {
+      mobileTakeoverQueue.splice(i, 1);
+      showNextMobileTakeover();
+    }
     if (reason === 'elsewhere' && Date.now() - (localHandled.get(p.id) ?? 0) > 3000) {
       toast('这条已在别的设备上处理掉了');
     }
@@ -138,13 +152,12 @@ function renderCapture() {
       <textarea class="cap-input" id="cap" placeholder="例如：明天 15:00 交周报&#10;例如：把驾照考试拆成几步&#10;例如：https://example.com" autocomplete="off"></textarea>
       <div class="cap-parse" id="parse"></div>
       <div class="cap-imp" id="cap-imp">
-        <span>重要性</span>
-        ${([0, 1, 2, 3] as Importance[]).map((n) =>
-          `<button type="button" class="chip ${captureImportance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${['不标', '★', '★★', '★★★'][n]}</button>`,
-        ).join('')}
+        <span>提醒类型</span>
+        <button type="button" class="chip ${captureStrength === 'weak' ? 'hot' : ''}" data-strength="weak">弱提醒</button>
+        <button type="button" class="chip ${captureStrength === 'strong' ? 'hot' : ''}" data-strength="strong">强提醒</button>
       </div>
       <div class="cap-row"><button class="btn solid block" id="save">记一条</button></div>
-      <div class="cap-tip">重要性别靠措辞猜：觉得重要就点一下星。时间解析只做提示，以服务端存下来的为准。</div>
+      <div class="cap-tip">强弱自己选，不靠措辞猜；没填时间按强弱给默认截止。</div>
     </div>
   </div>`;
 
@@ -159,11 +172,11 @@ function renderCapture() {
   };
   input.addEventListener('input', preview);
   document.getElementById('cap-imp')!.addEventListener('click', (ev) => {
-    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-imp]');
+    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-strength]');
     if (!b) return;
-    captureImportance = Number(b.dataset.imp) as Importance;
+    captureStrength = b.dataset.strength as ReminderStrength;
     document.querySelectorAll<HTMLElement>('#cap-imp .chip').forEach((c) => {
-      c.classList.toggle('hot', c.dataset.imp === String(captureImportance));
+      c.classList.toggle('hot', c.dataset.strength === captureStrength);
     });
   });
   document.getElementById('save')!.onclick = () => void saveCapture();
@@ -180,13 +193,13 @@ async function saveCapture() {
       url: p.kind === 'link' ? text : null,
       path: p.kind === 'path' ? text : null,
       dueAt: p.remindAt,
-      importance: captureImportance,
+      strength: captureStrength,
       nature: 'one_off',
     });
     input.value = '';
     document.getElementById('parse')!.innerHTML = '';
-    captureImportance = 0;
-    document.querySelectorAll<HTMLElement>('#cap-imp .chip').forEach((c) => c.classList.toggle('hot', c.dataset.imp === '0'));
+    captureStrength = 'weak';
+    document.querySelectorAll<HTMLElement>('#cap-imp .chip').forEach((c) => c.classList.toggle('hot', c.dataset.strength === 'weak'));
     toast(p.remindAt !== null ? '已设截止' : '已存进收件箱');
     void refresh();
     if (p.remindAt !== null) setView('today');
@@ -218,16 +231,16 @@ function focusHtml(): string {
       <div class="focus-empty">今天没有需要强推的事。</div></div>`;
   }
   return `<div class="focus-card">
-    <div class="focus-head"><b>今日聚焦</b><span>剩余强打扰 <b>${focus.budgetLeft}</b></span></div>
+    <div class="focus-head"><b>今日聚焦</b><span>按截止时间排序</span></div>
     ${focus.items.map((it) => `
       <div class="focus-item">
         <div class="fi-title">${esc(it.pursuit.text)}</div>
         <div class="fi-reason">${esc(it.reason)}</div>
         ${it.suggestedNextStep ? `<div class="fi-next">下一步：${esc(it.suggestedNextStep)}</div>` : ''}
         <div class="acts">
-          <button class="btn" data-follow="done" data-id="${esc(it.pursuit.id)}">推进</button>
+          <button class="btn" data-follow="done" data-id="${esc(it.pursuit.id)}" data-step="${esc(it.pursuit.steps.find((s) => s.state !== 'done')?.id ?? '')}">完成</button>
           <button class="btn" data-follow="smaller" data-id="${esc(it.pursuit.id)}">拆小</button>
-          <button class="btn" data-follow="later" data-id="${esc(it.pursuit.id)}">改天</button>
+          <button class="btn" data-follow="later" data-id="${esc(it.pursuit.id)}">延期</button>
           <button class="btn" data-follow="archive" data-id="${esc(it.pursuit.id)}">归档</button>
         </div>
       </div>`).join('')}
@@ -244,14 +257,14 @@ function entryHtml(p: Pursuit): string {
     </div>
     <div class="meta">
       <span class="${u === 'due' || u === 'over' ? 'hot' : ''}">${esc(dueLabel(p))} · ${esc(staleLabel(p))}</span>
-      <span>${'●'.repeat(p.importance)}${'○'.repeat(3 - p.importance)}</span>
+      <span>${p.strength === 'strong' ? '强提醒' : '弱提醒'}</span>
       <span>${natureIcon(p.nature)} ${NATURE_LABEL[p.nature]}</span>
       <span>步骤 ${done}/${total}</span>
     </div>
     <div class="prog"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></div>
     <div class="acts">
-      <button class="btn" data-follow="done" data-id="${esc(p.id)}">推进</button>
-      <button class="btn" data-follow="later" data-id="${esc(p.id)}">改天</button>
+      <button class="btn" data-follow="done" data-id="${esc(p.id)}">完成</button>
+      <button class="btn" data-follow="later" data-id="${esc(p.id)}">延期</button>
       <button class="btn" data-follow="archive" data-id="${esc(p.id)}">归档</button>
     </div>
   </div>`;
@@ -274,7 +287,8 @@ function bindFollowButtons(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('[data-follow]').forEach((b) => {
     b.onclick = (ev) => {
       ev.stopPropagation();
-      void mobileFollowup(b.dataset.id!, b.dataset.follow as FollowupAction);
+      void mobileFollowup(b.dataset.id!, b.dataset.follow as FollowupAction,
+        b.dataset.step ? { stepId: b.dataset.step } : {});
     };
   });
 }
@@ -282,7 +296,8 @@ function bindFollowButtons(root: HTMLElement) {
 async function loadList() {
   try {
     const [list, f] = await Promise.all([api.pursuits(listKind), api.focus()]);
-    pursuits = [...list.pursuits].sort((a, b) => b.weight - a.weight);
+    pursuits = [...list.pursuits].sort((a, b) =>
+      (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity) || a.importanceSort - b.importanceSort);
     focus = f;
     renderEntries();
   } catch {
@@ -345,10 +360,11 @@ function renderDetail() {
       </div>
 
       <div class="set-group">
-        <h3>重要性</h3>
-        <div class="imp-row">${([0, 1, 2, 3] as Importance[]).map((n) =>
-          `<button class="btn ${p.importance === n ? 'solid' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${['不标', '★', '★★', '★★★'][n]}</button>`,
-        ).join('')}</div>
+        <h3>提醒类型</h3>
+        <div class="imp-row">
+          <button class="btn ${p.strength === 'weak' ? 'solid' : ''}" data-strength="weak">弱提醒</button>
+          <button class="btn ${p.strength === 'strong' ? 'solid' : ''}" data-strength="strong">强提醒</button>
+        </div>
       </div>
 
       <div class="set-group">
@@ -376,13 +392,14 @@ function renderDetail() {
       <div class="set-group">
         <h3>跟进历史</h3>
         ${followups.length ? followups.map((f) => `
-          <div class="set-val" style="padding:6px 0">${esc(new Date(f.at).toLocaleString('zh-CN'))} · L${f.level} · ${esc(f.action)}${f.note ? ` · ${esc(f.note)}` : ''}</div>`).join('')
+          <div class="set-val" style="padding:6px 0">${esc(new Date(f.at).toLocaleString('zh-CN'))} · ${f.level === 4 ? '强提醒' : '弱提醒'} · ${esc(FOLLOWUP_ACTION_LABEL[f.action] ?? f.action)}${f.note ? ` · ${esc(f.note)}` : ''}</div>`).join('')
           : '<div class="set-val">还没有跟进记录。</div>'}
       </div>
 
       <div class="set-group">
-        <button class="btn solid block" data-follow="done" data-id="${esc(p.id)}">推进</button>
-        <button class="btn block" data-follow="partial" data-id="${esc(p.id)}" style="margin-top:8px">推了一点</button>
+        <button class="btn solid block" data-follow="done" data-id="${esc(p.id)}" data-step="${esc(p.steps.find((s) => s.state !== 'done')?.id ?? '')}">完成${p.steps.some((s) => s.state !== 'done') ? '这一步' : ''}</button>
+        <button class="btn block" data-follow="later" data-id="${esc(p.id)}" style="margin-top:8px">延期</button>
+        <button class="btn block" data-follow="smaller" data-id="${esc(p.id)}" style="margin-top:8px">拆小</button>
         <button class="btn block" data-follow="archive" data-id="${esc(p.id)}" style="margin-top:8px">归档</button>
       </div>
     </div>`;
@@ -408,8 +425,8 @@ function renderDetail() {
     void api.update(p.id, { note: note || null, version: versionOf(p) })
       .then(() => toast('备注已保存')).catch((e) => toast(msgOf(e)));
   });
-  host.querySelectorAll<HTMLElement>('[data-imp]').forEach((b) => {
-    b.onclick = () => void patchPursuit(p, { importance: Number(b.dataset.imp) });
+  host.querySelectorAll<HTMLElement>('[data-strength]').forEach((b) => {
+    b.onclick = () => void patchPursuit(p, { strength: b.dataset.strength });
   });
   host.querySelectorAll<HTMLElement>('[data-energy]').forEach((b) => {
     b.onclick = () => void patchPursuit(p, { energy: b.dataset.energy });
@@ -456,10 +473,9 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
   const p = findPursuit(id);
   if (!p) { toast('这条已经不在了'); return; }
   if (action === 'smaller' && !extra.steps) {
-    const value = window.prompt('拆成 2-3 个能立刻动手的小步骤，用换行分隔', p.text);
-    if (value === null) return;
-    const steps = value.split(/\r?\n|；|;/).map((s) => s.trim()).filter(Boolean);
-    if (!steps.length) return;
+    const next = p.steps.find((s) => s.state !== 'done')?.text ?? p.text;
+    const steps = await openStepsDialog(next ? [next] : []);
+    if (!steps) return;
     extra.steps = steps;
   }
   if (action === 'later' && !extra.to) {
@@ -475,12 +491,11 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
       action, version: versionOf(p),
       ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),
       ...(extra.to ? { to: Number(extra.to) } : {}),
+      ...(extra.stepId ? { stepId: String(extra.stepId) } : {}),
     });
-    noteFollowup(id, action);
+    noteFollowup(id, action, levelForStrength(p.strength));
     control.acknowledge(action);
-    dropBannerByPursuit(id);
-    document.getElementById('m-takeover')?.remove();
-    toast(action === 'done' ? '已推进' : action === 'archive' ? '已归档' : '已记下');
+    toast(action === 'done' ? '已完成' : action === 'archive' ? '已归档' : '已记下');
     if (view === 'detail') setView('today');
     void refresh();
   } catch (e) {
@@ -488,20 +503,21 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
   }
 }
 
-function showMobileTakeover(p: Pursuit, level: NudgeLevel, reason: string) {
+function showMobileTakeover(p: Pursuit, total: number) {
   document.getElementById('m-takeover')?.remove();
   const host = document.createElement('div');
   host.id = 'm-takeover';
   host.className = 'm-takeover';
+  const next = p.steps.find((s) => s.state !== 'done');
   host.innerHTML = `
     <div class="mt-card">
-      <div class="mt-lv">L${level} 接管 · 关不掉</div>
+      <div class="mt-lv">强提醒 · ${total > 1 ? `1/${total} 条，逐条处理` : '关不掉'}</div>
       <h2>${esc(p.text)}</h2>
-      <div class="mt-reason">${esc(reason)}</div>
+      <div class="mt-reason">到点了：${esc(p.text)}</div>
       <div class="acts">
-        <button class="btn solid" data-follow="done" data-id="${esc(p.id)}">推进</button>
+        <button class="btn solid" data-follow="done" data-id="${esc(p.id)}" data-step="${esc(next?.id ?? '')}">${next ? '完成这一步' : '完成'}</button>
         <button class="btn" data-follow="smaller" data-id="${esc(p.id)}">拆小</button>
-        <button class="btn" data-follow="later" data-id="${esc(p.id)}">改天</button>
+        <button class="btn" data-follow="later" data-id="${esc(p.id)}">延期</button>
         <button class="btn" data-follow="archive" data-id="${esc(p.id)}">归档</button>
       </div>
     </div>`;
@@ -530,11 +546,7 @@ function renderSettings() {
     </div>
     <div class="set-group">
       <h3>推进节奏（一端改，所有设备生效）</h3>
-      <div class="set-field"><label>每日强打扰额度</label><input id="pf-budget" type="number" min="0" max="20" value="${s.dailyStrongBudget}"></div>
-      <div class="set-field"><label>L2 停滞阈值（小时）</label><input id="pf-l2" type="number" min="0" value="${Math.round(s.escalateAfterMs.l2 / 3600000)}"></div>
-      <div class="set-field"><label>L3 停滞阈值（小时）</label><input id="pf-l3" type="number" min="0" value="${Math.round(s.escalateAfterMs.l3 / 3600000)}"></div>
-      <div class="set-field"><label>L4 停滞阈值（小时）</label><input id="pf-l4" type="number" min="0" value="${Math.round(s.escalateAfterMs.l4 / 3600000)}"></div>
-      <div class="set-field"><label>L5 停滞阈值（小时）</label><input id="pf-l5" type="number" min="0" value="${Math.round(s.escalateAfterMs.l5 / 3600000)}"></div>
+      <div class="set-field"><label>逾期多少天自动归档</label><input id="pf-archive-days" type="number" min="1" value="${s.archiveAfterDays}"></div>
       <div class="set-field"><label>每日聚焦时刻</label><input id="pf-focus" type="time" value="${minText(s.focusAtMin)}"></div>
       <div class="set-field"><label>静音开始</label><input id="pf-quiet-start" type="time" value="${minText(s.quietStartMin)}"></div>
       <div class="set-field"><label>静音结束</label><input id="pf-quiet-end" type="time" value="${minText(s.quietEndMin)}"></div>
@@ -577,10 +589,8 @@ function renderSettings() {
   const pfMsg = document.getElementById('pf-msg')!;
   document.getElementById('pf-save')!.onclick = async () => {
     pfMsg.className = 'probe'; pfMsg.textContent = '';
-    const hrs = (id: string) => Math.max(0, Number(tf(id).value)) * 3_600_000;
     const patch: Partial<Settings> = {
-      dailyStrongBudget: Math.max(0, Number(tf('pf-budget').value)),
-      escalateAfterMs: { l2: hrs('pf-l2'), l3: hrs('pf-l3'), l4: hrs('pf-l4'), l5: hrs('pf-l5') },
+      archiveAfterDays: Math.max(1, Number(tf('pf-archive-days').value)),
       quietStartMin: toMin(tf('pf-quiet-start').value),
       quietEndMin: toMin(tf('pf-quiet-end').value),
       focusAtMin: toMin(tf('pf-focus').value),
@@ -630,22 +640,18 @@ function onRealtime(msg: ServerMessage) {
     case 'pursuit.created':
     case 'pursuit.updated':
     case 'pursuit.stepped':
-      control.dismissedElsewhere(msg.pursuit.id);
-      dropBannerByPursuit(msg.pursuit.id);
       void refresh();
       break;
     case 'pursuit.followed':
-      noteFollowup(msg.pursuit.id, msg.action);
+      noteFollowup(msg.pursuit.id, msg.action, levelForStrength(msg.pursuit.strength));
       control.dismissedElsewhere(msg.pursuit.id);
-      dropBannerByPursuit(msg.pursuit.id);
       void refresh();
       break;
     case 'pursuit.deleted':
-      dropBannerByPursuit(msg.pursuitId);
       void refresh();
       break;
     case 'pursuit.focused':
-      focus = { serverTs: serverNow(), items: msg.items, budgetLeft: msg.budgetLeft };
+      focus = { serverTs: serverNow(), items: msg.items };
       if (view === 'today') renderEntries();
       break;
     case 'pursuit.nudge':

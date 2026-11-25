@@ -1,7 +1,6 @@
 # v2 设计：agent-first 推进引擎
 
-> 状态：当前实现目标。v1（"到点强提醒"工具）的 `entries/deliveries/dismissals` 三表模型已被本文的
-> `pursuits/steps/followups/nudges` 取代。设计动机见本文「为什么重构」，历史理由见 `requirements.md`。
+> 状态：**历史设计记录**。本文的 L1–L5 停滞阶梯已被 `docs/reminder-model.md` 的「强弱二值 + 截止时间单一时钟」取代。`pursuits/steps/followups/nudges` 三表模型仍然沿用。
 
 ## 为什么重构
 

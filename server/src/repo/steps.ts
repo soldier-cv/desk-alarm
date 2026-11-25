@@ -61,6 +61,19 @@ export async function addStep(pursuitId: string, userId: string, text: string): 
   return mapStep(r);
 }
 
+/** 跟进动作里勾掉一个步骤；版本由外层 followUp 统一递增 */
+export async function markStepDone(q: Tx, stepId: string, userId: string): Promise<void> {
+  const cur = await q.one<{ id: string }>(
+    'SELECT id FROM steps WHERE id = $1 AND user_id = $2', [stepId, userId],
+  );
+  if (!cur) return;
+  await q.run(
+    `UPDATE steps SET state = 'done', done_at = COALESCE(done_at, now())
+      WHERE id = $1 AND user_id = $2`,
+    [stepId, userId],
+  );
+}
+
 export async function updateStep(
   stepId: string, userId: string, patch: { text?: string; state?: StepState },
 ): Promise<Step | null> {

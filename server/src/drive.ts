@@ -1,119 +1,69 @@
-import type { FollowupRequest, FocusResult, Importance, Pursuit } from '../../shared/types.js';
+import {
+  defaultDueMs, levelForStrength,
+  type FollowupRequest, type FocusResult, type Importance, type Pursuit, type ReminderStrength,
+} from '../../shared/types.js';
 import { now, toDt, tx } from './db.js';
 import { hub } from './hub.js';
 import { log } from './log.js';
-import {
-  focusReason, inQuietHours, levelFor, nextOccurrence, stalenessOf, suggestNextStep, weightOf,
-} from './policy.js';
-import { countStrongToday, createNudge, markAcked, markDelivered } from './repo/nudges.js';
+import { focusReason, inQuietHours, nextOccurrence, suggestNextStep } from './policy.js';
+import { createNudge } from './repo/nudges.js';
 import { insertFollowup } from './repo/followups.js';
 import {
   getPursuit, listActiveUserIds, listPursuits, setDueAt, setImportance, setStatus,
 } from './repo/pursuits.js';
 import { getSettings } from './repo/settings.js';
-import { insertSteps } from './repo/steps.js';
+import { insertSteps, markStepDone } from './repo/steps.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
 export const engineStats = { active: 0, stalled: 0 };
 
-function dayKey(atMs: number): string {
-  const d = new Date(atMs);
-  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+function byDue(a: Pursuit, b: Pursuit): number {
+  if (a.dueAt === null) return b.dueAt === null ? 0 : 1;
+  if (b.dueAt === null) return -1;
+  return a.dueAt - b.dueAt
+    || a.importanceSort - b.importanceSort
+    || a.createdAt - b.createdAt;
 }
 
-function channelFor(level: number): 'in_app' | 'notification' | 'takeover' {
-  if (level === 1 || level === 3) return 'in_app';
-  if (level === 2) return 'notification';
-  return 'takeover';
+function channelFor(strength: ReminderStrength): 'notification' | 'takeover' {
+  return strength === 'strong' ? 'takeover' : 'notification';
+}
+
+/** 拆小/延期后的新节点：用户给的时间优先，否则按强弱默认值，已有更近的截止时间保留 */
+function nextDue(p: Pursuit, strength: ReminderStrength, nowMs: number, requested: number): number {
+  if (Number.isFinite(requested)) return requested;
+  const fallback = defaultDueMs(strength, nowMs);
+  return p.dueAt !== null && p.dueAt > nowMs ? Math.min(p.dueAt, fallback) : fallback;
 }
 
 export async function buildFocus(userId: string): Promise<FocusResult> {
   const serverTs = now();
-  const settings = await getSettings(userId);
   const items = (await listPursuits(userId, { status: 'active' }))
-    .map((p) => ({ p, w: weightOf(p, serverTs) }))
-    .sort((a, b) => b.w - a.w
-      || a.p.importanceSort - b.p.importanceSort
-      || a.p.createdAt - b.p.createdAt)
+    .sort(byDue)
     .slice(0, 5)
-    .map(({ p }) => {
-      const level = levelFor(stalenessOf(p.lastActivityAt, serverTs), settings);
-      const reason = level === 5 ? '要么今天定个时间，要么归档' : focusReason(p);
-      return {
-        pursuit: p,
-        reason,
-        suggestedNextStep: level === 5 ? '要么今天定个时间，要么归档' : suggestNextStep(p),
-      };
-    });
-  const budgetLeft = Math.max(0, settings.dailyStrongBudget - await countStrongToday(userId));
-  return { serverTs, items, budgetLeft };
+    .map((p) => ({
+      pursuit: p,
+      reason: focusReason(p),
+      suggestedNextStep: suggestNextStep(p),
+    }));
+  return { serverTs, items };
 }
 
 export async function pushFocus(userId: string): Promise<FocusResult> {
   const focus = await buildFocus(userId);
-  const key = `1-${dayKey(focus.serverTs)}`;
-  for (const item of focus.items) {
-    const nudge = await createNudge(
-      userId, item.pursuit.id, null, 1, 'in_app', item.reason, key,
-    );
-    if (!nudge) continue;
-    hub.broadcastToUser(userId, {
-      t: 'pursuit.nudge',
-      pursuit: item.pursuit,
-      level: 1,
-      channel: 'in_app',
-      reason: item.reason,
-      serverTs: focus.serverTs,
-    });
-    await markDelivered(nudge.id);
-  }
-  hub.broadcastToUser(userId, {
-    t: 'pursuit.focused', items: focus.items, budgetLeft: focus.budgetLeft,
-  });
+  hub.broadcastToUser(userId, { t: 'pursuit.focused', items: focus.items });
   return focus;
 }
 
 async function driveUser(userId: string, nowMs: number): Promise<{ active: number; stalled: number }> {
   const settings = await getSettings(userId);
-  const pursuits = (await listPursuits(userId, { status: 'active' }))
-    .sort((a, b) => weightOf(b, nowMs) - weightOf(a, nowMs));
-  let strongLeft = Math.max(0, settings.dailyStrongBudget - await countStrongToday(userId));
+  const pursuits = (await listPursuits(userId, { status: 'active' })).sort(byDue);
   let stalled = 0;
-  const key = dayKey(nowMs);
   const quiet = inQuietHours(settings, nowMs);
-  const dueCount = pursuits.filter((p) => p.dueAt !== null && p.dueAt <= nowMs).length;
-  let dueDeliveredThisTick = false;
 
   for (const p of pursuits) {
-    const staleness = stalenessOf(p.lastActivityAt, nowMs);
-    if (staleness >= settings.escalateAfterMs.l3) stalled++;
-
-    // 到点提醒只认用户自己写下的时间，fireKey 绑住 dueAt，改天后才再响一次。
-    // 静音时段整批跳过，下一 tick（静音结束）自然补发；它不算强打扰，不占额度。
-    let dueFired = false;
-    if (p.dueAt !== null && p.dueAt <= nowMs && !quiet) {
-      const deviceId = p.deviceIds.find((id) => hub.isOnline(id)) ?? null;
-      const reason = dueCount > 1 ? `到点了，还有 ${dueCount - 1} 件等着你` : '到点了，点开处理';
-      const dueNudge = await createNudge(
-        userId, p.id, deviceId, 2, 'notification', reason, `due-${p.id}-${p.dueAt}`,
-      );
-      dueFired = dueNudge !== null;
-      // 同一 tick 到点的多条只推权重最高那条，其余记占位：合并了通知，也挡住下一 tick 重复触发
-      if (dueNudge && dueDeliveredThisTick) await markAcked(dueNudge.id, 'coalesced');
-      if (dueNudge && !dueDeliveredThisTick) dueDeliveredThisTick = true;
-    }
-
-    // 静音里别推进循环的到期日，否则静音结束后原截止已被改掉，补发就丢了
-    if (p.nature === 'recurring' && p.dueAt !== null && p.dueAt <= nowMs && p.recurrence && !quiet) {
-      const next = nextOccurrence(Math.max(p.dueAt, nowMs), p.recurrence);
-      if (next !== null) {
-        await setDueAt(p.id, userId, next);
-        continue;
-      }
-    }
-
-    let level = levelFor(staleness, settings);
+    if (p.dueAt !== null && p.dueAt < nowMs) stalled++;
 
     if (p.context?.timeWindow) {
       const d = new Date(nowMs);
@@ -126,24 +76,32 @@ async function driveUser(userId: string, nowMs: number): Promise<{ active: numbe
     }
     if (p.context?.device && !hub.isOnline(p.context.device)) continue;
 
-    if (level === 4) {
-      if (inQuietHours(settings, nowMs)) level = 2;
-      else if (strongLeft <= 0) level = 3;
-    }
-    if (level === 5) {
+    if (p.dueAt === null || p.dueAt > nowMs) continue;
+
+    const strength = p.strength;
+    const level = levelForStrength(strength);
+
+    if (nowMs - p.dueAt >= settings.archiveAfterDays * DAY) {
+      await tx(async (q) => {
+        await insertFollowup(q, p.id, userId, level, 'archive', `截止已过 ${settings.archiveAfterDays} 天，自动归档`);
+      });
       await setStatus(p.id, userId, 'archived');
       continue;
     }
 
-    // 到点已经通知过，别再叠一条同级的停滞通知
-    if (dueFired && level === 2) continue;
+    // 静音时段不投递也不推进周期，下一 tick（静音结束）按原截止时间补发
+    if (quiet) continue;
 
     const deviceId = p.deviceIds.find((id) => hub.isOnline(id)) ?? null;
-    const reason = focusReason(p);
-    const created = await createNudge(
-      userId, p.id, deviceId, level, channelFor(level), reason, `${level}-${key}`,
+    const reason = strength === 'strong' ? '到点了，先处理这条' : '到点了，看一下';
+    await createNudge(
+      userId, p.id, deviceId, level, channelFor(strength), reason, `${strength}-due-${p.dueAt}`,
     );
-    if (created && level >= 4) strongLeft--;
+
+    if (p.nature === 'recurring' && p.recurrence) {
+      const next = nextOccurrence(Math.max(p.dueAt, nowMs), p.recurrence);
+      if (next !== null) await setDueAt(p.id, userId, next);
+    }
   }
 
   return { active: pursuits.length, stalled };
@@ -170,8 +128,8 @@ export async function followUp(
   const nowMs = now();
   const p = await getPursuit(pursuitId, userId);
   if (!p) throw new Error('NOT_FOUND');
-  const settings = await getSettings(userId);
-  const level = levelFor(stalenessOf(p.lastActivityAt, nowMs), settings);
+  const strength = p.strength;
+  const level = levelForStrength(strength);
 
   const requested = typeof req.to === 'number' ? req.to : req.to ? Date.parse(req.to) : Number.NaN;
   let dueAt = toDt(p.dueAt);
@@ -181,21 +139,27 @@ export async function followUp(
 
   switch (req.action) {
     case 'done':
-      status = 'done';
-      completedAt = new Date(nowMs);
+      if (req.stepId) {
+        const remaining = p.steps.filter((s) => s.id !== req.stepId && s.state !== 'done');
+        if (remaining.length > 0) dueAt = new Date(nextDue(p, strength, nowMs, requested));
+        else {
+          status = 'done';
+          completedAt = new Date(nowMs);
+        }
+      } else {
+        status = 'done';
+        completedAt = new Date(nowMs);
+      }
       break;
     case 'archive':
       status = 'archived';
       break;
-    case 'later': {
-      const fallback = p.recurrence
-        ? nextOccurrence(Math.max(p.dueAt ?? nowMs, nowMs), p.recurrence)
-        : nowMs + DAY;
-      dueAt = new Date(Number.isFinite(requested) ? requested : (fallback ?? nowMs + DAY));
+    case 'later':
+      dueAt = new Date(nextDue(p, strength, nowMs, requested));
       break;
-    }
     case 'smaller':
       extraSteps = req.steps ?? [];
+      dueAt = new Date(nextDue(p, strength, nowMs, requested));
       break;
     default:
       break;
@@ -208,6 +172,9 @@ export async function followUp(
     if (!cur) throw new Error('NOT_FOUND');
     if (cur.version !== req.version) throw new Error('VERSION_CONFLICT');
 
+    if (req.action === 'done' && req.stepId && status !== 'done') {
+      await markStepDone(q, req.stepId, userId);
+    }
     await insertFollowup(q, pursuitId, userId, level, req.action, req.note ?? null);
     const n = await q.run(
       `UPDATE pursuits
@@ -226,6 +193,9 @@ export async function followUp(
 export async function decompose(
   pursuitId: string, userId: string, texts: string[],
 ): Promise<Pursuit> {
+  const p = await getPursuit(pursuitId, userId);
+  if (!p) throw new Error('NOT_FOUND');
+  const dueAt = new Date(defaultDueMs(p.strength, now()));
   await tx(async (q) => {
     const cur = await q.one<{ id: string }>(
       'SELECT id FROM pursuits WHERE id = $1 AND user_id = $2', [pursuitId, userId],
@@ -233,9 +203,9 @@ export async function decompose(
     if (!cur) throw new Error('NOT_FOUND');
     await insertSteps(q, pursuitId, userId, texts);
     await q.run(
-      `UPDATE pursuits SET last_activity_at = now(), updated_at = now(), version = version + 1
+      `UPDATE pursuits SET due_at = $3, last_activity_at = now(), updated_at = now(), version = version + 1
         WHERE id = $1 AND user_id = $2`,
-      [pursuitId, userId],
+      [pursuitId, userId, dueAt],
     );
   });
   return (await getPursuit(pursuitId, userId))!;

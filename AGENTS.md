@@ -71,6 +71,8 @@ cd app && node scripts/contrast.mjs
 
 `smoke` 会建临时库跑完删掉。`e2e` 打真实部署，跑完自动清理。
 
+**文档同批**：只要改了 `server/src/**`、`app/src/**` 或 `shared/types.ts` 里的规则/行为，同一批提交必须更新对应的 `README.md`、`docs/`、`CHANGELOG.md` 与设置页文案；设计定稿先写文档再写代码。提交前自查 `git diff --stat`：有逻辑改动却没有 `.md` 改动，就是漏了。
+
 ## 跨平台：不要引入 Windows 专属代码
 
 客户端出 Windows 安装包；Android 代码就绪、在有 SDK 的机器上构建（见 `docs/android.md`）。`app/src-tauri/src/` 下桌面专属能力用 `#[cfg(desktop)]` 隔开，移动端只保留共用部分。

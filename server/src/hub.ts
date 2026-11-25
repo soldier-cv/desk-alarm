@@ -77,6 +77,12 @@ class Hub {
     return false;
   }
 
+  hasOnline(userId: string): boolean {
+    return [...(this.byUser.get(userId)?.values() ?? [])].some((set) =>
+      [...set].some((c) => c.socket.readyState === 1),
+    );
+  }
+
   get connectionCount() {
     let n = 0;
     for (const devices of this.byUser.values()) {

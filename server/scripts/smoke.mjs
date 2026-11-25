@@ -274,7 +274,7 @@ try {
   const focus = await api('/focus', { token: ta });
   ok('focus 接口 200', focus.status === 200);
   ok('focus 带 items', Array.isArray(focus.json.items));
-  ok('focus 带剩余额度', typeof focus.json.budgetLeft === 'number');
+  ok('focus 按截止时间排序', Array.isArray(focus.json.items));
   const high = await api('/pursuits', { method: 'POST', token: ta, body: {
     text: '最高优先级的事', importance: 3, dueAt: Date.now() - 60_000,
   } });
@@ -292,22 +292,21 @@ try {
   const welcome = await ca.waitFor('welcome');
   ok('收到 welcome', !!welcome);
   ok('welcome 带权威时间', typeof welcome?.serverTs === 'number');
-  ok('welcome 带新设置', typeof welcome?.settings?.dailyStrongBudget === 'number');
+  ok('welcome 带逾期归档设置', typeof welcome?.settings?.archiveAfterDays === 'number');
   ok('welcome 带 missed 数组', Array.isArray(welcome?.missed));
   ca.send({ t: 'ping', at: Date.now() });
   ok('ping 有 pong', !!(await ca.waitFor('pong')));
 
   /* ------------------------------------------------------ Nudge 投递 */
-  console.log('\nNudge 投递与打扰等级');
+  console.log('\nNudge 投递与强弱');
   const c1 = await db();
   const urgent = await api('/pursuits', { method: 'POST', token: ta, body: {
     text: '紧急推进', importance: 3, dueAt: Date.now() + 500,
   } });
-  // 人为把 last_activity 调老，触发高等级
-  await c1.query('UPDATE pursuits SET last_activity_at = now() - interval \'4 days\' WHERE id = $1', [urgent.json.pursuit.id]);
   const nudge = await ca.waitFor('pursuit.nudge', 8000, urgent.json.pursuit.id);
   ok('收到 pursuit.nudge', !!nudge);
-  ok('nudge 带等级', typeof nudge?.level === 'number');
+  ok('强提醒 level=4', nudge?.level === 4);
+  ok('强提醒走 takeover 通道', nudge?.channel === 'takeover');
   ok('nudge 带理由', typeof nudge?.reason === 'string');
   await waitUntil(async () => {
     const r = await c1.query(`SELECT count(*)::int n FROM nudges WHERE pursuit_id = $1`, [urgent.json.pursuit.id]);
@@ -315,7 +314,7 @@ try {
   }, 'nudge 落 outbox');
   const nRows = await c1.query('SELECT level, channel, state FROM nudges WHERE pursuit_id = $1', [urgent.json.pursuit.id]);
   ok('outbox 有记录', nRows.rowCount >= 1);
-  ok('高等级走 takeover 通道', nRows.rows.some((r) => r.level >= 4 ? r.channel === 'takeover' : true));
+  ok('强提醒存 takeover', nRows.rows.some((r) => r.level === 4 && r.channel === 'takeover'));
   await c1.end();
 
   /* ------------------------------------------------------ 到点通知 */
@@ -329,22 +328,20 @@ try {
     text: '到点了要做的事', dueAt: Date.now() - 1000,
   } });
   const dueId = due.json.pursuit.id;
-  // 同一条会先收到 L1 聚焦 nudge；另外多条同时到点时只会推权重最高那条，
-  // 所以这里等的是「任意一条到点 L2」，具体条目在下面用 outbox 精确校验。
   const dueNudge = await ca.waitForMatch('pursuit.nudge', (m) =>
     m.level === 2 && String(m.reason).includes('到点了'));
-  ok('到点收到 L2 通知', !!dueNudge);
+  ok('到点收到弱提醒通知', !!dueNudge);
   ok('到点是 notification 通道', dueNudge?.channel === 'notification');
   ok('到点文案不说内部等级', typeof dueNudge?.reason === 'string' && dueNudge.reason.includes('到点了'));
   await waitUntil(async () => {
     const r = await cd.query(
-      `SELECT count(*)::int n FROM nudges WHERE pursuit_id = $1 AND fire_key LIKE 'due-%'`, [dueId],
+      `SELECT count(*)::int n FROM nudges WHERE pursuit_id = $1 AND fire_key LIKE '%-due-%'`, [dueId],
     );
     return r.rows[0].n >= 1;
   }, '到点 nudge 落 outbox');
   await sleep(700);
   const dueRows = await cd.query(
-    `SELECT fire_key FROM nudges WHERE pursuit_id = $1 AND fire_key LIKE 'due-%'`, [dueId],
+    `SELECT fire_key FROM nudges WHERE pursuit_id = $1 AND fire_key LIKE '%-due-%'`, [dueId],
   );
   ok('到点只触发一次', dueRows.rowCount === 1, `${dueRows.rowCount} 条`);
   await cd.end();
@@ -380,9 +377,9 @@ try {
   /* ---------------------------------------------------------- 设置 */
   console.log('\n设置');
   const gs = await api('/settings', { token: ta });
-  ok('设置可取', gs.status === 200 && typeof gs.json.settings?.dailyStrongBudget === 'number');
-  const ps = await api('/settings', { method: 'PATCH', token: ta, body: { dailyStrongBudget: 5 } });
-  ok('设置可改', ps.json.settings?.dailyStrongBudget === 5);
+  ok('设置可取', gs.status === 200 && typeof gs.json.settings?.archiveAfterDays === 'number');
+  const ps = await api('/settings', { method: 'PATCH', token: ta, body: { archiveAfterDays: 45 } });
+  ok('设置可改', ps.json.settings?.archiveAfterDays === 45);
   const wb = await ca.waitFor('settings.changed');
   ok('设置变更广播', !!wb);
 

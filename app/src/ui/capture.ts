@@ -5,7 +5,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { parseInput, type Importance, type Parsed } from '../api';
+import { parseInput, type Parsed, type ReminderStrength } from '../api';
 import { applyTheme, loadTheme } from '../theme';
 
 applyTheme(loadTheme());
@@ -17,10 +17,7 @@ const hint = document.querySelector<HTMLDivElement>('#hint')!;
 const bar = document.querySelector<HTMLDivElement>('#bar')!;
 
 let picked: Parsed = parseInput('');
-let importance: Importance = 0;
-
-const IMP_LABEL = ['不标', '★', '★★', '★★★'];
-const IMP_TITLE = ['不标：按默认权重排期', '★ 低：略微优先', '★★ 中：优先推进', '★★★ 高：最优先推进'];
+let strength: ReminderStrength = 'weak';
 
 function esc(s: string): string {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
@@ -36,12 +33,12 @@ function renderParse(raw: string) {
   parse.innerHTML = `
     <span class="chip ${picked.kind === 'text' ? '' : 'hot'}">${esc(picked.kindLabel)}</span>
     <span class="chip ${picked.remindAt ? 'hot' : ''}">${esc(
-      picked.remindAt ? `截止：${picked.timeLabel}` : '没有时间，进收集箱',
+      picked.remindAt
+        ? `截止：${picked.timeLabel}`
+        : `没填时间：${strength === 'strong' ? '强提醒默认 2 小时后' : '弱提醒默认 1 天后'}`,
     )}</span>
-    <span class="chip">重要性</span>
-    ${([0, 1, 2, 3] as Importance[]).map((n) =>
-      `<button type="button" class="chip ${importance === n ? 'hot' : ''}" data-imp="${n}" title="${IMP_TITLE[n]}">${IMP_LABEL[n]}</button>`,
-    ).join('')}`;
+    <button type="button" class="chip ${strength === 'weak' ? 'hot' : ''}" data-strength="weak" title="到点发通知，没填时间默认 1 天后">弱提醒</button>
+    <button type="button" class="chip ${strength === 'strong' ? 'hot' : ''}" data-strength="strong" title="到点弹窗，没填时间默认 2 小时后">强提醒</button>`;
 }
 
 input.addEventListener('input', () => {
@@ -50,16 +47,16 @@ input.addEventListener('input', () => {
 });
 
 parse.addEventListener('click', (ev) => {
-  const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-imp]');
+  const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-strength]');
   if (!b) return;
-  importance = Number(b.dataset.imp) as Importance;
+  strength = b.dataset.strength as ReminderStrength;
   renderParse(input.value);
 });
 
 input.addEventListener('keydown', async (ev) => {
   if (ev.key === 'Escape') {
     input.value = '';
-    importance = 0;
+    strength = 'weak';
     parse.hidden = true;
     await invoke('hide_capture');
   }
@@ -73,12 +70,12 @@ input.addEventListener('keydown', async (ev) => {
     text,
     dueAt: picked.remindAt,
     kind: picked.kind,
-    importance,
+    strength,
   });
 
   // 连记：只清空不清屏，连续按 Enter 能一条接一条地记
   input.value = '';
-  importance = 0;
+  strength = 'weak';
   parse.hidden = true;
   bar.classList.remove('ready');
   input.focus();
