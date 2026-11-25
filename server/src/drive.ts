@@ -133,7 +133,7 @@ export async function followUp(
 
   const requested = typeof req.to === 'number' ? req.to : req.to ? Date.parse(req.to) : Number.NaN;
   let dueAt = toDt(p.dueAt);
-  let status = p.status;
+  let status: PursuitStatus = p.status;
   let completedAt = toDt(p.completedAt);
   let extraSteps: string[] = [];
 
@@ -151,6 +151,10 @@ export async function followUp(
         completedAt = new Date(nowMs);
       }
       break;
+    case 'reopen':
+      status = 'active';
+      completedAt = null;
+      break;
     case 'archive':
       status = 'archived';
       break;
@@ -160,8 +164,6 @@ export async function followUp(
     case 'smaller':
       extraSteps = req.steps ?? [];
       dueAt = new Date(nextDue(p, strength, nowMs, requested));
-      break;
-    default:
       break;
   }
 

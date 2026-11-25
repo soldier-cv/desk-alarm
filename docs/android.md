@@ -4,7 +4,7 @@ Android 端的 Rust 源码和 Windows 端共用，协议、解析、提醒逻辑
 
 Android 端的差异：
 
-1. **后台保活与锁屏即时到达**：`DeskAlarmKeepAliveService` 是常驻前台服务，在**原生层**持有 WebSocket、20 秒心跳和 `PARTIAL_WAKE_LOCK`。锁屏后 WebView 的 JS 会被系统冻结，若连接和通知留在 JS 里就会断心跳、到点弹不出，开屏才补发一串——所以原生服务自己连 `/stream`、自己弹通知。登录成功后 JS 通过 `plugin:push|start` 把服务端地址和 token 交给它。JS 侧仍保留一条 WS 只用于界面同步，但**不再弹系统通知**（避免和原生重复）。两个通知渠道：强提醒 `deskalarm_strong`（高重要度、震动、锁屏可见，按 `repeatEverySec` 重复，达到 `maxRepeatCount` 或被处理才停，静音时段暂停）、弱提醒 `deskalarm_weak`（低重要度静音）。不依赖 Google 服务，国产 ROM 可用
+1. **后台保活与锁屏即时到达**：`DeskAlarmKeepAliveService` 是常驻前台服务，在**原生层**持有 WebSocket、20 秒心跳和 `PARTIAL_WAKE_LOCK`。锁屏后 WebView 的 JS 会被系统冻结，若连接和通知留在 JS 里就会断心跳、到点弹不出，开屏才补发一串——所以原生服务自己连 `/stream`、自己弹通知。登录成功后 JS 通过 `plugin:push|start` 把服务端地址和 token 交给它。JS 侧仍保留一条 WS 只用于界面同步，但**不再弹系统通知**（避免和原生重复）。原生服务只认 `pursuit.nudge`（L1 静默、L2+ 通知）、`pursuit.followed` / `pursuit.deleted`（停铃）和 `welcome` 里的 `missed`（合成一条汇总）；重复间隔与桌面 `alarm.ts` 的阶梯一致、无次数上限，静音时段顺延。通知渠道保留 `deskalarm_strong` / `deskalarm_weak` 两个，但不再按强弱判定，而是按 nudge 等级。不依赖 Google 服务，国产 ROM 可用
 2. **机器指纹**：`machine_id()` 在 Android 上读 `ro.serialno` 等系统属性，不是 Windows 注册表
 3. **无设备锁定 / PIN**：桌面和移动端都不提供设备锁定与 PIN，锁屏后照常接收提醒。
 4. **图标**：`icons/android/` 的 launcher 图标由桌面 `icon.png` 直接生成（无 Tauri 默认的黑色外框），`gen/android/.../res/` 里是同一份拷贝
@@ -13,7 +13,7 @@ Android 端的差异：
 ## 当前状态：代码就绪，发版走 GitHub Actions
 
 代码侧已经为移动端做好了适配：
-- `lib.rs` 用 `#[cfg(desktop)]` / `#[cfg(mobile)]` 隔开桌面专属插件（托盘、开机自启、全局热键、单实例、updater、多窗口），移动端只保留通知插件
+- `lib.rs` 用 `#[cfg(desktop)]` / `#[cfg(mobile)]` 隔开桌面专属插件（托盘、开机自启、全局热键、单实例、多窗口），移动端保留通知插件，另注册 `push`（保活）与 `apk-installer`（应用内更新）两个 Android 插件
 - `machine_id()` 有 Android 分支；`platform()` 会返回 `android`，前端据此隐藏桌面专属按钮
 - `shared/types.ts` 的 `Platform` 含 `android`
 
@@ -52,7 +52,7 @@ CI 会把 keystore 解码到 `gen/android/app/release.jks`，把口令写进 `ge
 
 APK 版本号由 tag 决定：`scripts/set-version.mjs` 更新 `tauri.conf.json`，Tauri 据此生成 `versionName` 和 `versionCode`（`major*1000000 + minor*1000 + patch`）。tag 不递增会导致用户看不到更新。
 
-产物：`desk-alarm_<版本>_android-universal.apk`，同时出现在 GitHub Release 和 Gitee Release。移动端没有 updater 插件，不读 `latest.json`，用户从 Release 页手动下载安装。
+产物：`desk-alarm_<版本>_android-universal.apk`，同时出现在 GitHub Release 和 Gitee Release。移动端不装 Tauri updater 的静默安装包，但应用内更新仍会读 `latest.json`，取其中 `android` 条目的 APK 地址交给 `apk-installer` 用 DownloadManager 安装；用户也可以从 Release 页手动下载。
 
 ## 构建步骤（离线调试，在有 SDK 的机器上）
 
@@ -92,9 +92,22 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 
 > 首次跑会生成 `app/src-tauri/gen/android`，这是 Tauri 的 Android 工程骨架（Gradle 项目），由 `tauri android init` 产出，**不要手工编辑**；生成后提交到仓库，后续机器不用再 init。
 
+### 改了 Kotlin 必须本地编译再发 tag
+
+推 `v*` tag 会触发 CI 编译全部 Kotlin 变体。Kotlin 的类型错误**只在 Gradle 编译期暴露**，tsc、cargo test、vite build 全查不出来——发版前只跑那几套检查就推 tag，等于把编译错误留给 CI，构建挂了还得补一个新 tag。所以动过 `gen/android/**/*.kt` 后，先本地真编译一遍：
+
+```powershell
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+& .\app\src-tauri\gen\android\gradlew.bat -p app\src-tauri\gen\android :app:compileUniversalReleaseKotlin :app:compileArm64ReleaseKotlin
+```
+
+`universal` 是 CI 里报错的那个变体，务必编到。若 `~/.gradle/wrapper/dists` 缓存被清、wrapper 要联网下载 9.6.1 又连不上，从 `https://mirrors.cloud.tencent.com/gradle/gradle-9.6.1-bin.zip` 下载解压，直接用解压出的 `gradle.bat` 跑上面两个 task（Gradle 会自己拉 AndroidX/OkHttp 等依赖）。
+
+踩过的坑：给 `NotificationChannel.setSound` 第二个参数传了 `AudioManager.STREAM_NOTIFICATION`（Int），它要的是 `AudioAttributes`，Kotlin 报 `argument type mismatch`，v1.2.1 因此 CI 构建失败，v1.2.2 修复。正确写法见 `DeskAlarmKeepAliveService.kt` 的 `applySoundSetting()`。
+
 ## 后台保活怎么工作
 
-`MainActivity` 启动时调用 `startForegroundService`，拉起 `DeskAlarmKeepAliveService`（`gen/android/app/src/main/java/.../DeskAlarmKeepAliveService.kt`）。它只做一件事：显示一条常驻通知，把进程抬到前台优先级，WebView 里的 WebSocket 因此不会被系统回收。提醒的接收、心跳、`welcome` 补发仍然全在 JS 侧，跟桌面端完全一样。
+`MainActivity` 启动时调用 `startForegroundService`，拉起 `DeskAlarmKeepAliveService`（`gen/android/app/src/main/java/.../DeskAlarmKeepAliveService.kt`）。它做两件事：显示常驻通知把进程抬到前台优先级；**自己在原生层持有 WebSocket 和心跳**，按 `pursuit.nudge` 的等级弹通知，收到 `pursuit.followed` / `pursuit.deleted` 就停铃。WebView 里那条 WS 只做界面同步，不再弹系统通知，避免重复。
 
 通知渠道是 `deskalarm_keepalive`（低重要性，不发声）。Android 13+ 首次启动会请求 `POST_NOTIFICATIONS`；不给权限服务照常运行，只是通知不进抽屉。Android 14+ 必须声明前台服务类型，这里用 `specialUse`（配合 `FOREGROUND_SERVICE_SPECIAL_USE` 权限和清单里的用途说明）——它不像 `dataSync` 那样在 Android 15+ 有 6 小时上限，适合常驻连接。不上 Play 商店，所以不需要在 Play Console 做类型声明。
 

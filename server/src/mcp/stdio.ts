@@ -70,7 +70,7 @@ async function handle(rpc: Rpc) {
       return ok(id, {
         protocolVersion: PROTOCOL,
         capabilities: { tools: {} },
-        serverInfo: { name: 'deskalarm', version: '0.1.0' },
+        serverInfo: { name: 'deskalarm', version: '1.2.0' },
         instructions: [
           'DeskAlarm 是 agent-first 的推进引擎，主力操作员是 agent。',
           '',
@@ -79,9 +79,10 @@ async function handle(rpc: Rpc) {
           '2. 写操作一律两步：create_pursuit / decompose / reprioritize / followup / archive',
           '   或 plan_changes 只生成预览和 plan_id；给用户看过并确认后，再调 apply_changes 执行。',
           '   plan_id 只能用一次且十分钟过期。',
-          '3. 建推进项默认 importance=0、进收集箱，不抢注意力。',
-          '   importance>=3 或会很快升级到强打扰时，必须给 reason 说明依据。',
+          '3. 建推进项默认 importance=1(P2)、进进行中，不抢注意力。',
+          '   importance=3(P0) 或会很快升级到强打扰时，必须给 reason 说明依据。',
           '4. followup 的 version 必填：先 get_pursuit 拿最新版本号，避免覆盖用户刚做的改动。',
+          '   动作只有 done/later/smaller/archive/reopen；已完成只能归档或撤回，归档后只剩克隆。',
           '5. 只读令牌只能调 today_digest / list_pursuits / get_pursuit。',
           '',
           '用户的习惯：贴进来没定时间的东西是「待办」不是「闹钟」，不要自己给它加时间。',

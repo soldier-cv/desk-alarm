@@ -17,7 +17,6 @@ interface PursuitRow {
   path: string | null;
   nature: string;
   importance: number;
-  energy: string;
   due_at: Date | null;
   recurrence: RecurrenceRule | null;
   context: PursuitContext | null;
@@ -49,7 +48,6 @@ export function mapPursuit(row: any, steps: Step[], deviceIds: string[], nowMs: 
     nature: r.nature as PursuitNature,
     strength: r.importance >= 2 ? 'strong' : 'weak',
     importance: r.importance as Importance,
-    energy: r.energy as Energy,
     dueAt: toMs(r.due_at),
     recurrence: r.recurrence ?? null,
     context: r.context ?? null,
@@ -142,9 +140,9 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
   const id = await tx(async (q) => {
     const r = await q.one<{ id: string }>(
       `INSERT INTO pursuits
-         (user_id, text, note, kind, url, path, nature, importance, energy, due_at,
+         (user_id, text, note, kind, url, path, nature, importance, due_at,
           recurrence, context, commitment, status, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING id`,
       [userId,
        req.text.trim(),
@@ -168,6 +166,30 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
     return r.id;
   });
   return (await getPursuit(id, userId))!;
+}
+
+/** 克隆：复制内容，不复制完成状态、截止、跟进历史和步骤完成状态 */
+export async function clonePursuit(id: string, userId: string): Promise<Pursuit | null> {
+  const src = await getPursuit(id, userId);
+  if (!src) return null;
+  const newId = await tx(async (q) => {
+    const r = await q.one<{ id: string }>(
+      `INSERT INTO pursuits
+         (user_id, text, note, kind, url, path, nature, importance, due_at,
+          recurrence, context, commitment, status, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,$9,$10,$11,'active',$12)
+       RETURNING id`,
+      [userId, src.text, src.note, src.kind, src.url, src.path, src.nature,
+        src.importance, src.recurrence, src.context, src.commitment, src.source],
+    );
+    if (!r) throw new Error('INSERT_FAILED');
+    if (src.steps.length) {
+      await insertSteps(q, r.id, userId, src.steps.map((s) => s.text));
+    }
+    if (src.deviceIds.length) await replaceDevices(q, r.id, userId, src.deviceIds);
+    return r.id;
+  });
+  return (await getPursuit(newId, userId))!;
 }
 
 export async function updatePursuit(

@@ -45,16 +45,12 @@ export interface Device {
 /* ============================================================ 推进项领域模型 */
 
 /**
- * 推进项的性质。project 指有多个步骤、需要跨天推进的事；one_off 是一次性；
- * recurring 是周期性的。它决定引擎用哪条循环处理。
+ * 推进项的性质。是否重复完全由 recurrence 决定，不再用 nature 表达。
  */
-export type PursuitNature = 'one_off' | 'recurring' | 'project';
+export type PursuitNature = 'one_off' | 'project';
 
-/** 显式重要性，不靠措辞猜。3 = 最高，由用户或 agent 标记 */
-export type Importance = 0 | 1 | 2 | 3;
-
-/** 启动所需精力。引擎用它匹配用户当前状态（情境闸门） */
-export type Energy = 'low' | 'medium' | 'high';
+/** 重要性：3=P0 最高，2=P1，1=P2 默认 */
+export type Importance = 1 | 2 | 3;
 
 export type PursuitStatus = 'inbox' | 'active' | 'paused' | 'done' | 'archived';
 export type StepState = 'todo' | 'doing' | 'done';
@@ -63,7 +59,7 @@ export type StepState = 'todo' | 'doing' | 'done';
  * 跟进动作。这是用户/agent 对一次跟催的回答，会实时改写后续策略。
  * later=延期、smaller=拆小、archive=归档、ignored=忽略；partial 只在历史记录里保留。
  */
-export type FollowupAction = 'done' | 'partial' | 'later' | 'smaller' | 'archive' | 'ignored';
+export type FollowupAction = 'done' | 'later' | 'smaller' | 'archive' | 'reopen';
 
 /** 提醒强弱。2=弱提醒（通知），4=强提醒（接管弹窗），不再有 L1/L3/L5 */
 export type NudgeLevel = 2 | 4;
@@ -99,17 +95,14 @@ export function defaultDueMs(strength: ReminderStrength, now: number): number {
 export type EntryKind = 'text' | 'link' | 'path' | 'image' | 'audio';
 
 /**
- * 通用重复规则。interval 配合 freq 表达「每 3 天」「每 2 周」。
- * byWeekday 0=周日…6=周六；byMonthday 1..31（月末钳位在引擎里做）。
+ * 重复规则。每个频率只带自己用得上的字段，避免「每天 + 每月几号」这类歧义。
+ * byWeekday 0=周日…6=周六；byMonthday 1..31 月末钳位；byMonth 1..12。
  */
 export interface RecurrenceRule {
-  freq: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'workdays' | 'interval';
-  interval?: number;
+  freq: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
   byWeekday?: number[];
   byMonthday?: number;
   byMonth?: number;
-  /** 农历/节气等扩展留空位，先不实现语义 */
-  calendar?: 'lunar' | 'solar';
 }
 
 /** 触发情境。命中时才推，未命中则攒到合适时机 */
@@ -139,7 +132,6 @@ export interface Pursuit {
   /** 提醒强弱；内部仍沿用 importance 列存储（0/1 弱、2/3 强），前端不再暴露重要性概念 */
   strength: ReminderStrength;
   importance: Importance;
-  energy: Energy;
   dueAt: number | null;
   recurrence: RecurrenceRule | null;
   context: PursuitContext | null;
@@ -255,7 +247,6 @@ export interface CreatePursuitRequest {
   nature?: PursuitNature;
   strength?: ReminderStrength;
   importance?: Importance;
-  energy?: Energy;
   dueAt?: number | string | null;
   recurrence?: RecurrenceRule | null;
   context?: PursuitContext | null;
@@ -270,7 +261,6 @@ export interface UpdatePursuitRequest {
   note?: string | null;
   strength?: ReminderStrength;
   importance?: Importance;
-  energy?: Energy;
   nature?: PursuitNature;
   dueAt?: number | string | null;
   recurrence?: RecurrenceRule | null;
@@ -356,4 +346,24 @@ export interface Overview {
   nudgesToday: Record<NudgeLevel, number>;
   devices: { total: number; online: number; byPlatform: Record<string, number> };
   users: { total: number };
+}
+
+/* ========================================================== 领域规则（前后端共用） */
+
+/** 所有合法跟进动作。界面、服务端、Agent API、MCP 都从这里取，避免分叉 */
+export const FOLLOWUP_ACTIONS: readonly FollowupAction[] = ['done', 'later', 'smaller', 'archive', 'reopen'];
+
+/** 某状态下允许的动作。已完成只能撤回或归档；归档后没有任何跟进动作 */
+export function actionsFor(status: PursuitStatus): FollowupAction[] {
+  if (status === 'archived') return [];
+  if (status === 'done') return ['archive', 'reopen'];
+  return ['done', 'later', 'smaller', 'archive'];
+}
+
+export const P0: Importance = 3;
+
+/** 一天内到期按 P0 排期；只派生、不写回用户配置 */
+export function effectiveImportance(importance: Importance, dueAt: number | null, nowMs: number): Importance {
+  if (dueAt !== null && dueAt - nowMs <= 24 * 3600_000) return Math.max(importance, P0) as Importance;
+  return importance;
 }

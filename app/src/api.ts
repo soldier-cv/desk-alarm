@@ -6,13 +6,13 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AddStepRequest, AgentScope, AgentToken, CreatePursuitRequest, Device, Followup,
   FollowupAction, FollowupRequest, FocusResult, Importance, LoginResponse, MyStats,
-  NudgeLevel, Overview, Pursuit, PursuitStatus, Role, ServerMessage, Settings, Step, StepState,
-  UpdatePursuitRequest, UpdateStepRequest, User,
+  NudgeLevel, Overview, Pursuit, PursuitStatus, RecurrenceRule, Role, ServerMessage, Settings,
+  Step, StepState, UpdatePursuitRequest, UpdateStepRequest, User,
 } from '../../shared/types';
 
 export type {
   AddStepRequest, AgentScope, AgentToken, ClientMessage, Commitment, CreatePursuitRequest,
-  Device, Energy, EntryKind, Followup, FollowupAction, FollowupPrompt, FollowupRequest,
+  Device, EntryKind, Followup, FollowupAction, FollowupPrompt, FollowupRequest,
   FocusItem, FocusResult, Importance, LoginResponse, MyStats, Nudge, NudgeChannel,
   NudgeLevel, Overview, Platform, Pursuit, PursuitContext, PursuitNature, PursuitStatus,
   ReminderStrength,
@@ -279,6 +279,9 @@ export const api = {
 
   followup: (id: string, body: FollowupRequest) =>
     req<{ pursuit: Pursuit }>(`/pursuits/${id}/followup`, { method: 'POST', body: JSON.stringify(body) }),
+
+  clone: (id: string) =>
+    req<{ pursuit: Pursuit }>(`/pursuits/${id}/clone`, { method: 'POST' }),
 
   addStep: (id: string, body: AddStepRequest) =>
     req<{ step: Step; pursuit: Pursuit }>(`/pursuits/${id}/steps`, { method: 'POST', body: JSON.stringify(body) }),
@@ -565,7 +568,7 @@ export function dueLabel(p: Pursuit): string {
 
 export function staleLabel(p: Pursuit): string {
   const ms = Math.max(0, serverNow() - p.lastActivityAt);
-  if (ms < 60_000) return '刚刚推进过';
+  if (ms < 60_000) return '刚刚跟进过';
   const h = ms / 3_600_000;
   if (h < 24) return `停滞 ${Math.floor(h)} 小时`;
   return `停滞 ${Math.floor(h / 24)} 天`;
@@ -580,11 +583,16 @@ export function inQuietHours(s: Settings, at = serverNow()): boolean {
 }
 
 export const NATURE_LABEL: Record<Pursuit['nature'], string> = {
-  one_off: '一次性', recurring: '周期性', project: '项目',
+  one_off: '一次性', project: '项目',
 };
 
-export const ENERGY_LABEL: Record<Pursuit['energy'], string> = {
-  low: '低', medium: '中', high: '高',
+export const IMPORTANCE_LABEL: Record<Importance, string> = {
+  3: 'P0', 2: 'P1', 1: 'P2',
+};
+
+export const FREQ_LABEL: Record<RecurrenceRule['freq'] | 'none', string> = {
+  none: '不重复', daily: '每天', weekly: '每周几', monthly: '每月几号',
+  quarterly: '每季度几号', yearly: '每年几月几号',
 };
 
 export const FOLLOWUP_ACTION_LABEL: Record<FollowupAction, string> = {

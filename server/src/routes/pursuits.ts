@@ -3,24 +3,23 @@ import type {
   AddStepRequest, CreatePursuitRequest, FollowupRequest, Pursuit, PursuitStatus,
   Settings, UpdatePursuitRequest, UpdateStepRequest,
 } from '../../../shared/types.js';
+import { FOLLOWUP_ACTIONS } from '../../../shared/types.js';
 import { requireHuman } from '../auth.js';
 import { hub } from '../hub.js';
 import { log } from '../log.js';
 import { buildFocus, followUp } from '../drive.js';
 import { listMissed } from '../repo/nudges.js';
 import {
-  createPursuit, deletePursuit, getPursuit, listPursuits, updatePursuit,
+  clonePursuit, createPursuit, deletePursuit, getPursuit, listPursuits, updatePursuit,
 } from '../repo/pursuits.js';
 import { addStep, updateStep } from '../repo/steps.js';
 import { getSettings, saveSettings } from '../repo/settings.js';
 
 const KINDS = ['text', 'link', 'path', 'image', 'audio'] as const;
-const NATURES = ['one_off', 'recurring', 'project'] as const;
+const NATURES = ['one_off', 'project'] as const;
 const STATUSES = ['inbox', 'active', 'paused', 'done', 'archived'] as const;
-const ENERGIES = ['low', 'medium', 'high'] as const;
-const ACTIONS = ['done', 'partial', 'later', 'smaller', 'archive', 'ignored'] as const;
 const STEP_STATES = ['todo', 'doing', 'done'] as const;
-const FREQS = ['daily', 'weekly', 'monthly', 'yearly', 'workdays', 'interval'] as const;
+const FREQS = ['daily', 'weekly', 'monthly', 'quarterly', 'yearly'] as const;
 
 function oneOf<T extends string>(allowed: readonly T[], v: unknown): v is T {
   return typeof v === 'string' && (allowed as readonly string[]).includes(v);
@@ -29,8 +28,26 @@ function oneOf<T extends string>(allowed: readonly T[], v: unknown): v is T {
 function validRecurrence(v: unknown): boolean {
   if (v === null || v === undefined) return true;
   if (typeof v !== 'object' || Array.isArray(v)) return false;
-  const r = v as { freq?: unknown };
-  return oneOf(FREQS, r.freq);
+  const r = v as {
+    freq?: unknown; byWeekday?: unknown; byMonthday?: unknown; byMonth?: unknown;
+  };
+  if (!oneOf(FREQS, r.freq)) return false;
+  if (r.byWeekday !== undefined && r.freq !== 'weekly') return false;
+  if (r.byMonthday !== undefined && !['monthly', 'quarterly', 'yearly'].includes(r.freq)) return false;
+  if (r.byMonth !== undefined && r.freq !== 'yearly') return false;
+  if (r.byWeekday !== undefined && (
+    !Array.isArray(r.byWeekday) || r.byWeekday.length > 7 ||
+    !r.byWeekday.every((n) => Number.isInteger(n) && n >= 0 && n <= 6)
+  )) return false;
+  const byMonthday = r.byMonthday;
+  if (byMonthday !== undefined && (
+    typeof byMonthday !== 'number' || !Number.isInteger(byMonthday) || byMonthday < 1 || byMonthday > 31
+  )) return false;
+  const byMonth = r.byMonth;
+  if (byMonth !== undefined && (
+    typeof byMonth !== 'number' || !Number.isInteger(byMonth) || byMonth < 1 || byMonth > 12
+  )) return false;
+  return true;
 }
 
 function isVersionConflict(err: unknown): err is Error & { current?: Pursuit } {
@@ -201,7 +218,7 @@ export async function pursuitRoutes(app: FastifyInstance) {
     const id = (req.params as { id: string }).id;
     const userId = uid(req);
     const body = (req.body ?? {}) as FollowupRequest;
-    if (!oneOf(ACTIONS, body.action)) {
+    if (!FOLLOWUP_ACTIONS.includes(body.action as typeof FOLLOWUP_ACTIONS[number])) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'action 取值不合法' });
     }
     if (typeof body.version !== 'number') {
@@ -220,8 +237,22 @@ export async function pursuitRoutes(app: FastifyInstance) {
       if (err instanceof Error && err.message === 'NOT_FOUND') {
         return reply.code(404).send({ error: 'NOT_FOUND', message: '推进项不存在' });
       }
+      if (err instanceof Error && err.message === 'ACTION_NOT_ALLOWED') {
+        return reply.code(400).send({
+          error: 'ACTION_NOT_ALLOWED', message: '当前状态不允许这个跟进动作',
+        });
+      }
       throw err;
     }
+  });
+
+  app.post('/pursuits/:id/clone', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const userId = uid(req);
+    const pursuit = await clonePursuit(id, userId);
+    if (!pursuit) return reply.code(404).send({ error: 'NOT_FOUND', message: '推进项不存在' });
+    hub.broadcastToUser(userId, { t: 'pursuit.created', pursuit });
+    return reply.code(201).send({ pursuit });
   });
 
   app.get('/focus', async (req) => buildFocus(uid(req)));

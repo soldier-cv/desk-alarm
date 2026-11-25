@@ -18,8 +18,7 @@ export function suggestNextStep(p: Pursuit): string | null {
   const next = p.steps.find((s) => s.state !== 'done');
   if (next) return next.text;
   if (p.nature === 'project') return '把这件事拆成 2-3 个能立刻动手的小步骤';
-  if (p.nature === 'one_off') return `今天花 5 分钟做第一步：${p.text}`;
-  return `花几分钟推进一下：${p.text}`;
+  return `今天花 5 分钟做第一步：${p.text}`;
 }
 
 export function focusReason(p: Pursuit): string {
@@ -36,55 +35,53 @@ function setDayClamped(d: Date, day: number): void {
   d.setDate(Math.min(Math.max(1, day), last));
 }
 
+function yearlyAt(base: Date, year: number, month: number, day: number): Date {
+  const d = new Date(year, month, 1, base.getHours(), base.getMinutes(), base.getSeconds(), base.getMilliseconds());
+  setDayClamped(d, day);
+  return d;
+}
+
+/** 下一次发生时间。每个频率只认自己的字段，规则不会互相叠加 */
 export function nextOccurrence(fromMs: number, rule: RecurrenceRule): number | null {
-  const step = Math.max(1, Math.floor(rule.interval ?? 1));
+  const base = new Date(fromMs);
   const d = new Date(fromMs);
 
   switch (rule.freq) {
     case 'daily':
-      d.setDate(d.getDate() + step);
+      d.setDate(d.getDate() + 1);
       break;
-    case 'weekly':
-      d.setDate(d.getDate() + 7 * step);
+    case 'weekly': {
+      const wanted = rule.byWeekday?.length ? new Set(rule.byWeekday) : null;
+      if (!wanted) {
+        d.setDate(d.getDate() + 7);
+        break;
+      }
+      d.setDate(d.getDate() + 1);
+      let guard = 0;
+      while (!wanted.has(d.getDay()) && guard++ < 7) d.setDate(d.getDate() + 1);
       break;
+    }
     case 'monthly': {
-      const day = d.getDate();
+      const day = rule.byMonthday ?? base.getDate();
       d.setDate(1);
-      d.setMonth(d.getMonth() + step);
+      d.setMonth(d.getMonth() + 1);
+      setDayClamped(d, day);
+      break;
+    }
+    case 'quarterly': {
+      const day = rule.byMonthday ?? base.getDate();
+      d.setDate(1);
+      d.setMonth(d.getMonth() + 3);
       setDayClamped(d, day);
       break;
     }
     case 'yearly': {
-      const month = d.getMonth();
-      const day = d.getDate();
-      const year = d.getFullYear() + step;
-      const last = new Date(year, month + 1, 0).getDate();
-      d.setFullYear(year, month, Math.min(day, last));
-      break;
+      const month = rule.byMonth !== undefined ? rule.byMonth - 1 : base.getMonth();
+      const day = rule.byMonthday ?? base.getDate();
+      let candidate = yearlyAt(base, base.getFullYear(), month, day);
+      if (candidate.getTime() <= fromMs) candidate = yearlyAt(base, base.getFullYear() + 1, month, day);
+      return candidate.getTime();
     }
-    case 'interval':
-      d.setDate(d.getDate() + step);
-      break;
-    case 'workdays':
-      for (let i = 0; i < step; i++) {
-        do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6);
-      }
-      break;
-  }
-
-  if (rule.byMonthday !== undefined) setDayClamped(d, rule.byMonthday);
-
-  if (rule.byWeekday && rule.byWeekday.length > 0) {
-    const wanted = new Set(rule.byWeekday);
-    let guard = 0;
-    while (!wanted.has(d.getDay()) && guard++ < 14) d.setDate(d.getDate() + 1);
-  }
-
-  if (rule.byMonth !== undefined) {
-    const wanted = ((rule.byMonth % 12) + 12) % 12;
-    let guard = 0;
-    while (d.getMonth() !== wanted && guard++ < 24) d.setMonth(d.getMonth() + 1);
-    if (rule.byMonthday !== undefined) setDayClamped(d, rule.byMonthday);
   }
 
   return d.getTime();

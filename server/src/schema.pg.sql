@@ -79,9 +79,8 @@ CREATE TABLE IF NOT EXISTS pursuits (
   url             text,
   path            text,
 
-  nature          text NOT NULL DEFAULT 'one_off',   -- one_off | recurring | project
-  importance      integer NOT NULL DEFAULT 1,        -- 0..3
-  energy          text NOT NULL DEFAULT 'medium',    -- low | medium | high
+  nature          text NOT NULL DEFAULT 'one_off',   -- one_off | project
+  importance      integer NOT NULL DEFAULT 1,        -- 1=P2 默认, 2=P1, 3=P0
   due_at          timestamptz,
   recurrence      jsonb,
   context         jsonb,
@@ -122,7 +121,7 @@ CREATE TABLE IF NOT EXISTS followups (
   pursuit_id  text NOT NULL REFERENCES pursuits(id) ON DELETE CASCADE,
   at          timestamptz NOT NULL DEFAULT now(),
   level       integer NOT NULL,
-  action      text NOT NULL,   -- done|partial|later|smaller|archive|ignored
+  action      text NOT NULL,   -- done|later|smaller|archive|reopen
   note        text
 );
 CREATE INDEX IF NOT EXISTS ix_followups_pursuit ON followups(pursuit_id, at DESC);

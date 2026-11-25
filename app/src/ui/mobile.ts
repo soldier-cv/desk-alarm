@@ -97,7 +97,7 @@ function toast(msg: string) {
 }
 
 function natureIcon(n: Pursuit['nature']): string {
-  return n === 'project' ? '◫' : n === 'recurring' ? '↻' : '·';
+  return n === 'project' ? '◫' : '·';
 }
 
 /* ------------------------------------------------------------ 骨架 */
@@ -335,6 +335,8 @@ function renderDetail() {
     host.querySelector('#back')!.addEventListener('click', () => setView('today'));
     return;
   }
+  const freq = p.recurrence?.freq ?? 'none';
+  const rf = ruleFields(p.recurrence);
   host.innerHTML = `
   <div class="detail-wrap">
     <div class="detail-top"><button class="btn sm" id="back">‹ 返回</button><b>推进详情</b></div>
@@ -368,13 +370,9 @@ function renderDetail() {
       </div>
 
       <div class="set-group">
-        <h3>启动精力 / 性质</h3>
+        <h3>性质</h3>
         <div class="imp-row">
-          ${(['low', 'medium', 'high'] as const).map((e) =>
-            `<button class="btn ${p.energy === e ? 'solid' : ''}" data-energy="${e}">${ENERGY_LABEL[e]}</button>`).join('')}
-        </div>
-        <div class="imp-row" style="margin-top:8px">
-          ${(['one_off', 'recurring', 'project'] as const).map((n) =>
+          ${(['one_off', 'project'] as const).map((n) =>
             `<button class="btn ${p.nature === n ? 'solid' : ''}" data-nature="${n}">${NATURE_LABEL[n]}</button>`).join('')}
         </div>
       </div>
@@ -382,10 +380,15 @@ function renderDetail() {
       <div class="set-group">
         <h3>重复规则</h3>
         <select id="rule-freq" class="m-select">
-          ${(['none', 'daily', 'weekly', 'monthly', 'yearly', 'workdays', 'interval'] as const).map((f) =>
-            `<option value="${f}" ${(p.recurrence?.freq ?? 'none') === f ? 'selected' : ''}>${f === 'none' ? '不重复' : f}</option>`).join('')}
+          ${(Object.keys(FREQ_LABEL) as Array<keyof typeof FREQ_LABEL>).map((f) =>
+            `<option value="${f}" ${freq === f ? 'selected' : ''}>${FREQ_LABEL[f]}</option>`).join('')}
         </select>
-        <input class="input" id="rule-interval" type="number" min="1" value="${p.recurrence?.interval ?? 1}" placeholder="间隔天数">
+        ${fieldsFor(freq).includes('weekday')
+          ? `<input class="input" id="rule-byday" value="${esc(rf.byWeekday)}" placeholder="周几，0=日，逗号分隔" style="margin-top:8px">` : ''}
+        ${fieldsFor(freq).includes('month')
+          ? `<input class="input" id="rule-bymonth" type="number" min="1" max="12" value="${esc(rf.byMonth)}" placeholder="月份 1-12" style="margin-top:8px">` : ''}
+        ${fieldsFor(freq).includes('monthday')
+          ? `<input class="input" id="rule-bymonthday" type="number" min="1" max="31" value="${esc(rf.byMonthday)}" placeholder="几号" style="margin-top:8px">` : ''}
         <button class="btn block" id="save-rule" style="margin-top:10px">保存重复</button>
       </div>
 
@@ -428,19 +431,35 @@ function renderDetail() {
   host.querySelectorAll<HTMLElement>('[data-strength]').forEach((b) => {
     b.onclick = () => void patchPursuit(p, { strength: b.dataset.strength });
   });
-  host.querySelectorAll<HTMLElement>('[data-energy]').forEach((b) => {
-    b.onclick = () => void patchPursuit(p, { energy: b.dataset.energy });
-  });
   host.querySelectorAll<HTMLElement>('[data-nature]').forEach((b) => {
     b.onclick = () => void patchPursuit(p, { nature: b.dataset.nature });
   });
+  const freqSel = host.querySelector<HTMLSelectElement>('#rule-freq');
+  const paintRuleFields = () => {
+    const f = freqSel!.value as Freq;
+    const current = {
+      byWeekday: host.querySelector<HTMLInputElement>('#rule-byday')?.value ?? rf.byWeekday,
+      byMonthday: host.querySelector<HTMLInputElement>('#rule-bymonthday')?.value ?? rf.byMonthday,
+      byMonth: host.querySelector<HTMLInputElement>('#rule-bymonth')?.value ?? rf.byMonth,
+    };
+    host.querySelector('#rule-byday')?.remove();
+    host.querySelector('#rule-bymonth')?.remove();
+    host.querySelector('#rule-bymonthday')?.remove();
+    const before = host.querySelector('#save-rule')!;
+    const insert = (html: string) => before.insertAdjacentHTML('beforebegin', html);
+    if (fieldsFor(f).includes('weekday')) insert(`<input class="input" id="rule-byday" value="${esc(current.byWeekday)}" placeholder="周几，0=日，逗号分隔" style="margin-top:8px">`);
+    if (fieldsFor(f).includes('month')) insert(`<input class="input" id="rule-bymonth" type="number" min="1" max="12" value="${esc(current.byMonth)}" placeholder="月份 1-12" style="margin-top:8px">`);
+    if (fieldsFor(f).includes('monthday')) insert(`<input class="input" id="rule-bymonthday" type="number" min="1" max="31" value="${esc(current.byMonthday)}" placeholder="几号" style="margin-top:8px">`);
+  };
+  freqSel?.addEventListener('change', paintRuleFields);
   host.querySelector('#save-rule')!.addEventListener('click', () => {
-    const freq = (host.querySelector('#rule-freq') as HTMLSelectElement).value;
-    const interval = Number((host.querySelector('#rule-interval') as HTMLInputElement).value) || 1;
-    let rule: RecurrenceRule | null = null;
-    if (freq !== 'none') rule = { freq: freq as RecurrenceRule['freq'], interval };
-    void patchPursuit(p, { recurrence: rule });
+    const val = (sel: string) => host.querySelector<HTMLInputElement>(sel)?.value?.trim() ?? '';
+    const fields = {
+      byWeekday: val('#rule-byday'), byMonthday: val('#rule-bymonthday'), byMonth: val('#rule-bymonth'),
+    };
+    void patchPursuit(p, { recurrence: buildRecurrence(freqSel!.value as Freq, fields) });
   });
+  host.querySelector('#clone')!.addEventListener('click', () => void mobileClone(p.id));
 }
 
 async function addMobileStep(p: Pursuit) {
@@ -472,6 +491,10 @@ async function patchPursuit(p: Pursuit, patch: Record<string, unknown>) {
 async function mobileFollowup(id: string, action: FollowupAction, extra: Record<string, unknown> = {}) {
   const p = findPursuit(id);
   if (!p) { toast('这条已经不在了'); return; }
+  if (!actionsFor(p.status).includes(action)) {
+    toast('当前状态不允许这个操作');
+    return;
+  }
   if (action === 'smaller' && !extra.steps) {
     const next = p.steps.find((s) => s.state !== 'done')?.text ?? p.text;
     const steps = await openStepsDialog(next ? [next] : []);
@@ -486,7 +509,7 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
   }
   try {
     localHandled.set(id, Date.now());
-    if (!extra.steps && !extra.to) rt?.followup(id, action, versionOf(p));
+    // 跟进只有 HTTP 一条写入路径；WS 再发一次会用同一个 version 触发乐观锁冲突
     await api.followup(id, {
       action, version: versionOf(p),
       ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),

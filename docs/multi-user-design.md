@@ -41,22 +41,25 @@
 ## 数据模型
 
 ```
-users          id, username(唯一), password_hash, role(admin|user), disabled, created_at
-devices        id, machine_id(唯一), user_id, name, platform, transport, push_token,
-               push_enabled, online, last_seen_at, created_at
-sessions       token, user_id, device_id(可空), kind(user|mcp|dashboard), created_at, expires_at
-entries        ... + user_id
-entry_devices  ... (只允许指向同用户的设备，服务端校验)
-deliveries     ... + user_id (冗余，便于按用户统计与补发过滤)
-dismissals     ... + user_id
-idempotency    key 改为 (user_id, key) 复合主键
-settings       (user_id, key) 复合主键，每用户一份，新用户首次登录写默认值
+users             id, username(唯一), password_hash, role(admin|user), disabled, created_at
+devices           id, machine_id(唯一), user_id, name, platform, transport,
+                  push_enabled, online, last_seen_at, created_at
+sessions          token, user_id, device_id(可空), kind(user|dashboard|agent), created_at, expires_at
+agent_tokens      id, user_id, machine_id, token_hash(唯一), prefix, scope(read|write), ...
+pursuits          id, user_id, text, note, nature, importance, due_at, recurrence,
+                  context, commitment, status, last_activity_at, completed_at, version, ...
+steps             id, pursuit_id, user_id, text, position, state, done_at, created_at
+followups         id, user_id, pursuit_id, at, level, action, note
+nudges            id, user_id, pursuit_id, device_id, fire_key, level, channel, state, ...
+pursuit_devices   pursuit_id, device_id（只允许指向同用户的设备，服务端校验）
+idempotency       (user_id, key) 复合主键
+settings          (user_id, key) 复合主键，每用户一份，新用户首次登录写默认值
 ```
 
 ### 关键不变量
 
-1. `fired_at` 仍只由调度器写，仍是唯一计时权威
-2. 所有列表/查询/写操作都必须带 `user_id` 过滤；`entry_devices` 目标必须属于同用户
+1. 服务端是唯一计时权威：打扰由服务端 tick 算停滞等级并写 `nudges`，`last_activity_at` 只由服务端的跟进/调度写
+2. 所有列表/查询/写操作都必须带 `user_id` 过滤；`pursuit_devices` 目标必须属于同用户；克隆也要带 `user_id`
 3. `machine_id` 唯一；登录时若已存在且归属其它用户，则改归属 + 删除该设备的其它用户会话
 4. 云端 agent 的令牌不传 `machineId`，不关联设备；桌面签发时可绑定本机
 5. Agent 令牌只存 SHA-256 哈希，明文只在签发时返回一次；绑定签发用户的 machine-id，可设 read/write scope，可随时撤销

@@ -531,11 +531,16 @@ function countOf(s: PursuitStatus): number {
   return state.counts?.counts?.[s] ?? 0;
 }
 
+function countAll(): number {
+  const counts = state.counts?.counts;
+  return counts ? Object.values(counts).reduce((sum, n) => sum + (n ?? 0), 0) : 0;
+}
+
 function renderSidebar() {
   const nav: Array<[View, string, number]> = [
     ['today', '今日', (state.focus?.items.length ?? 0) || countOf('active')],
     ['inbox', '收件箱', countOf('inbox')],
-    ['all', '全部', countOf('active') + countOf('inbox') + countOf('paused')],
+    ['all', '全部', countAll()],
     ['done', '已完成', countOf('done')],
     ['archived', '归档', countOf('archived')],
   ];
@@ -561,9 +566,7 @@ function renderSidebar() {
 }
 
 function natureIcon(n: Pursuit['nature']): string {
-  if (n === 'project') return '◫';
-  if (n === 'recurring') return '↻';
-  return '·';
+  return n === 'project' ? '◫' : '·';
 }
 
 function progressHtml(p: Pursuit): string {
@@ -614,7 +617,6 @@ function rowHtml(p: Pursuit): string {
       <div class="it-title">${esc(p.text)}</div>
       <div class="it-meta">
         <span class="tag" title="${NATURE_LABEL[p.nature]}">${natureIcon(p.nature)} ${NATURE_LABEL[p.nature]}</span>
-        <span class="tag">精力 ${ENERGY_LABEL[p.energy]}</span>
         ${progressHtml(p)}
         ${p.url ? `<span class="tag host" title="${esc(p.url)}">${esc(hostOf(p.url))}</span>` : ''}
         ${p.path ? `<span class="tag path" title="${esc(p.path)}">${esc(p.path)}</span>` : ''}
@@ -670,6 +672,8 @@ function renderEditor() {
   }
 
   const freq = p.recurrence?.freq ?? 'none';
+  const rf = ruleFields(p.recurrence);
+  const ruleFieldsShown = fieldsFor(freq);
   const due = p.dueAt === null ? '没有截止' : `${dayLabel(p.dueAt)} ${hhmm(p.dueAt)}`;
   box.innerHTML = `
     <div class="ed-head">推进详情</div>
@@ -706,7 +710,7 @@ function renderEditor() {
         ).join('')}</div></div>
 
       <div class="fld"><label>性质</label>
-        <div class="seg">${(['one_off', 'recurring', 'project'] as const).map((n) =>
+        <div class="seg">${(['one_off', 'project'] as const).map((n) =>
           `<button data-nature="${n}" class="${p.nature === n ? 'on' : ''}">${NATURE_LABEL[n]}</button>`,
         ).join('')}</div></div>
 
@@ -717,14 +721,9 @@ function renderEditor() {
 
       <div class="fld"><label>重复规则</label>
         <button type="button" class="input sm trigger" id="f-freq" data-v="${freq}">
-          <span class="trigger-label">${freq === 'none' ? '不重复' : NATURE_LABEL.recurring + ' · ' + freq}</span>
+          <span class="trigger-label">${FREQ_LABEL[freq]}</span>
           <span class="trigger-arrow">⌄</span></button>
-        <div class="rule-grid" style="margin-top:8px">
-          <label>间隔<input class="input" id="f-interval" type="number" min="1" max="365" value="${p.recurrence?.interval ?? 1}"></label>
-          <label>周几（0=日，逗号分隔）<input class="input" id="f-byday" value="${(p.recurrence?.byWeekday ?? []).join(',')}"></label>
-          <label>每月几号<input class="input" id="f-bymonthday" type="number" min="1" max="31" value="${p.recurrence?.byMonthday ?? ''}"></label>
-        </div>
-        <div class="set-actions"><button class="btn sm" data-act="save-rule">保存重复</button></div></div>
+        <div id="f-rule-extra" ${ruleFieldsShown.length === 0 ? 'hidden' : ''}>${ruleFieldsHtml(freq, rf)}</div></div>
 
       <div class="fld"><label>跟进历史</label>
         ${state.followups.length ? `<div class="fu-list">${state.followups.map((f) => `
@@ -745,18 +744,23 @@ function renderEditor() {
   if (when) when.onclick = () => openWhenPicker(p, when);
   const freqBtn = $<HTMLButtonElement>('#f-freq');
   if (freqBtn) freqBtn.onclick = (ev) => {
-    openDropdown(ev.currentTarget as HTMLElement, [
-      { value: 'none', label: '不重复' },
-      { value: 'daily', label: '每天' },
-      { value: 'weekly', label: '每周' },
-      { value: 'monthly', label: '每月' },
-      { value: 'yearly', label: '每年' },
-      { value: 'workdays', label: '工作日' },
-      { value: 'interval', label: '按间隔天数' },
-    ], freq, (v) => {
+    const items = (Object.keys(FREQ_LABEL) as Array<keyof typeof FREQ_LABEL>)
+      .map((v) => ({ value: v, label: FREQ_LABEL[v] }));
+    openDropdown(ev.currentTarget as HTMLElement, items, freq, (v) => {
+      const key = v as keyof typeof FREQ_LABEL;
+      const current = {
+        byWeekday: $<HTMLInputElement>('#f-byday')?.value ?? rf.byWeekday,
+        byMonthday: $<HTMLInputElement>('#f-bymonthday')?.value ?? rf.byMonthday,
+        byMonth: $<HTMLInputElement>('#f-bymonth')?.value ?? rf.byMonth,
+      };
       freqBtn.dataset.v = v;
       const label = freqBtn.querySelector<HTMLElement>('.trigger-label');
-      if (label) label.textContent = v === 'none' ? '不重复' : v;
+      if (label) label.textContent = FREQ_LABEL[key];
+      const extra = $<HTMLElement>('#f-rule-extra');
+      if (extra) {
+        extra.innerHTML = ruleFieldsHtml(v, current);
+        extra.hidden = fieldsFor(key).length === 0;
+      }
     });
   };
 }
@@ -821,8 +825,11 @@ function localLogPolicy(): LogPolicy {
 function renderDeviceStatus() {
   const el = $<HTMLElement>('#s-lock');
   if (!el) return;
-  const me = state.devices.find((d) => d.id === loadConfig().device?.id) ?? loadConfig().device;
-  el.textContent = me?.online === false ? '设备 离线' : '设备 在线';
+  const mine = loadConfig().device?.id;
+  // 服务端按实时通道判在线；设备行里的 online 是登录时的旧值，不能拿来显示当前状态
+  const online = mine ? linkState === 'open' : false;
+  el.textContent = online ? '设备 在线' : '设备 离线';
+  el.title = mine ? '本机推送设备：实时通道连着就算在线' : '本机还没有注册推送设备';
 }
 
 const hhmmOfMin = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -1535,6 +1542,11 @@ async function askLater(id: string) {
 async function runFollowup(id: string, action: FollowupAction, extra: Record<string, unknown> = {}) {
   const p = findPursuit(id);
   if (!p && !extra.silent) { flash('这条已经不在了'); return; }
+  if (p && !actionsFor(p.status).includes(action)) {
+    flash('当前状态不允许这个操作');
+    void refresh();
+    return;
+  }
   const version = p ? versionOf(p) : 0;
   if (action === 'smaller' && !extra.steps) {
     const next = p?.steps.find((s) => s.state !== 'done')?.text ?? p?.text ?? '';
@@ -1550,7 +1562,7 @@ async function runFollowup(id: string, action: FollowupAction, extra: Record<str
     ...(extra.stepId ? { stepId: String(extra.stepId) } : {}) };
   try {
     localHandled.set(id, Date.now());
-    if (!extra.steps && !extra.to) rt?.followup(id, action, version);
+    // 跟进只有 HTTP 一条写入路径；WS 再发一次会用同一个 version 触发乐观锁冲突
     await api.followup(id, body);
     noteFollowup(id, action);
     control.acknowledge(action);
@@ -1563,6 +1575,17 @@ async function runFollowup(id: string, action: FollowupAction, extra: Record<str
     } else {
       flash('跟进失败：' + msgOf(e));
     }
+  }
+}
+
+async function runClone(id: string) {
+  try {
+    const r = await api.clone(id);
+    flash('已克隆，步骤状态已重置、截止已清空');
+    state.selected = r.pursuit.id;
+    void refresh();
+  } catch (e) {
+    flash('克隆失败：' + msgOf(e));
   }
 }
 
@@ -1609,24 +1632,24 @@ function onEditorClick(ev: Event) {
     case 'clear-due': savePatch({ dueAt: null }); return;
     case 'save-rule': {
       const freq = $<HTMLButtonElement>('#f-freq').dataset.v ?? 'none';
-      const interval = Number($<HTMLInputElement>('#f-interval').value) || 1;
-      const byday = $<HTMLInputElement>('#f-byday').value.trim();
-      const monthday = Number($<HTMLInputElement>('#f-bymonthday').value) || 0;
-      let rule: RecurrenceRule | null = null;
-      if (freq !== 'none') {
-        rule = { freq: freq as RecurrenceRule['freq'], interval };
-        if (byday) rule.byWeekday = byday.split(/[,，\s]+/).map(Number).filter((n) => !Number.isNaN(n));
-        if (monthday) rule.byMonthday = monthday;
-      }
-      savePatch({ recurrence: rule });
+      const fields = {
+        byWeekday: $<HTMLInputElement>('#f-byday')?.value?.trim() ?? '',
+        byMonthday: $<HTMLInputElement>('#f-bymonthday')?.value?.trim() ?? '',
+        byMonth: $<HTMLInputElement>('#f-bymonth')?.value?.trim() ?? '',
+      };
+      savePatch({ recurrence: buildRecurrence(freq as Parameters<typeof buildRecurrence>[0], fields) });
       return;
     }
     case 'follow-done':
       void runFollowup(p.id, 'done', t.dataset.step ? { stepId: t.dataset.step } : {});
       return;
     case 'follow-later': void askLater(p.id); return;
-    case 'follow-smaller': void runFollowup(p.id, 'smaller'); return;
-    case 'archive': void runFollowup(p.id, 'archive'); return;
+    case 'follow-done':
+    case 'follow-smaller':
+    case 'follow-archive':
+    case 'follow-reopen':
+      void runFollowup(p.id, act.slice(7) as FollowupAction);
+      return;
   }
 }
 
@@ -1683,12 +1706,18 @@ function setLink(s: 'connecting' | 'open' | 'closed') {
   const srv = $<HTMLElement>('#s-server');
   const conn = $<HTMLElement>('#btn-server');
   if (!dot || !txt) return;
+  linkState = s;
   dot.className = `sdot ${s === 'open' ? '' : s === 'connecting' ? 'warn' : 'alert'}`;
   txt.textContent = s === 'open' ? '已连接' : s === 'connecting' ? '连接中' : '已断开';
   conn.title = s === 'closed'
     ? `已断开，正在自动重连。点击切换服务端（${loadConfig().baseUrl}）`
     : `点击切换服务端（${loadConfig().baseUrl}）`;
   if (srv) srv.textContent = `服务端 ${loadConfig().baseUrl}`;
+  const mine = loadConfig().device?.id;
+  const self = state.devices.find((d) => d.id === mine);
+  if (self) self.online = s === 'open';
+  renderSidebar();
+  renderDeviceStatus();
 }
 
 const SKEW_MAX_AUTO = 10_000;
@@ -1853,6 +1882,9 @@ function onRealtime(msg: ServerMessage) {
       break;
     case 'devices.changed':
       state.devices = msg.devices;
+      const mine = loadConfig().device?.id;
+      const self = state.devices.find((d) => d.id === mine);
+      if (self) self.online = linkState === 'open';
       renderSidebar();
       renderDeviceStatus();
       if ($('#set-devices')) renderDeviceRows();

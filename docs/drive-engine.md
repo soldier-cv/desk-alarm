@@ -14,7 +14,7 @@ v1 把"提醒"当成产品本身：记一条 → 到点响 → 点完成/忽略�
 
 1. 关键词判强弱 + 默认全弱 → 显式 `importance` + **打扰预算** + 权重排序。
    措辞判的是语气不是代价，且会被 Goodhart 化。配额制从根上避免"全都喊等于全听不见"。
-2. 忽略 2 次降级、3 次建议删除 → **跟进曲线**：忽略是信号不是惩罚，触发"改天/拆小/归档"的低摩擦动作。
+2. 忽略 2 次降级、3 次建议删除 → **跟进曲线**：跟进是信号不是惩罚，触发"延期/拆小/归档/完成"的低摩擦动作。
 3. 强/弱二分、永不升级 → **连续打扰等级 L1..L5** + 停滞驱动的动态阶梯。
 4. 到点响一次 → **到点通知 + 停滞阶梯**：显式时间到点响一次，之后按用户动作持续跟进，不按次数放弃。
 
@@ -32,7 +32,7 @@ agent 通过 MCP 全权推进。两条路走同一套逻辑，不存在"界面�
 stalenessMs = now - lastActivityAt
 progress    = doneSteps / totalSteps （无步骤时 0）
 weight =
-    importance * 20
+    effectiveImportance(importance, dueAt, now) * 20   // P0=3/P1=2/P2=1；24h 内到期按 P0
   + 逾期/紧急加成: dueAt 在 24h 内 +40，72h 内 +20，已逾期 +60
   + 停滞加成: min(floor(stallDays) * 8, 40)
   + 承诺加成: commitment.date 存在 +25
@@ -50,7 +50,7 @@ l4 .. l5(7d)              → L4 接管
 ```
 
 L4/L5 受 `dailyStrongBudget` 限额：当天强打扰用尽则降到 L2/L3。
-静音时段内 L4 降到 L2（`bypassQuiet` 语义由 `energy=high` + 站点上下文体现）。
+静音时段内 L4 降到 L2；用户自己写下的截止到点单独发一条 L2 通知，静音时段顺延，不占强打扰配额。
 
 ### 情境闸门
 
@@ -60,16 +60,24 @@ L4/L5 受 `dailyStrongBudget` 限额：当天强打扰用尽则降到 L2/L3。
 
 ### 重复规则
 
-`nextOccurrence(fromMs, rule)`：`daily`+1d、`weekly`+7d、`monthly`+1 月并钳到月末、
-`yearly`+1 年、`workdays` 跳过周末、`interval` 按 `interval` 天。
-基数取 `max(dueAt, now)` 避免逾期后连排多次。
+`nextOccurrence(fromMs, rule)`：`daily`+1d；`weekly` 找基准日之后第一个命中的 `byWeekday`（没填则 +7d）；
+`monthly`+1 月、`quarterly`+3 月，按 `byMonthday` 钳到月末；`yearly` 按 `byMonth`/`byMonthday` 取今年或明年的那次。
+基数取 `max(dueAt, now)` 避免逾期后连排多次。每个频率只带自己的字段，路由层拒绝跨频率字段；
+重复与否只看 `recurrence`，不再看 `nature`。
 
 ### 下一步建议（suggestNextStep）
 
 - 有未完成步骤 → 取第一个 todo/doing 的 text
 - project 无步骤 → "把这件事拆成 2-3 个能立刻动手的小步骤"
-- one_off 停滞 → "今天花 5 分钟做第一步：<text>"
+- 无步骤的 one_off 停滞 → "今天花 5 分钟做第一步：<text>"
 - 已到 L5 → "要么今天定个时间，要么归档"
+
+### 跟进动作与状态边界
+
+`done`=完成、`later`=延期、`smaller`=拆小、`archive`=归档、`reopen`=已完成撤回。
+`actionsFor(status)` 是唯一权威：进行中/收件箱/暂停给四个动作，已完成只给归档与撤回，已归档不给任何动作。
+克隆是独立端点（`/pursuits/:id/clone`），全状态可用，不是跟进动作：复制内容与步骤文本、步骤重置 todo、
+截止清空、不复制跟进历史，新项进进行中。
 
 ## 模块边界与文件所有权（并行实现，严禁越界改别人的文件）
 

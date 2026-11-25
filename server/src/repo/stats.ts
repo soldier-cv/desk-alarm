@@ -100,7 +100,7 @@ export async function getMyStats(userId: string): Promise<MyStats> {
     [userId],
   );
 
-  const byNature: Record<PursuitNature, number> = { one_off: 0, recurring: 0, project: 0 };
+  const byNature: Record<PursuitNature, number> = { one_off: 0, project: 0 };
   for (const r of await rows<{ nature: string; n: number }>(
     'SELECT nature, count(*)::int AS n FROM pursuits WHERE user_id = $1 GROUP BY nature',
     [userId],
