@@ -64,6 +64,7 @@ cd app && node scripts/contrast.mjs
 - 服务端改动 → `cd server && npm run smoke && npm run e2e`
 - 重复提醒日期改动 → `cd server && npm run repeat`（月末钳位，必须先 build）
 - 客户端改动 → `cd app && npm test && npx tsc --noEmit && npx vite build`
+- 安卓 Kotlin 改动（`gen/android/**/*.kt`）→ 推 tag 前必须本地真编译：`gradle -p app/src-tauri/gen/android :app:compileUniversalReleaseKotlin :app:compileArm64ReleaseKotlin`。类型错误只在 Gradle 编译期暴露，tsc / cargo test 都查不出来；别因为要联网下载 Gradle 就跳过，CI 挂一次比本地下载慢得多。原因与踩坑见 `docs/android.md`。
 - 颜色改动 → `node scripts/contrast.mjs`
 - 服务端地址解析改动 → `cd app && node scripts/url-check.mjs`
 - 需求规则改动 → `node scripts/align-check.mjs`

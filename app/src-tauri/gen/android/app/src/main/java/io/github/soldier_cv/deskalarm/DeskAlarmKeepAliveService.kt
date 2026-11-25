@@ -298,7 +298,11 @@ class DeskAlarmKeepAliveService : Service() {
             c.setSound(null, null)
             c.enableVibration(false)
         } else {
-            c.setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI, android.media.AudioManager.STREAM_NOTIFICATION)
+            val attr = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            c.setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI, attr)
             c.enableVibration(true)
         }
         nm.createNotificationChannel(c)

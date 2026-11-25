@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v1.2.2] - 2026-11-25
+
+### Fixed
+- 安卓保活服务同步静音设置时给 `NotificationChannel.setSound` 传了 `Int`，Kotlin 编译类型不匹配导致发版构建失败；改用 `AudioAttributes`，并已在本地跑 `compileUniversalReleaseKotlin` 验证通过。
+
 ## [v1.2.1] - 2026-11-25
 
 ### Fixed

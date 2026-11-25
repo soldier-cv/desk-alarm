@@ -92,6 +92,19 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 
 > 首次跑会生成 `app/src-tauri/gen/android`，这是 Tauri 的 Android 工程骨架（Gradle 项目），由 `tauri android init` 产出，**不要手工编辑**；生成后提交到仓库，后续机器不用再 init。
 
+### 改了 Kotlin 必须本地编译再发 tag
+
+推 `v*` tag 会触发 CI 编译全部 Kotlin 变体。Kotlin 的类型错误**只在 Gradle 编译期暴露**，tsc、cargo test、vite build 全查不出来——发版前只跑那几套检查就推 tag，等于把编译错误留给 CI，构建挂了还得补一个新 tag。所以动过 `gen/android/**/*.kt` 后，先本地真编译一遍：
+
+```powershell
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+& .\app\src-tauri\gen\android\gradlew.bat -p app\src-tauri\gen\android :app:compileUniversalReleaseKotlin :app:compileArm64ReleaseKotlin
+```
+
+`universal` 是 CI 里报错的那个变体，务必编到。若 `~/.gradle/wrapper/dists` 缓存被清、wrapper 要联网下载 9.6.1 又连不上，从 `https://mirrors.cloud.tencent.com/gradle/gradle-9.6.1-bin.zip` 下载解压，直接用解压出的 `gradle.bat` 跑上面两个 task（Gradle 会自己拉 AndroidX/OkHttp 等依赖）。
+
+踩过的坑：给 `NotificationChannel.setSound` 第二个参数传了 `AudioManager.STREAM_NOTIFICATION`（Int），它要的是 `AudioAttributes`，Kotlin 报 `argument type mismatch`，v1.2.1 因此 CI 构建失败，v1.2.2 修复。正确写法见 `DeskAlarmKeepAliveService.kt` 的 `applySoundSetting()`。
+
 ## 后台保活怎么工作
 
 `MainActivity` 启动时调用 `startForegroundService`，拉起 `DeskAlarmKeepAliveService`（`gen/android/app/src/main/java/.../DeskAlarmKeepAliveService.kt`）。它做两件事：显示常驻通知把进程抬到前台优先级；**自己在原生层持有 WebSocket 和心跳**，按 `pursuit.nudge` 的等级弹通知，收到 `pursuit.followed` / `pursuit.deleted` 就停铃。WebView 里那条 WS 只做界面同步，不再弹系统通知，避免重复。
