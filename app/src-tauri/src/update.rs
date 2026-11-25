@@ -38,6 +38,8 @@ pub struct UpdateInfo {
     pub source: String,
     /// 实际拿到清单的 URL，安装时直接用它，不再猜一条
     pub source_url: String,
+    /// 安卓 APK 的下载地址，从清单的 android 条目取（source_url 是 manifest 地址）
+    pub apk_url: String,
     /// 是否命中"镜像落后、已改用 GitHub"
     pub mirror_stale: bool,
     /// 给用户看的一句话
@@ -80,6 +82,13 @@ fn platform_key() -> &'static str {
 /// minisign .sig 校验；清单里 android 条目的 signature 可以为空。
 fn needs_signature() -> bool {
     !cfg!(target_os = "android")
+}
+
+/// 从清单里取经过校验的 APK 地址，供安卓插件下载；取不到就留空，前端会提示重新检查。
+fn apk_url(m: &Manifest) -> String {
+    let Some(p) = m.platforms.get("android") else { return String::new() };
+    if p.url.is_empty() || !is_trusted_download_url(&p.url) { return String::new() }
+    p.url.clone()
 }
 
 /// 下载地址的硬闸门。
@@ -216,6 +225,7 @@ async fn resolve() -> Result<UpdateInfo, String> {
         latest_version: String::new(),
         source: String::new(),
         source_url: String::new(),
+        apk_url: String::new(),
         mirror_stale: false,
         message: String::new(),
         release_page: RELEASES_PAGE.to_string(),
@@ -241,6 +251,7 @@ async fn resolve() -> Result<UpdateInfo, String> {
                 info.latest_version = v;
                 info.source = "Gitee".into();
                 info.source_url = gitee_url.clone().unwrap_or_default();
+                info.apk_url = apk_url(m);
                 info.message = format!("发现新版本 v{}", info.latest_version);
                 return Ok(info);
             }
@@ -265,6 +276,7 @@ async fn resolve() -> Result<UpdateInfo, String> {
                 info.available = true;
                 info.latest_version = v;
                 info.source_url = GITHUB_MANIFEST.into();
+                info.apk_url = apk_url(&m);
                 info.source = if stale { "GitHub（镜像落后）" } else { "GitHub" }.into();
                 info.mirror_stale = stale;
                 info.message = if stale {
@@ -461,6 +473,22 @@ mod tests {
             "assets": [{ "name": "latest.json", "browser_download_url": "https://evil.example/latest.json" }]
         });
         assert!(gitee_latest_json_url(&evil).is_err());
+    }
+
+    #[test]
+    fn apk_url_comes_from_android_platform_and_is_trusted() {
+        let m: Manifest = serde_json::from_value(serde_json::json!({
+            "version": "1.2.1",
+            "platforms": {
+                "android": { "url": "https://gitee.com/huaxudong/desk-alarm/releases/download/v1.2.1/desk-alarm_1.2.1_android-universal.apk" }
+            }
+        })).unwrap();
+        assert_eq!(apk_url(&m), "https://gitee.com/huaxudong/desk-alarm/releases/download/v1.2.1/desk-alarm_1.2.1_android-universal.apk");
+
+        let evil: Manifest = serde_json::from_value(serde_json::json!({
+            "platforms": { "android": { "url": "https://evil.example/x.apk" } }
+        })).unwrap();
+        assert!(apk_url(&evil).is_empty());
     }
 
     #[test]

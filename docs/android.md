@@ -13,7 +13,7 @@ Android 端的差异：
 ## 当前状态：代码就绪，发版走 GitHub Actions
 
 代码侧已经为移动端做好了适配：
-- `lib.rs` 用 `#[cfg(desktop)]` / `#[cfg(mobile)]` 隔开桌面专属插件（托盘、开机自启、全局热键、单实例、updater、多窗口），移动端只保留通知插件
+- `lib.rs` 用 `#[cfg(desktop)]` / `#[cfg(mobile)]` 隔开桌面专属插件（托盘、开机自启、全局热键、单实例、多窗口），移动端保留通知插件，另注册 `push`（保活）与 `apk-installer`（应用内更新）两个 Android 插件
 - `machine_id()` 有 Android 分支；`platform()` 会返回 `android`，前端据此隐藏桌面专属按钮
 - `shared/types.ts` 的 `Platform` 含 `android`
 
@@ -52,7 +52,7 @@ CI 会把 keystore 解码到 `gen/android/app/release.jks`，把口令写进 `ge
 
 APK 版本号由 tag 决定：`scripts/set-version.mjs` 更新 `tauri.conf.json`，Tauri 据此生成 `versionName` 和 `versionCode`（`major*1000000 + minor*1000 + patch`）。tag 不递增会导致用户看不到更新。
 
-产物：`desk-alarm_<版本>_android-universal.apk`，同时出现在 GitHub Release 和 Gitee Release。移动端没有 updater 插件，不读 `latest.json`，用户从 Release 页手动下载安装。
+产物：`desk-alarm_<版本>_android-universal.apk`，同时出现在 GitHub Release 和 Gitee Release。移动端不装 Tauri updater 的静默安装包，但应用内更新仍会读 `latest.json`，取其中 `android` 条目的 APK 地址交给 `apk-installer` 用 DownloadManager 安装；用户也可以从 Release 页手动下载。
 
 ## 构建步骤（离线调试，在有 SDK 的机器上）
 

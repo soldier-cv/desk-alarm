@@ -185,7 +185,7 @@ fn read_machine_id() -> Option<String> {
     use std::process::Command;
     // Android 没有 /etc/machine-id；用系统属性里的稳定标识
     for key in ["ro.serialno", "ro.boot.serialno", "ro.android_id"] {
-        let out = Command::new("getprop").arg(key).output().ok()?;
+        let Ok(out) = Command::new("getprop").arg(key).output() else { continue };
         if !out.status.success() {
             continue;
         }

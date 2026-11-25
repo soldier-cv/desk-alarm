@@ -42,8 +42,9 @@ const localHandled = new Map<string, number>();
 const control = new FollowupController({
   onSilent: () => { void refresh(); },
   onNotify: (p, _level, reason, attempt) => {
-    void notify(p.text, `${reason}${attempt > 1 ? ` · 第 ${attempt} 次` : ''}`);
-    toast(`${p.text} · ${reason}`);
+    // 系统通知由原生保活服务统一发，JS 再 ping 会双份
+    if (!hasTauri()) void notify(p.text, `${reason}${attempt > 1 ? ` · 第 ${attempt} 次` : ''}`);
+    toast(`${p.text} · ${reason}${attempt > 1 ? ` · 第 ${attempt} 次` : ''}`);
   },
   onBanner: (p, _level, reason) => toast(`${p.text} · ${reason}`),
   onTakeover: (p, level, reason) => showMobileTakeover(p, level, reason),
@@ -191,7 +192,7 @@ async function saveCapture() {
     input.value = '';
     document.getElementById('parse')!.innerHTML = '';
     captureImportance = 1;
-    document.querySelectorAll<HTMLElement>('#cap-imp .chip').forEach((c) => c.classList.toggle('hot', c.dataset.imp === '0'));
+    document.querySelectorAll<HTMLElement>('#cap-imp .chip').forEach((c) => c.classList.toggle('hot', c.dataset.imp === String(captureImportance)));
     toast(p.remindAt !== null ? '已设截止' : '已存进收件箱');
     void refresh();
     if (p.remindAt !== null) setView('today');

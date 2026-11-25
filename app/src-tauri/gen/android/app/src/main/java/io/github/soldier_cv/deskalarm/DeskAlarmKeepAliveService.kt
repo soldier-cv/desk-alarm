@@ -48,6 +48,8 @@ class DeskAlarmKeepAliveService : Service() {
     private var running = false
     private var quietStartMin = 23 * 60 + 30
     private var quietEndMin = 7 * 60
+    @Volatile
+    private var sound = "system"
 
     override fun onCreate() {
         super.onCreate()
@@ -89,8 +91,11 @@ class DeskAlarmKeepAliveService : Service() {
     fun applyConfig(baseUrl: String, token: String) {
         val sp = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         sp.edit().putString(KEY_BASE, baseUrl).putString(KEY_TOKEN, token).apply()
-        // 已连接时重连用新配置
-        socket?.close(1000, "reconnect with new config")
+        // 冷启动登录时 socket 还没建立，光 close 不会触发连接，必须主动连
+        pingTask?.cancel(false)
+        reconnectTask?.cancel(false)
+        val old = socket
+        if (old == null) connect() else old.close(1000, "reconnect with new config")
     }
 
     private fun connect() {
@@ -136,6 +141,8 @@ class DeskAlarmKeepAliveService : Service() {
                 msg.optJSONObject("settings")?.let {
                     quietStartMin = it.optInt("quietStartMin", quietStartMin)
                     quietEndMin = it.optInt("quietEndMin", quietEndMin)
+                    val next = it.optString("sound", sound)
+                    if (next != sound) { sound = next; applySoundSetting() }
                 }
                 // missed 是 Nudge，没有事项正文；合成一条汇总，不按条数连轰
                 val missed = msg.optJSONArray("missed") ?: JSONArray()
@@ -149,7 +156,11 @@ class DeskAlarmKeepAliveService : Service() {
                 val id = pursuit.optString("id")
                 val text = pursuit.optString("text")
                 if (id.isEmpty() || text.isEmpty()) return
-                val level = msg.optInt("level", 1)
+                val raw = msg.optInt("level", 1)
+                // L5 服务端直接归档，别留一条关不掉的通知
+                if (raw >= 5) { cancel(id); return }
+                // 静音把 L4 压回 L2，与 alarm.ts 的兜底一致
+                val level = if (raw >= 4 && inQuiet()) 2 else raw
                 // L1 只进聚焦列表，不弹通知；L2+ 才提醒
                 if (level < 2) return
                 val reason = msg.optString("reason")
@@ -179,14 +190,15 @@ class DeskAlarmKeepAliveService : Service() {
         val nid = notifyId(pursuitId)
         main.post {
             val body = if (attempt > 1) "$reason · 第 $attempt 次" else reason
-            val n = NotificationCompat.Builder(this, CH_STRONG)
+            val builder = NotificationCompat.Builder(this, CH_STRONG)
                 .setSmallIcon(R.drawable.ic_stat_notify)
                 .setContentTitle(text)
                 .setContentText(body)
                 .setContentIntent(openIntent())
                 .setAutoCancel(level < 4)
                 .setOngoing(level >= 4)
-                .build()
+            if (sound == "none") builder.setSound(null).setVibrate(longArrayOf(0))
+            val n = builder.build()
             try { nm.notify(nid, n) } catch (_: Exception) {}
         }
     }
@@ -276,6 +288,20 @@ class DeskAlarmKeepAliveService : Service() {
             c.enableVibration(false)
             nm.createNotificationChannel(c)
         }
+    }
+
+    /** 渠道声音建好后仍可改；静音设置变更时同步，避免 L2 也响铃震动 */
+    private fun applySoundSetting() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val c = nm.getNotificationChannel(CH_STRONG) ?: return
+        if (sound == "none") {
+            c.setSound(null, null)
+            c.enableVibration(false)
+        } else {
+            c.setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI, android.media.AudioManager.STREAM_NOTIFICATION)
+            c.enableVibration(true)
+        }
+        nm.createNotificationChannel(c)
     }
 
     private fun buildRunningNotification(): Notification {

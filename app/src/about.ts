@@ -23,6 +23,7 @@ interface UpdateInfo {
   latestVersion: string;
   source: string;
   sourceUrl: string;
+  apkUrl: string;
   mirrorStale: boolean;
   message: string;
   releasePage: string;
@@ -32,7 +33,7 @@ interface UpdateResult { at: number; available: boolean; version: string; messag
 let platform: ClientPlatform = 'web';
 let notify: (msg: string) => void = () => {};
 let downloadedVersion: string | null = null;
-let lastSourceUrl = '';
+let lastApkUrl = '';
 let autoTimer: number | null = null;
 let overlay: HTMLElement | null = null;
 let statusEl: HTMLElement | null = null;
@@ -150,7 +151,7 @@ async function checkUpdate(quiet = false): Promise<void> {
   try {
     const info = await invoke<UpdateInfo>('check_update');
     if (!info) return;
-    lastSourceUrl = info.sourceUrl || '';
+    lastApkUrl = info.apkUrl || '';
     const prev = lastResult();
     if (!info.available || (prev && prev.version !== info.latestVersion)) downloadedVersion = null;
     saveResult({ at: Date.now(), available: info.available, version: info.latestVersion, message: info.message });
@@ -165,7 +166,7 @@ async function checkUpdate(quiet = false): Promise<void> {
 }
 
 async function downloadApk(r: UpdateResult): Promise<void> {
-  if (!lastSourceUrl) {
+  if (!lastApkUrl) {
     if (statusEl) statusEl.textContent = '下载地址已失效，请重新检查更新';
     return;
   }
@@ -173,8 +174,8 @@ async function downloadApk(r: UpdateResult): Promise<void> {
   if (statusEl) statusEl.textContent = '开始下载，请在通知栏查看进度…';
   try {
     await invoke('plugin:apk-installer|download_and_install', {
-      url: lastSourceUrl,
-      name: `deskalarm_${r.version.replace(/^v/, '')}_android-universal.apk`,
+      url: lastApkUrl,
+      fileName: `deskalarm_${r.version.replace(/^v/, '')}_android-universal.apk`,
     });
     if (statusEl) statusEl.textContent = '下载完成，请在系统安装器中确认安装';
     if (actionBtn) actionBtn.hidden = true;

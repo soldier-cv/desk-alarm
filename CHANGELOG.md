@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+## [v1.2.1] - 2026-11-25
+
+### Fixed
+- 安卓首次安装登录后，原生保活服务因 socket 尚未建立而不重连，锁屏收不到提醒；现在 `applyConfig` 会主动发起连接。
+- 安卓端 L2/L3 提醒同时由 JS 与原生服务各弹一条系统通知；现在系统通知只由原生保活服务发出，JS 仅做界面提示。
+- 安卓应用内更新下载到的是 `latest.json` 而非 APK：新增 `apkUrl` 字段回传清单中 `android` 条目的真实地址，并修正插件参数名 `name` → `fileName`。
+- 原生通知忽略「静音」设置且 L5 留下无法关闭的通知；现在静音同步到通知渠道，L5 直接清除不弹。
+- 安卓 `getprop` 取机器码时某个 key 执行失败会提前放弃后续 key；现在逐个尝试。
+- 随手记保存后重要性高亮未复位（重置用了不存在的 `data-imp="0"`），现已按当前值复位。
+- 收窄 `windows_subsystem` 属性到仅 Windows 构建，补全 `Cargo.lock` 版本号。
+
 ## [v1.2.0] - 2026-11-24
 
 ### Changed
