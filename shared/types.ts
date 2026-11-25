@@ -69,9 +69,9 @@ export type NudgeChannel = 'in_app' | 'notification' | 'takeover';
 export const WEAK_LEVEL: NudgeLevel = 2;
 export const STRONG_LEVEL: NudgeLevel = 4;
 
-/** 星标 0/1 是弱提醒，2/3 是强提醒；措辞不参与判定 */
+/** 兼容旧数据：P0(3) 视为强提醒，其余视为弱提醒；措辞不参与判定 */
 export function strengthOfImportance(i: Importance): ReminderStrength {
-  return i >= 2 ? 'strong' : 'weak';
+  return i >= 3 ? 'strong' : 'weak';
 }
 
 export function strengthOfLevel(level: NudgeLevel): ReminderStrength {
@@ -82,9 +82,9 @@ export function levelForStrength(strength: ReminderStrength): NudgeLevel {
   return strength === 'strong' ? STRONG_LEVEL : WEAK_LEVEL;
 }
 
-/** 兼容旧列：强提醒存 3，弱提醒存 0 */
+/** 兼容旧列：强提醒存 P0(3)，弱提醒存默认 P2(1) */
 export function importanceForStrength(strength: ReminderStrength): Importance {
-  return strength === 'strong' ? 3 : 0;
+  return strength === 'strong' ? 3 : 1;
 }
 
 /** 没填截止时间时的默认值：强 2 小时、弱 1 天 */

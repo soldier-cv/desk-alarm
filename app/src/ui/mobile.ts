@@ -8,11 +8,13 @@ import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer, saveConfig,
   serverNow, staleLabel, switchServer, versionOf, warmthOf,
-  ENERGY_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, levelForStrength,
+  FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, levelForStrength,
   type ClientPlatform, type Followup, type FollowupAction, type FocusResult,
   type Pursuit, type PursuitStatus, type RecurrenceRule, type ReminderStrength,
   type ServerMessage, type Settings, type StepState,
 } from '../api';
+import { actionsFor, effectiveImportance } from '../../../shared/types';
+import { buildRecurrence, fieldsFor, ruleFields, type Freq } from './recurrence-form';
 import { FollowupController } from '../alarm';
 import { applyTheme, loadTheme, saveTheme, THEMES } from '../theme';
 import { openStepsDialog } from '../widgets';
@@ -523,6 +525,17 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
     void refresh();
   } catch (e) {
     toast('操作失败：' + msgOf(e));
+  }
+}
+
+async function mobileClone(id: string) {
+  try {
+    await api.clone(id);
+    toast('已克隆，步骤状态已重置、截止已清空');
+    if (view === 'detail') setView('today');
+    void refresh();
+  } catch (e) {
+    toast('克隆失败：' + msgOf(e));
   }
 }
 

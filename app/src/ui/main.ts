@@ -7,14 +7,16 @@ import { emit, listen } from '@tauri-apps/api/event';
 import { autoUpdateEnabled, initUpdater, onUpdateChange, openAbout, setAutoUpdate, updateBadge } from '../about';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
-  hhmm, hostOf, levelForStrength, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized,
+  hhmm, hostOf, importanceForStrength, levelForStrength, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized,
   parseInput, probeServer, saveConfig, serverNow, staleLabel, switchServer,
-  versionOf, warmthOf, ENERGY_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL,
+  versionOf, warmthOf, FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL,
   type CountsResult, type Device, type Followup, type FollowupAction, type FocusResult,
   type MyStats, type Overview, type Pursuit, type PursuitStatus, type PursuitView,
   type ReminderStrength,
   type RecurrenceRule, type ServerMessage, type Settings, type StepState, type Urgency,
 } from '../api';
+import { actionsFor, effectiveImportance } from '../../../shared/types';
+import { buildRecurrence, fieldsFor, ruleFields } from './recurrence-form';
 import { FollowupController } from '../alarm';
 import { THEMES, applyTheme, loadTheme, saveTheme } from '../theme';
 import { openDropdown, openStepsDialog, openTimePicker } from '../widgets';
@@ -83,6 +85,7 @@ const state = {
 };
 
 let rt: Realtime | null = null;
+let linkState: 'connecting' | 'open' | 'closed' = 'closed';
 interface TakeoverPayload {
   items: Pursuit[];
   index: number;
@@ -132,6 +135,24 @@ let editingLocal = false;
 let platform: 'web' | 'windows' | 'macos' | 'linux' | 'android' = 'web';
 const isDesktop = () => platform === 'windows' || platform === 'macos' || platform === 'linux';
 let captureStrength: ReminderStrength = 'weak';
+
+function ruleFieldsHtml(
+  freq: string,
+  rf: { byWeekday: string; byMonthday: string; byMonth: string },
+): string {
+  const shown = fieldsFor(freq as Parameters<typeof fieldsFor>[0]);
+  const label = freq === 'yearly' ? '几号' : freq === 'quarterly' ? '每季度几号' : '每月几号';
+  return `
+    <div class="rule-grid" style="margin-top:8px">
+      ${shown.includes('weekday')
+        ? `<label>周几（0=日，逗号分隔）<input class="input" id="f-byday" value="${esc(rf.byWeekday)}"></label>` : ''}
+      ${shown.includes('month')
+        ? `<label>月份（1-12）<input class="input" id="f-bymonth" type="number" min="1" max="12" value="${esc(rf.byMonth)}"></label>` : ''}
+      ${shown.includes('monthday')
+        ? `<label>${label}<input class="input" id="f-bymonthday" type="number" min="1" max="31" value="${esc(rf.byMonthday)}"></label>` : ''}
+    </div>
+    <div class="set-actions"><button class="btn sm" data-act="save-rule">保存重复</button></div>`;
+}
 
 const control = new FollowupController({
   onNotify: (p, reason, attempt) => {
@@ -704,11 +725,6 @@ function renderEditor() {
           <button data-strength="strong" class="${p.strength === 'strong' ? 'on' : ''}" title="到点弹窗，没填时间默认 2 小时后">强提醒</button>
         </div></div>
 
-      <div class="fld"><label>启动精力</label>
-        <div class="seg">${(['low', 'medium', 'high'] as const).map((e) =>
-          `<button data-energy="${e}" class="${p.energy === e ? 'on' : ''}">${ENERGY_LABEL[e]}</button>`,
-        ).join('')}</div></div>
-
       <div class="fld"><label>性质</label>
         <div class="seg">${(['one_off', 'project'] as const).map((n) =>
           `<button data-nature="${n}" class="${p.nature === n ? 'on' : ''}">${NATURE_LABEL[n]}</button>`,
@@ -737,6 +753,7 @@ function renderEditor() {
       <button class="btn solid" data-act="follow-done" data-step="${esc(p.steps.find((s) => s.state !== 'done')?.id ?? '')}">完成${p.steps.some((s) => s.state !== 'done') ? '这一步' : ''}</button>
       <button class="btn" data-act="follow-later">延期</button>
       <button class="btn" data-act="follow-smaller">拆小</button>
+      <button class="btn" data-act="clone">克隆</button>
       <button class="btn danger sp-left" data-act="archive">归档</button>
     </div>`;
 
@@ -1017,7 +1034,7 @@ function testFollowup(strength: 'strong' | 'weak') {
   const fake: Pursuit = {
     id, userId: '', text: `${strength === 'strong' ? '强' : '弱'}提醒测试：到点了`,
     note: null, kind: 'text', url: null, path: null,
-    nature: 'project', strength, importance: strength === 'strong' ? 3 : 0, energy: 'low', dueAt: now,
+    nature: 'project', strength, importance: importanceForStrength(strength), dueAt: now,
     recurrence: null, context: null, commitment: null,
     status: 'active', importanceSort: 0, version: 1, createdAt: now, updatedAt: now,
     completedAt: null, lastActivityAt: now,
@@ -1605,7 +1622,7 @@ function onListClick(ev: Event) {
 
 function onEditorClick(ev: Event) {
   const t = (ev.target as HTMLElement).closest<HTMLElement>(
-    '[data-act],[data-strength],[data-energy],[data-nature]',
+    '[data-act],[data-strength],[data-nature]',
   );
   const p = findPursuit(state.selected);
   if (!t || !p) return;
@@ -1616,7 +1633,6 @@ function onEditorClick(ev: Event) {
   };
 
   if (t.dataset.strength) { savePatch({ strength: t.dataset.strength }); return; }
-  if (t.dataset.energy) { savePatch({ energy: t.dataset.energy }); return; }
   if (t.dataset.nature) { savePatch({ nature: t.dataset.nature }); return; }
 
   const act = t.dataset.act;
@@ -1630,6 +1646,7 @@ function onEditorClick(ev: Event) {
       return;
     }
     case 'clear-due': savePatch({ dueAt: null }); return;
+    case 'clone': void runClone(p.id); return;
     case 'save-rule': {
       const freq = $<HTMLButtonElement>('#f-freq').dataset.v ?? 'none';
       const fields = {
@@ -1644,7 +1661,6 @@ function onEditorClick(ev: Event) {
       void runFollowup(p.id, 'done', t.dataset.step ? { stepId: t.dataset.step } : {});
       return;
     case 'follow-later': void askLater(p.id); return;
-    case 'follow-done':
     case 'follow-smaller':
     case 'follow-archive':
     case 'follow-reopen':

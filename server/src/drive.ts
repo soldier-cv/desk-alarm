@@ -1,6 +1,7 @@
 import {
-  defaultDueMs, levelForStrength,
-  type FollowupRequest, type FocusResult, type Importance, type Pursuit, type ReminderStrength,
+  actionsFor, defaultDueMs, levelForStrength,
+  type FollowupRequest, type FocusResult, type Importance, type Pursuit, type PursuitStatus,
+  type ReminderStrength,
 } from '../../shared/types.js';
 import { now, toDt, tx } from './db.js';
 import { hub } from './hub.js';
@@ -35,6 +36,13 @@ function nextDue(p: Pursuit, strength: ReminderStrength, nowMs: number, requeste
   if (Number.isFinite(requested)) return requested;
   const fallback = defaultDueMs(strength, nowMs);
   return p.dueAt !== null && p.dueAt > nowMs ? Math.min(p.dueAt, fallback) : fallback;
+}
+
+function followupDue(p: Pursuit, strength: ReminderStrength, nowMs: number, requested: number): number {
+  if (p.recurrence && !Number.isFinite(requested)) {
+    return nextOccurrence(Math.max(p.dueAt ?? nowMs, nowMs), p.recurrence) ?? nextDue(p, strength, nowMs, requested);
+  }
+  return nextDue(p, strength, nowMs, requested);
 }
 
 export async function buildFocus(userId: string): Promise<FocusResult> {
@@ -98,10 +106,11 @@ async function driveUser(userId: string, nowMs: number): Promise<{ active: numbe
       userId, p.id, deviceId, level, channelFor(strength), reason, `${strength}-due-${p.dueAt}`,
     );
 
-    if (p.nature === 'recurring' && p.recurrence) {
+    if (p.recurrence) {
       const next = nextOccurrence(Math.max(p.dueAt, nowMs), p.recurrence);
       if (next !== null) await setDueAt(p.id, userId, next);
     }
+
   }
 
   return { active: pursuits.length, stalled };
@@ -128,6 +137,7 @@ export async function followUp(
   const nowMs = now();
   const p = await getPursuit(pursuitId, userId);
   if (!p) throw new Error('NOT_FOUND');
+  if (!actionsFor(p.status).includes(req.action)) throw new Error('ACTION_NOT_ALLOWED');
   const strength = p.strength;
   const level = levelForStrength(strength);
 
@@ -159,11 +169,11 @@ export async function followUp(
       status = 'archived';
       break;
     case 'later':
-      dueAt = new Date(nextDue(p, strength, nowMs, requested));
+      dueAt = new Date(followupDue(p, strength, nowMs, requested));
       break;
     case 'smaller':
       extraSteps = req.steps ?? [];
-      dueAt = new Date(nextDue(p, strength, nowMs, requested));
+      dueAt = new Date(followupDue(p, strength, nowMs, requested));
       break;
   }
 

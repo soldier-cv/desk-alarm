@@ -1,6 +1,6 @@
 import {
   defaultDueMs, importanceForStrength, strengthOfImportance,
-  type Commitment, type CreatePursuitRequest, type Energy, type EntryKind, type Importance,
+  type Commitment, type CreatePursuitRequest, type EntryKind, type Importance,
   type Pursuit, type PursuitContext, type PursuitNature, type PursuitStatus, type RecurrenceRule,
   type Step, type UpdatePursuitRequest,
 } from '../../../shared/types.js';
@@ -46,7 +46,7 @@ export function mapPursuit(row: any, steps: Step[], deviceIds: string[], nowMs: 
     url: r.url,
     path: r.path,
     nature: r.nature as PursuitNature,
-    strength: r.importance >= 2 ? 'strong' : 'weak',
+    strength: r.importance >= 3 ? 'strong' : 'weak',
     importance: r.importance as Importance,
     dueAt: toMs(r.due_at),
     recurrence: r.recurrence ?? null,
@@ -152,7 +152,6 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
        req.path ?? null,
        (req.nature ?? 'one_off') as PursuitNature,
        importance,
-       (req.energy ?? 'medium') as Energy,
        dueAt,
        req.recurrence ?? null,
        req.context ?? null,
@@ -207,7 +206,6 @@ export async function updatePursuit(
     if ('note' in req) add('note', req.note?.trim() || null);
     if (req.strength !== undefined) add('importance', importanceForStrength(req.strength));
     else if (req.importance !== undefined) add('importance', req.importance);
-    if (req.energy !== undefined) add('energy', req.energy);
     if (req.nature !== undefined) add('nature', req.nature);
     if ('dueAt' in req) add('due_at', toDt(req.dueAt));
     if ('recurrence' in req) add('recurrence', req.recurrence);

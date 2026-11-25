@@ -4,7 +4,7 @@ import { schedulerStats } from '../scheduler.js';
 
 const STATUSES: PursuitStatus[] = ['inbox', 'active', 'paused', 'done', 'archived'];
 const LEVELS: NudgeLevel[] = [2, 4];
-const NATURES: PursuitNature[] = ['one_off', 'recurring', 'project'];
+const NATURES: PursuitNature[] = ['one_off', 'project'];
 
 export async function getOverview(): Promise<Overview> {
   const statusRows = await rows<{ status: string; n: number }>(

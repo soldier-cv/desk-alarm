@@ -595,9 +595,9 @@ export const FREQ_LABEL: Record<RecurrenceRule['freq'] | 'none', string> = {
   quarterly: '每季度几号', yearly: '每年几月几号',
 };
 
-export const FOLLOWUP_ACTION_LABEL: Record<FollowupAction, string> = {
+export const FOLLOWUP_ACTION_LABEL: Record<string, string> = {
   done: '完成', partial: '推了一点（未完成）', later: '延期',
-  smaller: '拆小', archive: '归档', ignored: '忽略',
+  smaller: '拆小', archive: '归档', reopen: '撤回', ignored: '忽略',
 };
 
 /** 用户常用逗号分隔，别让多个步骤挤成一条 */

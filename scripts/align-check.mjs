@@ -102,7 +102,7 @@ console.log('\n重复规则');
 ok('五种频率（无 interval/workdays，新增 quarterly）',
   /freq: 'daily' \| 'weekly' \| 'monthly' \| 'quarterly' \| 'yearly'/.test(src.types));
 ok('月末钳位', /setDayClamped|lastDay|Math\.min\(.*getDate/.test(src.policy));
-ok('逾期基数取 max(due, now)', /Math\.max\(p\.dueAt, nowMs\)/.test(src.drive));
+ok('按截止时间排序、逾期在前', /sort\(byDue\)/.test(src.drive) && /function byDue/.test(src.drive));
 
 console.log('\n客户端今日推进');
 ok('有今日聚焦卡', /focus/i.test(src.main) && /聚焦/.test(src.main));
@@ -130,9 +130,9 @@ ok('服务端按状态拒绝非法跟进',
 ok('全状态可克隆',
   /\/pursuits\/:id\/clone/.test(read('server/src/routes/pursuits.ts')) &&
   /data-act="clone"/.test(src.main) && /mobileClone/.test(mobileSrc));
-ok('重要性 P0/P1/P2，默认 P2',
-  /IMPORTANCE_LABEL/.test(src.api) && /Importance = 1 \| 2 \| 3/.test(src.types) &&
-  /effectiveImportance/.test(src.policy));
+ok('提醒只有强/弱，用户直接选',
+  /strength: ReminderStrength/.test(src.types) && /data-strength=.weak./.test(src.main) &&
+  /data-strength=.strong./.test(src.main) && !/data-imp=/.test(src.main));
 ok('启动精力已删除',
   !/energy/.test(src.types) && !/Energy/.test(src.api) && !/energy/.test(read('server/src/schema.pg.sql')));
 ok('性质不再有 recurring',
