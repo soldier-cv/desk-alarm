@@ -6,11 +6,9 @@
 </head>
 <body>
   <div class="tk" id="tk">
-    <div class="tk-top">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7"/><path d="M10.5 20a2 2 0 0 0 3 0"/></svg>
-      <b>DeskAlarm 正在呼叫你</b>
-      <div class="sp"></div>
-      <span class="esc" id="tk-esc">关不掉，只能选一个处理方式</span>
+    <div class="tk-warn" aria-hidden="true">
+      <span class="tk-warn-label">⚠ WARNING</span>
+      <div class="tk-warn-track"><span class="tk-warn-text">WARNING &nbsp;///&nbsp; WARNING &nbsp;///&nbsp; 强提醒到点，必须处理 &nbsp;///&nbsp; WARNING &nbsp;///&nbsp; WARNING &nbsp;///&nbsp; 强提醒到点，必须处理 &nbsp;///&nbsp;</span></div>
     </div>
 
     <div class="tk-main">
@@ -22,8 +20,8 @@
 
       <div class="tk-prog">
         <div class="meta">
-          <span id="tk-stage">首次提示 0 秒，30 秒未确认升级全屏，5 分钟后每 2 分钟重复</span>
-          <span id="tk-elapsed">已响 0 秒</span>
+          <span id="tk-stage">强提醒 · 到点了，先给它一个去向</span>
+          <span id="tk-elapsed">已等待 0 秒</span>
         </div>
         <div class="bar"><i id="tk-bar"></i></div>
       </div>

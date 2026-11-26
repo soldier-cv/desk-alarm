@@ -354,11 +354,12 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .group .line { flex: 1; height: 1px; background: var(--line-soft); }
 .group.hot { color: var(--flare); }
 
+/* 无圆角、无边框：色条从左缘直切进去，渐变到右缘自然消失，不留竖线 */
 .item { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: start;
-  margin: 0 10px; padding: 9px 10px; border-radius: var(--r); border: 1px solid transparent; cursor: pointer;
-  transition: background-color .1s, border-color .1s; }
+  margin: 0 10px; padding: 9px 10px; border-radius: 0; cursor: pointer;
+  transition: background-color .1s; }
 .item:hover { background-color: var(--surface); }
-.item.on { background-color: var(--raised); border-color: var(--line); }
+.item.on { background-color: var(--raised); }
 
 /* 临近梯度：强调色从行首渗入，越近越浓。
    背景色（hover/选中）和背景图（梯度）是两层，互不覆盖。
@@ -495,11 +496,20 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 
 /* ---------- 接管窗口（强提示） ---------- */
 .tk { height: 100dvh; display: flex; flex-direction: column; background: var(--bg); }
-.tk-top { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 20px;
-  background: var(--flare); color: var(--on-flare); }
-.tk-top b { font-size: 12.5px; font-weight: 700; }
-.tk-top .sp { flex: 1; }
-.tk-top .esc { font-size: 11.5px; font-weight: 600; opacity: .78; }
+/* 红警式警示条：斜纹底 + 循环滚动大字，替代原来的顶栏标题 */
+.tk-warn { flex: none; position: relative; display: flex; align-items: center; height: 64px; overflow: hidden;
+  background: color-mix(in srgb, var(--flare) 82%, black); color: var(--on-flare);
+  border-bottom: 3px solid color-mix(in srgb, var(--flare) 55%, black); }
+.tk-warn::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .35;
+  background: repeating-linear-gradient(45deg, rgba(0,0,0,.35) 0 20px, transparent 20px 40px); }
+.tk-warn-label { position: relative; z-index: 2; flex: none; align-self: stretch; display: grid; place-items: center;
+  padding: 0 14px; background: color-mix(in srgb, var(--flare) 55%, black);
+  font: 800 13px var(--mono); letter-spacing: .08em; }
+.tk-warn-track { position: relative; z-index: 1; flex: 1; overflow: hidden; white-space: nowrap; }
+.tk-warn-text { display: inline-block; padding-left: 100%; font: 700 32px/1 var(--mono);
+  letter-spacing: .12em; text-shadow: 0 2px 0 rgba(0,0,0,.4); animation: tk-warn-slide 14s linear infinite; }
+@keyframes tk-warn-slide { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+@media (prefers-reduced-motion: reduce) { .tk-warn-text { animation: none; padding-left: 20px; } }
 .tk-main { flex: 1; overflow-y: auto; padding: 26px 30px 20px; }
 .tk-clock { font-family: var(--mono); font-size: 46px; font-weight: 600; letter-spacing: -.03em; line-height: 1; }
 .tk-clock span { font-size: 18px; color: var(--dim); margin-left: 8px; letter-spacing: 0; }
@@ -531,7 +541,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
   92% { transform: translate(2px, 0); }
   96% { transform: translate(-1px, 0); }
 }
-.tk.shake .tk-top { animation: tk-shake 1.05s ease-in-out infinite; }
+.tk.shake .tk-warn { animation: tk-shake 1.05s ease-in-out infinite; }
 @keyframes tk-flash { 0% { opacity: 0; } 55% { opacity: 1; } 65% { opacity: .45; } 100% { opacity: 1; } }
 .tk.entering { animation: tk-flash .35s ease-out; }
 

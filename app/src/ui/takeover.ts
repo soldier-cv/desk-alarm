@@ -32,7 +32,6 @@ const el = {
   stage: $<HTMLSpanElement>('#tk-stage'),
   elapsed: $<HTMLSpanElement>('#tk-elapsed'),
   bar: $<HTMLElement>('#tk-bar'),
-  escNote: $<HTMLSpanElement>('#tk-esc'),
   acts: $<HTMLDivElement>('#tk-acts'),
   snooze: $<HTMLDivElement>('#tk-snooze'),
 };
@@ -67,7 +66,7 @@ function renderActions(p: Payload, it: Pursuit) {
   const next = it.steps.find((s) => s.state !== 'done');
   const more = p.index < p.items.length - 1;
   el.acts.innerHTML = `
-    <button class="btn solid" data-act="done" data-step="${esc(next?.id ?? '')}">${next ? `完成：${esc(next.text.slice(0, 18))}` : '完成'}</button>
+    <button class="btn solid" data-act="done" data-step="${esc(next?.id ?? '')}">完成</button>
     <button class="btn ghost" data-act="smaller">拆小</button>
     <button class="btn ghost" data-act="later">延期</button>
     <button class="btn danger" data-act="archive">归档</button>
@@ -113,11 +112,9 @@ function render(p: Payload) {
     ? `同步到 ${it.deviceIds.length} 台设备`
     : '这条在所有设备可见';
 
-  el.escNote.textContent = p.muted
-    ? '静音时段内，窗口会自己收起'
-    : '关不掉，只能选一个跟进动作';
-
-  el.stage.textContent = `强提醒 · ${p.index + 1}/${p.items.length}：到点了，先给它一个去向`;
+  el.stage.textContent = p.muted
+    ? `强提醒 · ${p.index + 1}/${p.items.length}：静音时段内，窗口会自己收起`
+    : `强提醒 · ${p.index + 1}/${p.items.length}：到点了，先给它一个去向`;
   el.stage.setAttribute('data-stage', 'banner');
 
   renderActions(p, it);

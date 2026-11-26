@@ -1551,6 +1551,13 @@ async function askLater(id: string) {
 }
 
 async function runFollowup(id: string, action: FollowupAction, extra: Record<string, unknown> = {}) {
+  // 测试提醒是本地假条目，服务端没有。只走本地确认并关窗，不落库
+  if (id.startsWith('test-')) {
+    control.acknowledge(action);
+    if (dropTakeoverItem(id)) showTakeover();
+    flash('测试提醒已处理（不会改你的数据）');
+    return;
+  }
   const p = findPursuit(id);
   if (!p && !extra.silent) { flash('这条已经不在了'); return; }
   if (p && !actionsFor(p.status).includes(action)) {
