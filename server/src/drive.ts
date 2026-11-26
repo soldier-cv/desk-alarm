@@ -13,7 +13,7 @@ import {
   getPursuit, listActiveUserIds, listPursuits, setDueAt, setImportance, setStatus,
 } from './repo/pursuits.js';
 import { getSettings } from './repo/settings.js';
-import { insertSteps, markStepDone } from './repo/steps.js';
+import { insertSteps, markStepDone, replaceSteps } from './repo/steps.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -196,7 +196,9 @@ export async function followUp(
       [pursuitId, status, dueAt, completedAt, userId, req.version],
     );
     if (n === 0) throw new Error('VERSION_CONFLICT');
-    if (extraSteps.length > 0) await insertSteps(q, pursuitId, userId, extraSteps);
+    // UI 拆小编辑器提交全量步骤（带增删改），MCP/Agent 仍按追加语义处理
+    if (req.stepEdits) await replaceSteps(q, pursuitId, userId, req.stepEdits);
+    else if (extraSteps.length > 0) await insertSteps(q, pursuitId, userId, extraSteps);
   });
 
   return (await getPursuit(pursuitId, userId))!;

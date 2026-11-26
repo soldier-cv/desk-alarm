@@ -227,6 +227,8 @@ export interface MyStats {
   serverTs: number;
   /** 本周推进完成数，替代旧的准时率 */
   completedThisWeek: number;
+  /** 历史累计完成数（status=done，不含归档） */
+  completedTotal: number;
   /** 当前连续推进天数，断了可以修复不清零 */
   streakDays: number;
   /** 今日：聚焦数、完成数、待跟进数 */
@@ -274,12 +276,18 @@ export interface UpdatePursuitRequest {
 export interface AddStepRequest { text: string }
 export interface UpdateStepRequest { text?: string; state?: StepState }
 
+/** 拆小编辑器一次保存的一条步骤：带 id 表示更新已有步骤，不带表示新增 */
+export interface StepEdit { id?: string; text: string }
+
 export interface FollowupRequest {
   action: FollowupAction;
   note?: string;
   /** later 延期时给的新时间；smaller 拆小时可带 agent 拆好的步骤 */
   to?: number | string;
+  /** 追加新步骤（MCP / Agent 与旧客户端）；与 stepEdits 互斥，stepEdits 优先 */
   steps?: string[];
+  /** 拆小 UI 提交的全量步骤：带 id 更新、不带新增、未出现的旧步骤删除，一次保存生效 */
+  stepEdits?: StepEdit[];
   /** done 时只完成这一条步骤，还有未完成步骤则整条保持 active 并重排截止时间 */
   stepId?: string;
   version: number;
@@ -301,7 +309,7 @@ export type ClientMessage =
 export type TransportName = 'ws';
 
 export type ServerMessage =
-  | { t: 'welcome'; serverTs: number; deviceId: string; settings: Settings; missed: Nudge[] }
+  | { t: 'welcome'; serverTs: number; deviceId: string; settings: Settings; devices: Device[]; missed: Nudge[] }
   | { t: 'pong'; at: number }
   | { t: 'devices.changed'; devices: Device[] }
   | { t: 'pursuit.created'; pursuit: Pursuit }

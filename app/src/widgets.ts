@@ -2,6 +2,7 @@
  * 自绘下拉与时间选择：原生控件在各平台样式飘、和主题不搭。
  * 弹层复用 .dp-pop 的外观，定位跟随 anchor，点外面关闭。
  */
+import type { StepEdit } from '../../shared/types';
 
 interface DropItem { value: string; label: string }
 
@@ -263,9 +264,9 @@ export function openTimePicker(
 }
 
 /**
- * 拆小步骤输入。逐行录入，Enter 追加新行；三处入口共用，避免各写一份 prompt。
+ * 拆小步骤编辑。带出已有步骤及 id，可改文字、删行、加行；三处入口共用同一份编辑器。
  */
-export function openStepsDialog(initial: string[]): Promise<string[] | null> {
+export function openStepsDialog(initial: StepEdit[]): Promise<StepEdit[] | null> {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     Object.assign(overlay.style, {
@@ -279,14 +280,14 @@ export function openStepsDialog(initial: string[]): Promise<string[] | null> {
       maxHeight: '90vh', overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,.35)',
     });
     box.innerHTML = `
-      <h3 style="margin:0 0 6px">拆成小步骤</h3>
-      <p class="hint" style="margin:0 0 12px">每行一步，按 Enter 加新行；空行会忽略。</p>`;
+      <h3 style="margin:0 0 6px">${initial.some((s) => s.id) ? '编辑步骤' : '拆成小步骤'}</h3>
+      <p class="hint" style="margin:0 0 12px">可改文字、删行或加行，保存后一次更新；空行会忽略。</p>`;
     const rows = document.createElement('div');
     rows.style.display = 'grid';
     rows.style.gap = '8px';
     box.appendChild(rows);
 
-    const close = (value: string[] | null) => {
+    const close = (value: StepEdit[] | null) => {
       document.removeEventListener('keydown', onKey);
       overlay.remove();
       resolve(value);
@@ -296,18 +297,19 @@ export function openStepsDialog(initial: string[]): Promise<string[] | null> {
     };
     document.addEventListener('keydown', onKey);
 
-    const addRow = (value = '', focus = false) => {
+    const addRow = (edit: StepEdit = { text: '' }, focus = false) => {
       const row = document.createElement('div');
+      row.dataset.stepId = edit.id ?? '';
       row.style.display = 'flex';
       row.style.gap = '8px';
       const input = document.createElement('input');
       input.className = 'input';
-      input.value = value;
+      input.value = edit.text;
       input.placeholder = '这一步要做什么';
       input.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter') {
           ev.preventDefault();
-          addRow('', true);
+          addRow({ text: '' }, true);
         }
       });
       const del = document.createElement('button');
@@ -325,7 +327,7 @@ export function openStepsDialog(initial: string[]): Promise<string[] | null> {
     };
 
     initial.forEach((v) => addRow(v));
-    if (!initial.length) addRow('', true);
+    if (!initial.length) addRow({ text: '' }, true);
 
     const actions = document.createElement('div');
     actions.className = 'set-actions';
@@ -334,7 +336,7 @@ export function openStepsDialog(initial: string[]): Promise<string[] | null> {
     add.type = 'button';
     add.className = 'btn sm';
     add.textContent = '+ 添加一行';
-    add.onclick = () => addRow('', true);
+    add.onclick = () => addRow({ text: '' }, true);
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'btn sm ghost';
@@ -345,9 +347,14 @@ export function openStepsDialog(initial: string[]): Promise<string[] | null> {
     save.className = 'btn solid sm';
     save.textContent = '保存';
     save.onclick = () => {
-      const list = [...rows.querySelectorAll('input')]
-        .map((i) => i.value.trim()).filter(Boolean);
-      close(list.length ? list : null);
+      const list: StepEdit[] = [];
+      for (const row of Array.from(rows.children) as HTMLElement[]) {
+        const text = row.querySelector('input')?.value.trim();
+        if (!text) continue;
+        const id = row.dataset.stepId;
+        list.push(id ? { id, text } : { text });
+      }
+      close(list);
     };
     actions.append(add, cancel, save);
     box.appendChild(actions);
@@ -357,6 +364,81 @@ export function openStepsDialog(initial: string[]): Promise<string[] | null> {
     });
     document.body.appendChild(overlay);
   });
+}
+
+/**
+ * 延期时间选择。给一组相对时长与几个固定档位；自定义交回调用方弹日期时间选择器。
+ * 样式内联，桌面与移动端共用，不依赖各自的样式表。
+ */
+export function openSnoozeDialog(opts: {
+  title: string;
+  now: number;
+  onPick: (at: number) => void;
+  onCustom?: () => void;
+}): void {
+  const { title, now, onPick, onCustom } = opts;
+  const overlay = document.createElement('div');
+  Object.assign(overlay.style, {
+    position: 'fixed', inset: '0', zIndex: '9998', background: 'rgba(0,0,0,.55)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+  });
+  const box = document.createElement('div');
+  Object.assign(box.style, {
+    background: 'var(--card, #fff)', color: 'var(--foreground, inherit)',
+    borderRadius: '12px', padding: '18px', width: 'min(360px, 100%)',
+    maxHeight: '90vh', overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,.35)',
+  });
+  const fmt = (ts: number) => {
+    const d = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  const dayAt = (days: number) => {
+    const d = new Date(now);
+    d.setDate(d.getDate() + days);
+    d.setHours(9, 0, 0, 0);
+    return d.getTime();
+  };
+  const choices: Array<[string, number]> = [
+    ['30 分钟后', now + 30 * 60_000],
+    ['1 小时后', now + 60 * 60_000],
+    ['3 小时后', now + 180 * 60_000],
+    ['明天早上', dayAt(1)],
+    ['3 天后', dayAt(3)],
+    ['下周', dayAt(7)],
+  ];
+  box.innerHTML = `<h3 style="margin:0 0 12px">${esc(title)}</h3>`;
+  const list = document.createElement('div');
+  list.style.cssText = 'display:grid;gap:6px';
+  for (const [label, at] of choices) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn';
+    b.style.cssText = 'display:flex;justify-content:space-between;width:100%';
+    b.innerHTML = `<span>${label}</span><span style="opacity:.6;font-size:11px">${fmt(at)}</span>`;
+    b.onclick = () => { overlay.remove(); onPick(at); };
+    list.appendChild(b);
+  }
+  if (onCustom) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn sm ghost';
+    b.style.cssText = 'width:100%;margin-top:4px';
+    b.textContent = '自定义日期时间…';
+    b.onclick = () => { overlay.remove(); onCustom(); };
+    list.appendChild(b);
+  }
+  box.appendChild(list);
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn sm ghost';
+  cancel.style.cssText = 'margin-top:14px';
+  cancel.textContent = '取消';
+  cancel.onclick = () => overlay.remove();
+  box.appendChild(cancel);
+  overlay.appendChild(box);
+  overlay.addEventListener('mousedown', (ev) => { if (ev.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 function esc(s: string): string {

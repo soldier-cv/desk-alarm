@@ -433,7 +433,7 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 .dev-opt .nm { flex: 1; min-width: 0; }
 .dev-opt .nm b { display: block; font-size: 12.5px; font-weight: 550; }
 .dev-opt .nm span { font-size: 11px; color: var(--dim); }
-.ed-foot { padding: 11px 15px; border-top: 1px solid var(--line-soft); display: flex; gap: 7px; }
+.ed-foot { padding: 11px 15px; border-top: 1px solid var(--line-soft); display: flex; flex-wrap: wrap; gap: 7px; }
 .ed-foot .sp-left { margin-left: auto; }
 .ed-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 11px; padding: 28px; text-align: center; color: var(--dim); }

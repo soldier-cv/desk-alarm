@@ -7,7 +7,7 @@ import type {
   AddStepRequest, AgentScope, AgentToken, CreatePursuitRequest, Device, Followup,
   FollowupAction, FollowupRequest, FocusResult, Importance, LoginResponse, MyStats,
   NudgeLevel, Overview, Pursuit, PursuitStatus, RecurrenceRule, Role, ServerMessage, Settings,
-  Step, StepState, UpdatePursuitRequest, UpdateStepRequest, User,
+  Step, StepEdit, StepState, UpdatePursuitRequest, UpdateStepRequest, User,
 } from '../../shared/types';
 
 export type {
@@ -16,7 +16,7 @@ export type {
   FocusItem, FocusResult, Importance, LoginResponse, MyStats, Nudge, NudgeChannel,
   NudgeLevel, Overview, Platform, Pursuit, PursuitContext, PursuitNature, PursuitStatus,
   ReminderStrength,
-  RecurrenceRule, Role, ServerMessage, Settings, Step, StepState, TransportName,
+  RecurrenceRule, Role, ServerMessage, Settings, Step, StepEdit, StepState, TransportName,
   UpdatePursuitRequest, UpdateStepRequest, User,
 } from '../../shared/types';
 
@@ -24,12 +24,16 @@ export {
   importanceForStrength, levelForStrength, strengthOfImportance, strengthOfLevel,
 } from '../../shared/types';
 
-export type PursuitView = 'today' | 'all' | 'inbox' | 'done' | 'archived';
+export type PursuitView = 'today' | 'todo' | 'done' | 'archived';
 export type Urgency = 'none' | 'soon' | 'close' | 'due' | 'over';
 
 export interface CountsResult {
   counts: Partial<Record<PursuitStatus, number>>;
   pendingFollowup: number;
+  /** 所有未完成（inbox + active + paused） */
+  todo: number;
+  /** 未完成且今天到期或已逾期 */
+  today: number;
 }
 
 const LS_KEY = 'deskalarm.config';
@@ -258,17 +262,43 @@ export const api = {
 
   focus: () => req<FocusResult>('/focus'),
 
-  pursuits: (view: PursuitView) => {
-    const status = view === 'today' ? 'active' : view === 'all' ? '' : view;
-    return req<{ pursuits: Pursuit[] }>(`/pursuits${status ? `?status=${status}` : ''}`);
+  /**
+   * todo = 所有未完成（inbox/active/paused）；today = 其中今天到期或逾期的。
+   * 今日不再单独走 focus 接口，直接按 dueAt 过滤同一份数据。
+   */
+  pursuits: async (view: PursuitView) => {
+    const { pursuits } = await req<{ pursuits: Pursuit[] }>('/pursuits');
+    const isOpen = (p: Pursuit) => p.status !== 'done' && p.status !== 'archived';
+    let list: Pursuit[];
+    if (view === 'todo' || view === 'today') {
+      list = pursuits.filter(isOpen);
+      if (view === 'today') {
+        const end = new Date(serverNow());
+        end.setHours(23, 59, 59, 999);
+        list = list.filter((p) => p.dueAt !== null && p.dueAt <= end.getTime());
+      }
+    } else {
+      list = pursuits.filter((p) => p.status === view);
+    }
+    return { pursuits: list };
   },
 
   /** 服务端没有独立的 counts 路由，侧栏数字直接从全量列表算 */
   counts: async (): Promise<CountsResult> => {
     const { pursuits } = await req<{ pursuits: Pursuit[] }>('/pursuits');
     const counts: Partial<Record<PursuitStatus, number>> = {};
-    for (const p of pursuits) counts[p.status] = (counts[p.status] ?? 0) + 1;
-    return { counts, pendingFollowup: 0 };
+    let todo = 0;
+    const end = new Date(serverNow());
+    end.setHours(23, 59, 59, 999);
+    let today = 0;
+    for (const p of pursuits) {
+      counts[p.status] = (counts[p.status] ?? 0) + 1;
+      if (p.status !== 'done' && p.status !== 'archived') {
+        todo++;
+        if (p.dueAt !== null && p.dueAt <= end.getTime()) today++;
+      }
+    }
+    return { counts, pendingFollowup: 0, todo, today };
   },
 
   create: (body: CreatePursuitRequest) =>
@@ -448,7 +478,7 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
   const s = raw.trim();
   const out: Parsed = {
     kind: 'text', kindLabel: '普通文本',
-    remindAt: null, timeLabel: '没有时间，进收集箱',
+    remindAt: null, timeLabel: '没有时间，进待办',
     strength: 'weak',
   };
   if (!s) return out;

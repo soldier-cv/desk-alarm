@@ -13,14 +13,10 @@
       font-family: var(--sans);
       font-size: 13.5px; -webkit-app-region: drag;
     }
-    .wrap { padding: 16px 16px 12px; display: flex; flex-direction: column; height: 100%; }
-    .row { display: flex; align-items: center; gap: 10px; }
-    .prompt { color: var(--dim); font-family: var(--mono); font-size: 15px; }
-    input {
-      flex: 1; min-width: 0; background: none; border: none; outline: none;
-      font: inherit; font-size: 14.5px; color: var(--text); -webkit-app-region: no-drag;
-    }
-    input::placeholder { color: var(--muted); }
+    .wrap { padding: 14px 16px 10px; display: flex; flex-direction: column; height: 100%; }
+    /* 输入框整体复用主窗口的 .capture-in，避免聚焦时冒出全局 focus-visible 的粗描边。
+       窗口本身可拖拽，只有输入框要能点进去 */
+    .capture-in input { -webkit-app-region: no-drag; }
     #parse { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
     .foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 9px; }
     .hint { font-size: 11px; color: var(--dim); }
@@ -38,7 +34,7 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="row">
+    <div class="capture-in">
       <span class="prompt">&gt;</span>
       <input id="q" placeholder="一句话、链接、目录，或带时间" autocomplete="off" spellcheck="false">
     </div>

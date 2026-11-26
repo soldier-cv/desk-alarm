@@ -13,7 +13,7 @@ import {
   type CountsResult, type Device, type Followup, type FollowupAction, type FocusResult,
   type MyStats, type Overview, type Pursuit, type PursuitStatus, type PursuitView,
   type ReminderStrength,
-  type RecurrenceRule, type ServerMessage, type Settings, type StepState, type Urgency,
+  type RecurrenceRule, type ServerMessage, type Settings, type StepEdit, type StepState, type Urgency,
 } from '../api';
 import { actionsFor, effectiveImportance } from '../../../shared/types';
 import { buildRecurrence, fieldsFor, ruleFields } from './recurrence-form';
@@ -63,12 +63,11 @@ function send(name: string, payload: unknown = {}) {
 type View = PursuitView | 'mystats' | 'dashboard' | 'tokens' | 'settings';
 
 const VIEWS: Record<View, { title: string; sub: string }> = {
-  today: { title: '今日推进', sub: '' },
-  all: { title: '全部推进项', sub: '按权重排序' },
-  inbox: { title: '收件箱', sub: '还没明确，先存着' },
+  today: { title: '今日待办', sub: '今天到期或已逾期，按截止时间从近到远' },
+  todo: { title: '待办', sub: '所有未完成的事' },
   done: { title: '已完成', sub: '推进完成的事项' },
-  archived: { title: '归档', sub: '不要了或长期停滞的事项' },
-  mystats: { title: '我的推进看板', sub: '只看你自己的推进情况' },
+  archived: { title: '已归档', sub: '不要了或长期停滞的事项' },
+  mystats: { title: '看板', sub: '只看你自己的推进情况' },
   dashboard: { title: '系统看板', sub: '服务端总览，仅管理员可见，每 5 秒刷新' },
   tokens: { title: 'Agent 令牌', sub: '给 MCP / Agent 用的访问令牌' },
   settings: { title: '设置', sub: '推进节奏、设备安全、用户与日志' },
@@ -395,7 +394,7 @@ function renderShell() {
     <div class="capture-bar">
       <div class="capture-in">
         <span class="prompt">&gt;</span>
-        <input id="cap" placeholder="想到什么就记下来，回车存进收件箱，带时间就设截止">
+        <input id="cap" placeholder="想到什么就记下来，回车进待办，带时间就设截止">
         <button class="btn sm solid" id="cap-go">记一条</button>
       </div>
       <div class="parse" id="parse" hidden></div>
@@ -451,7 +450,7 @@ function renderShell() {
     parse.innerHTML = `
       <span class="lb">已识别</span>
       <span class="chip ${p.kind === 'text' ? '' : 'hot'}">${esc(p.kindLabel)}</span>
-      <span class="chip ${p.remindAt ? 'hot' : ''}">${esc(p.remindAt ? `截止：${p.timeLabel}` : '进收件箱')}</span>
+      <span class="chip ${p.remindAt ? 'hot' : ''}">${esc(p.remindAt ? `截止：${p.timeLabel}` : '进待办')}</span>
       <button type="button" class="chip ${captureStrength === 'weak' ? 'hot' : ''}" data-strength="weak">弱提醒</button>
       <button type="button" class="chip ${captureStrength === 'strong' ? 'hot' : ''}" data-strength="strong">强提醒</button>`;
   };
@@ -558,21 +557,20 @@ function countAll(): number {
 }
 
 function renderSidebar() {
-  const nav: Array<[View, string, number]> = [
-    ['today', '今日', (state.focus?.items.length ?? 0) || countOf('active')],
-    ['inbox', '收件箱', countOf('inbox')],
-    ['all', '全部', countAll()],
-    ['done', '已完成', countOf('done')],
-    ['archived', '归档', countOf('archived')],
+  const nav: Array<[View, string, number, string]> = [
+    ['mystats', '看板', 0, ''],
+    ['todo', '待办', state.counts?.todo ?? 0, ''],
+    ['today', '今日待办', state.counts?.today ?? 0, ''],
+    ['done', '已完成', countOf('done'), ''],
+    ['archived', '已归档', countOf('archived'), ''],
   ];
   $<HTMLElement>('#sidebar').innerHTML = `
-    ${nav.map(([v, label, n]) => `
-      <button class="nav ${state.view === v ? 'on' : ''}" data-view="${v}">${label}
-        <span class="count">${n}</span>
+    ${nav.map(([v, label, n, cls]) => `
+      <button class="nav ${state.view === v ? 'on' : ''} ${cls}" data-view="${v}">${label}
+        ${n ? `<span class="count">${n}</span>` : ''}
       </button>`).join('')}
     <div class="nav-sep"></div>
     <div class="nav-head">我的</div>
-    <button class="nav ${state.view === 'mystats' ? 'on' : ''}" data-view="mystats">推进看板</button>
     <button class="nav ${state.view === 'tokens' ? 'on' : ''}" data-view="tokens">Agent 令牌</button>
     <div class="nav-sep"></div>
     <div class="nav-head">设备</div>
@@ -595,36 +593,6 @@ function progressHtml(p: Pursuit): string {
   const done = p.steps.filter((s) => s.state === 'done').length;
   const pct = total ? Math.round(done / total * 100) : 0;
   return `<span class="prog" title="${done}/${total} 步"><i style="width:${pct}%"></i></span><span class="mono">${done}/${total}</span>`;
-}
-
-function focusHtml(): string {
-  const f = state.focus;
-  if (state.view !== 'today') return '';
-  if (!f || !f.items.length) {
-    return `<div class="focus-card"><div class="focus-head"><b>今日聚焦</b></div>
-      <div class="focus-empty">今天没有需要强推的事。安静推进就好。</div></div>`;
-  }
-  return `<div class="focus-card">
-    <div class="focus-head"><b>今日聚焦</b><span>按截止时间排序</span></div>
-    ${f.items.map((it) => {
-      const p = it.pursuit;
-      const nextStep = p.steps.find((s) => s.state !== 'done');
-      return `<div class="focus-item ${state.selected === p.id ? 'on' : ''}" data-id="${esc(p.id)}">
-        <div class="fi-top">
-          <span class="fi-nature" title="${NATURE_LABEL[p.nature]}">${natureIcon(p.nature)}</span>
-          <b class="fi-title">${esc(p.text)}</b>
-        </div>
-        <div class="fi-reason">${esc(it.reason)}</div>
-        ${it.suggestedNextStep ? `<div class="fi-next">下一步：${esc(it.suggestedNextStep)}</div>` : ''}
-        <div class="fi-acts">
-          <button class="btn sm solid" data-focus-act="done" data-id="${esc(p.id)}" data-step="${esc(nextStep?.id ?? '')}">${nextStep ? '完成第一步' : '完成'}</button>
-          <button class="btn sm" data-focus-act="smaller" data-id="${esc(p.id)}">拆小</button>
-          <button class="btn sm" data-focus-act="later" data-id="${esc(p.id)}">延期</button>
-          <button class="btn sm" data-focus-act="archive" data-id="${esc(p.id)}">归档</button>
-        </div>
-      </div>`;
-    }).join('')}
-  </div>`;
 }
 
 function rowHtml(p: Pursuit): string {
@@ -657,9 +625,8 @@ function renderList() {
   if (state.view === 'mystats') { renderStatsView(box); return; }
 
   const emptyCopy: Partial<Record<View, [string, string]>> = {
-    today: ['今天没有待推进的事', '上面记一条，或去收件箱看看。'],
-    inbox: ['收件箱是空的', '想到什么就先记下来，之后再明确。'],
-    all: ['还没有推进项', '在上面记一条就能开始。'],
+    today: ['今天没有待办', '今天到期或已逾期的事会出现在这里。'],
+    todo: ['待办是空的', '在上面记一条就能开始。'],
     done: ['还没有完成的推进项', '推完的事会出现在这里。'],
     archived: ['归档是空的', '不要了或长期停滞的会放这里。'],
   };
@@ -667,7 +634,7 @@ function renderList() {
   const list = state.pursuits.length
     ? state.pursuits.map(rowHtml).join('')
     : `<div class="empty"><b>${title}</b><p>${detail}</p></div>`;
-  box.innerHTML = focusHtml() + list;
+  box.innerHTML = list;
 }
 
 /* ------------------------------------------------------------ 详情面板 */
@@ -750,7 +717,6 @@ function renderEditor() {
       </div>
     </div>
     <div class="ed-foot">
-      <button class="btn solid" data-act="follow-done" data-step="${esc(p.steps.find((s) => s.state !== 'done')?.id ?? '')}">完成${p.steps.some((s) => s.state !== 'done') ? '这一步' : ''}</button>
       <button class="btn" data-act="follow-later">延期</button>
       <button class="btn" data-act="follow-smaller">拆小</button>
       <button class="btn" data-act="clone">克隆</button>
@@ -856,7 +822,8 @@ const minOfHhmm = (v: string) => {
 };
 
 function renderSettingsView(box: HTMLElement) {
-  if (box.querySelector('.settings')) return;
+  const existing = box.querySelector('.settings');
+  if (existing && existing.childElementCount) return;
   const admin = loadConfig().user?.role === 'admin';
   const s = loadConfig().settings;
   box.innerHTML = `
@@ -865,6 +832,8 @@ function renderSettingsView(box: HTMLElement) {
       <h2>常规</h2>
       <div class="set-row"><div><b>主题</b><small>当前 <span id="set-theme"></span></small></div>
         <button class="btn sm" id="set-theme-btn"></button></div>
+      <div class="set-row"><div><b>服务端地址</b><small>切换连接的服务器，换地址会清掉当前登录</small></div>
+        <button type="button" class="btn sm" id="set-server">切换服务端</button></div>
       <div class="set-row"><div><b>关闭主窗口</b><small>点标题栏 X 时做什么</small></div>
         <button type="button" class="input sm trigger" id="set-close" data-v="tray"><span class="trigger-label">隐藏到托盘</span><span class="trigger-arrow">⌄</span></button></div>
       ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随系统登录，静默进托盘</small></div>
@@ -935,6 +904,7 @@ function renderSettingsView(box: HTMLElement) {
     $<HTMLElement>('#set-theme').textContent = t.label;
     $<HTMLButtonElement>('#set-theme-btn').textContent = `切换到${THEMES.find((x) => x.id !== loadTheme())!.label}`;
   };
+  $<HTMLButtonElement>('#set-server').onclick = () => openServerPanel();
   $<HTMLButtonElement>('#set-close').onclick = (ev) => {
     openDropdown(ev.currentTarget as HTMLElement, [
       { value: 'quit', label: '退出程序' }, { value: 'tray', label: '隐藏到托盘' },
@@ -1133,14 +1103,15 @@ async function reloadPageData() {
 /* ------------------------------------------------------------ 推进看板 */
 
 function renderStatsView(box: HTMLElement) {
-  if (box.querySelector('.stats')) return;
-  box.innerHTML = `
-    <div class="stats">
-      <div class="stat-hero" id="stat-hero">读取中…</div>
-      <div class="stat-grid" id="stat-grid"></div>
-      <h2 class="stat-title">最近 7 天</h2>
-      <div class="bars" id="stat-days"></div>
-    </div>`;
+  if (!box.querySelector('.stats')) {
+    box.innerHTML = `
+      <div class="stats">
+        <div class="stat-hero" id="stat-hero">读取中…</div>
+        <div class="stat-grid" id="stat-grid"></div>
+        <h2 class="stat-title">最近 7 天</h2>
+        <div class="bars" id="stat-days"></div>
+      </div>`;
+  }
   void loadStats();
 }
 
@@ -1151,9 +1122,10 @@ async function loadStats() {
     const s: MyStats = await api.myStats();
     hero.innerHTML = `
       <div><span class="big">${s.streakDays}</span><span class="unit">天连续推进</span></div>
-      <div><span class="big">${s.completedThisWeek}</span><span class="unit">本周完成</span></div>`;
+      <div><span class="big">${s.completedThisWeek}</span><span class="unit">本周完成</span></div>
+      <div><span class="big">${s.completedTotal}</span><span class="unit">累计完成</span></div>`;
     $<HTMLElement>('#stat-grid').innerHTML = ([
-      ['今日聚焦', s.today.focus, ''],
+      ['今日待办', s.today.focus, ''],
       ['今日完成', s.today.done, 'ok'],
       ['待跟进', s.today.pendingFollowup, 'warn'],
     ] as Array<[string, number, string]>).map(([label, value, tone]) => `
@@ -1346,12 +1318,13 @@ function closeWhenPicker() {
   whenPop = null;
 }
 
-function openWhenPicker(p: Pursuit, anchor: HTMLElement) {
+/** 日期时间选择器：带快捷档位，选完回调。编辑截止与延期共用 */
+function pickWhen(initial: number | null, anchor: HTMLElement, onPick: (at: number) => void) {
   closeWhenPicker();
   const now = serverNow();
   const pad = (n: number) => String(n).padStart(2, '0');
   const dateKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const selected = new Date(p.dueAt ?? now + 3600_000);
+  const selected = new Date(initial ?? now + 3600_000);
   let hh = selected.getHours(), mm = selected.getMinutes();
   let viewY = selected.getFullYear(), viewM = selected.getMonth();
 
@@ -1361,9 +1334,7 @@ function openWhenPicker(p: Pursuit, anchor: HTMLElement) {
   whenPop = pop;
 
   const commit = (at: number) => {
-    const cur = findPursuit(p.id) ?? p;
-    void api.update(cur.id, { dueAt: at, version: versionOf(cur) })
-      .then(refresh).catch((err) => flashConflict(err, p.id));
+    onPick(at);
     closeWhenPicker();
   };
   const atTime = (d: Date, h: number, m: number) => {
@@ -1464,6 +1435,14 @@ function openWhenPicker(p: Pursuit, anchor: HTMLElement) {
   setTimeout(() => document.addEventListener('mousedown', whenOut!), 0);
 }
 
+function openWhenPicker(p: Pursuit, anchor: HTMLElement) {
+  pickWhen(p.dueAt, anchor, (at) => {
+    const cur = findPursuit(p.id) ?? p;
+    void api.update(cur.id, { dueAt: at, version: versionOf(cur) })
+      .then(refresh).catch((err) => flashConflict(err, p.id));
+  });
+}
+
 /* ------------------------------------------------------------ 操作 */
 
 let refreshGen = 0;
@@ -1477,6 +1456,7 @@ async function refresh() {
   ]);
   if (gen !== refreshGen) return;
   if (counts) state.counts = counts;
+  // focus 只用于跨窗口详情兜底，今日列表不再依赖它
   if (focus) state.focus = focus;
 
   if (view === 'settings' || view === 'mystats' || view === 'dashboard' || view === 'tokens') {
@@ -1525,12 +1505,14 @@ async function submitCapture(raw: string) {
 async function askLater(id: string) {
   const p = findPursuit(id);
   const now = serverNow();
+  const inMins = (m: number) => now + m * 60_000;
   const at = (days: number) => {
     const d = new Date(now);
     d.setDate(d.getDate() + days);
     d.setHours(9, 0, 0, 0);
     return d.getTime();
   };
+  const label = (ts: number) => dayLabel(ts) + ' ' + hhmm(ts);
   const host = document.createElement('div');
   host.className = 'panel-mask';
   host.innerHTML = `
@@ -1538,9 +1520,13 @@ async function askLater(id: string) {
       <div class="panel-head"><b>延期「${esc((p?.text ?? '').slice(0, 24))}」</b></div>
       <div class="panel-body">
         <div class="snooze-opts">
-          <button class="nav" data-to="${at(1)}">明天 9:00</button>
-          <button class="nav" data-to="${at(3)}">3 天后 9:00</button>
-          <button class="nav" data-to="${at(7)}">下周 9:00</button>
+          <button class="nav" data-to="${inMins(30)}">30 分钟后<span class="mono">${label(inMins(30))}</span></button>
+          <button class="nav" data-to="${inMins(60)}">1 小时后<span class="mono">${label(inMins(60))}</span></button>
+          <button class="nav" data-to="${inMins(120)}">2 小时后<span class="mono">${label(inMins(120))}</span></button>
+          <button class="nav" data-to="${at(1)}">明天早上<span class="mono">${label(at(1))}</span></button>
+          <button class="nav" data-to="${at(3)}">3 天后<span class="mono">${label(at(3))}</span></button>
+          <button class="nav" data-to="${at(7)}">下周<span class="mono">${label(at(7))}</span></button>
+          <button class="nav" id="later-custom">自定义时间<span class="mono">选日期和时刻</span></button>
         </div>
       </div>
     </div>`;
@@ -1552,7 +1538,13 @@ async function askLater(id: string) {
   host.addEventListener('click', (ev) => {
     if (ev.target === host) { done(); return; }
     const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-to]');
-    if (b) done(Number(b.dataset.to));
+    if (b) { done(Number(b.dataset.to)); return; }
+    const custom = (ev.target as HTMLElement).closest<HTMLElement>('#later-custom');
+    if (custom) {
+      // 选择器按锚点坐标定位，必须在 host 还在 DOM 时建好，再移除遮罩
+      pickWhen(p?.dueAt ?? now + 3600_000, custom, (to) => void runFollowup(id, 'later', { to }));
+      host.remove();
+    }
   });
 }
 
@@ -1565,17 +1557,20 @@ async function runFollowup(id: string, action: FollowupAction, extra: Record<str
     return;
   }
   const version = p ? versionOf(p) : 0;
-  if (action === 'smaller' && !extra.steps) {
-    const next = p?.steps.find((s) => s.state !== 'done')?.text ?? p?.text ?? '';
-    const steps = await openStepsDialog(next ? [next] : []);
-    if (!steps) return;
-    extra.steps = steps;
+  if (action === 'smaller' && !extra.stepEdits) {
+    const initial: StepEdit[] = p?.steps.length
+      ? p.steps.map((s) => ({ id: s.id, text: s.text }))
+      : [{ text: p?.text ?? '' }];
+    const edits = await openStepsDialog(initial);
+    if (!edits) return;
+    extra.stepEdits = edits;
   }
   if (action === 'later' && !extra.to) { await askLater(id); return; }
 
   const body = { action, version, ...(extra.note ? { note: String(extra.note) } : {}),
     ...(extra.to ? { to: Number(extra.to) } : {}),
     ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),
+    ...(Array.isArray(extra.stepEdits) ? { stepEdits: extra.stepEdits as StepEdit[] } : {}),
     ...(extra.stepId ? { stepId: String(extra.stepId) } : {}) };
   try {
     localHandled.set(id, Date.now());
@@ -1657,9 +1652,6 @@ function onEditorClick(ev: Event) {
       savePatch({ recurrence: buildRecurrence(freq as Parameters<typeof buildRecurrence>[0], fields) });
       return;
     }
-    case 'follow-done':
-      void runFollowup(p.id, 'done', t.dataset.step ? { stepId: t.dataset.step } : {});
-      return;
     case 'follow-later': void askLater(p.id); return;
     case 'follow-smaller':
     case 'follow-archive':
@@ -1828,12 +1820,13 @@ function openServerPanel() {
 
 function wireEvents() {
   if (!hasTauri()) return;
-  listen<{ pursuitId: string; action: FollowupAction; note?: string; to?: number; steps?: string[]; stepId?: string }>(
+  listen<{ pursuitId: string; action: FollowupAction; note?: string; to?: number; steps?: string[]; stepEdits?: StepEdit[]; stepId?: string }>(
     'takeover:action', async (ev) => {
-      const { pursuitId, action, note, to, steps, stepId } = ev.payload;
+      const { pursuitId, action, note, to, steps, stepEdits, stepId } = ev.payload;
       await runFollowup(pursuitId, action, {
         ...(note ? { note } : {}), ...(to ? { to } : {}),
-        ...(steps ? { steps } : {}), ...(stepId ? { stepId } : {}),
+        ...(steps ? { steps } : {}), ...(stepEdits ? { stepEdits } : {}),
+        ...(stepId ? { stepId } : {}),
       });
     },
   );
@@ -1882,6 +1875,7 @@ function boot() {
   rt = new Realtime(onRealtime, setLink);
   rt.connect();
   void refresh();
+  void loadDevices();
 
   if (!loadConfig().device) window.setInterval(() => void refresh(), 10_000);
 
@@ -1890,20 +1884,33 @@ function boot() {
   window.setInterval(tickUrgency, 20_000);
 }
 
+function applyDevices(devices: Device[]) {
+  state.devices = devices ?? [];
+  const mine = loadConfig().device?.id;
+  const self = state.devices.find((d) => d.id === mine);
+  if (self) self.online = linkState === 'open';
+  renderSidebar();
+  renderDeviceStatus();
+  if ($('#set-devices')) renderDeviceRows();
+}
+
+function loadDevices() {
+  return api.devices()
+    .then((r) => applyDevices(r.devices))
+    .catch(() => { /* 连不上就维持现状，重连后 welcome 会再试 */ });
+}
+
 function onRealtime(msg: ServerMessage) {
   switch (msg.t) {
     case 'welcome':
       if (msg.missed.length) flash(`上线补发 ${msg.missed.length} 条跟进，已同步到列表`);
+      // 旧服务端 welcome 不带 devices，直接查一次兜底
+      if (msg.devices) applyDevices(msg.devices);
+      else void loadDevices();
       void refresh();
       break;
     case 'devices.changed':
-      state.devices = msg.devices;
-      const mine = loadConfig().device?.id;
-      const self = state.devices.find((d) => d.id === mine);
-      if (self) self.online = linkState === 'open';
-      renderSidebar();
-      renderDeviceStatus();
-      if ($('#set-devices')) renderDeviceRows();
+      applyDevices(msg.devices);
       break;
     case 'pursuit.created':
     case 'pursuit.updated':

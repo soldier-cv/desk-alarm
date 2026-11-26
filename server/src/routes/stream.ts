@@ -7,7 +7,7 @@ import { log } from '../log.js';
 import { listMissed } from '../repo/nudges.js';
 import { getPursuit } from '../repo/pursuits.js';
 import { updateStep } from '../repo/steps.js';
-import { markOfflineHint, markOnline, touch } from '../repo/devices.js';
+import { listDevices, markOfflineHint, markOnline, touch } from '../repo/devices.js';
 import { getSettings } from '../repo/settings.js';
 
 export async function streamRoutes(app: FastifyInstance) {
@@ -35,16 +35,19 @@ export async function streamRoutes(app: FastifyInstance) {
       log.info('ws connected', {
         user: session.user.username, device: device.name, connections: hub.connectionCount,
       });
+      const devices = await listDevices(userId);
 
-      // ServerMessage 的 welcome 不带 missed；作为兼容字段发给客户端做离线补发
       const welcome: ServerMessage & { missed: Nudge[] } = {
         t: 'welcome',
         serverTs: Date.now(),
         deviceId: device.id,
         settings: await getSettings(userId),
+        devices,
         missed,
       };
       hub.send(client, welcome);
+      // 新设备上线后让同账号其它端立刻刷新设备列表，不必等下次登录或改设置
+      hub.broadcastToUser(userId, { t: 'devices.changed', devices });
 
       socket.on('message', (buf) => {
         let msg: ClientMessage;

@@ -289,6 +289,42 @@ try {
   } });
   ok('已归档拒绝撤回/任何跟进', illegalOnArchived.status === 400, `status=${illegalOnArchived.status}`);
 
+  console.log('\n拆小编辑器（全量步骤替换）');
+  const editTarget = await api('/pursuits', { method: 'POST', token: ta, body: {
+    text: '拆小编辑器', steps: ['保留并改名', '删掉这条', '保持完成态'],
+  } });
+  const editId = editTarget.json.pursuit.id;
+  const [keepStep, dropStep, doneStep] = editTarget.json.pursuit.steps;
+  const doneStepRes = await api(`/steps/${doneStep.id}`, {
+    method: 'PATCH', token: ta, body: { state: 'done' },
+  });
+  ok('准备：第三步勾选完成', doneStepRes.json.pursuit?.steps?.[2]?.state === 'done');
+  const beforeEdit = doneStepRes.json.pursuit.version;
+  const replaced = await api(`/pursuits/${editId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'smaller', version: beforeEdit,
+    stepEdits: [
+      { id: keepStep.id, text: '改名后的步骤' },
+      { id: doneStep.id, text: '完成的步骤改名' },
+      { text: '新增的步骤' },
+    ],
+  } });
+  ok('全量替换状态 200', replaced.status === 200, `status=${replaced.status}`);
+  ok('全量替换：删掉未提交的旧步骤',
+    replaced.json.pursuit?.steps?.length === 3 &&
+    !replaced.json.pursuit.steps.some((s) => s.id === dropStep.id));
+  ok('全量替换：改名生效',
+    replaced.json.pursuit.steps.some((s) => s.id === keepStep.id && s.text === '改名后的步骤'));
+  ok('全量替换：已完成步骤保留状态',
+    replaced.json.pursuit.steps.some((s) => s.id === doneStep.id && s.state === 'done'));
+  const originalStepIds = new Set([keepStep.id, dropStep.id, doneStep.id]);
+  ok('全量替换：新增步骤落库',
+    replaced.json.pursuit.steps.some((s) => s.text === '新增的步骤' && !originalStepIds.has(s.id)));
+  ok('全量替换：版本 +1', replaced.json.pursuit?.version === beforeEdit + 1);
+  const cleared = await api(`/pursuits/${editId}/followup`, { method: 'POST', token: ta, body: {
+    action: 'smaller', version: replaced.json.pursuit.version, stepEdits: [],
+  } });
+  ok('全量替换：可清空全部步骤', cleared.json.pursuit?.steps?.length === 0);
+
   console.log('\n克隆');
   const cloned = await api(`/pursuits/${projId}/clone`, { method: 'POST', token: ta });
   const cloneId = cloned.json.pursuit?.id;
@@ -326,6 +362,15 @@ try {
     typeof focus2.json.items?.[0]?.reason === 'string' &&
     typeof focus2.json.items?.[0]?.suggestedNextStep === 'string');
 
+  console.log('\n我的看板');
+  const stats = await api('/stats/me', { token: ta });
+  ok('stats/me 200', stats.status === 200, `status=${stats.status}`);
+  ok('今日聚焦数与主界面一致', stats.json.today?.focus === focus2.json.items?.length,
+    `stats=${stats.json.today?.focus} focus=${focus2.json.items?.length}`);
+  ok('看板带完成数与 7 天数据',
+    typeof stats.json.today?.done === 'number' && stats.json.days?.length === 7);
+  ok('看板带累计完成数', typeof stats.json.completedTotal === 'number');
+
   /* ------------------------------------------------------------ WS */
   console.log('\n实时通道');
   const ca = connect(ta), cb = connect(tb);
@@ -335,6 +380,14 @@ try {
   ok('welcome 带权威时间', typeof welcome?.serverTs === 'number');
   ok('welcome 带逾期归档设置', typeof welcome?.settings?.archiveAfterDays === 'number');
   ok('welcome 带 missed 数组', Array.isArray(welcome?.missed));
+  ok('welcome 带设备列表', Array.isArray(welcome?.devices) && welcome.devices.length === 3);
+  ok('welcome 设备列表含三台设备',
+    [da, dbId, dp].every((id) => welcome?.devices?.some((d) => d.id === id)));
+  const cc = connect(tp);
+  await cc.ready;
+  ok('新设备上线时其它端收到设备列表',
+    !!(await ca.waitFor('devices.changed', 1500)) && !!(await cb.waitFor('devices.changed', 1500)));
+  cc.ws.close();
   ca.send({ t: 'ping', at: Date.now() });
   ok('ping 有 pong', !!(await ca.waitFor('pong')));
 

@@ -1,4 +1,4 @@
-import type { Step, StepState } from '../../../shared/types.js';
+import type { Step, StepEdit, StepState } from '../../../shared/types.js';
 import { rows, toMs, tx, type Tx } from '../db.js';
 
 export interface StepRow {
@@ -125,5 +125,41 @@ export async function insertSteps(
       `INSERT INTO steps (pursuit_id, user_id, text, position) VALUES ($1,$2,$3,$4)`,
       [pursuitId, userId, t, base + i],
     );
+  }
+}
+
+/** 拆小编辑器全量替换步骤：保留带 id 的原状态，删除未提交的旧步骤。版本由外层 followUp 统一递增 */
+export async function replaceSteps(
+  q: Tx, pursuitId: string, userId: string, edits: StepEdit[],
+): Promise<void> {
+  const current = await q.rows<StepRow>(
+    'SELECT * FROM steps WHERE pursuit_id = $1 AND user_id = $2 ORDER BY position, created_at',
+    [pursuitId, userId],
+  );
+  const byId = new Map(current.map((s) => [s.id, s]));
+  const kept = new Set(edits.map((e) => e.id).filter((id): id is string => !!id));
+
+  for (const s of current) {
+    if (!kept.has(s.id)) {
+      await q.run('DELETE FROM steps WHERE id = $1 AND user_id = $2', [s.id, userId]);
+    }
+  }
+
+  let position = 0;
+  for (const edit of edits) {
+    const text = edit.text.trim();
+    if (!text) continue;
+    if (edit.id && byId.has(edit.id)) {
+      await q.run(
+        'UPDATE steps SET text = $1, position = $2 WHERE id = $3 AND user_id = $4',
+        [text, position, edit.id, userId],
+      );
+    } else {
+      await q.run(
+        'INSERT INTO steps (pursuit_id, user_id, text, position) VALUES ($1,$2,$3,$4)',
+        [pursuitId, userId, text, position],
+      );
+    }
+    position += 1;
   }
 }

@@ -73,8 +73,12 @@ function renderActions(p: Payload, it: Pursuit) {
     <button class="btn danger" data-act="archive">归档</button>
     ${more ? `<button class="btn ghost" data-act="next">下一条（${p.items.length - p.index - 1}）</button>` : ''}`;
 
+  const now = serverNow();
   el.snooze.innerHTML = `
     <span class="lb">${esc(p.reason || '到点了，先给它一个去向')}</span>
+    <button class="btn sm ghost" data-act="later" data-to="${now + 30 * 60_000}">30 分钟后</button>
+    <button class="btn sm ghost" data-act="later" data-to="${now + 60 * 60_000}">1 小时后</button>
+    <button class="btn sm ghost" data-act="later" data-to="${now + 120 * 60_000}">2 小时后</button>
     <button class="btn sm ghost" data-act="later" data-to="${dayAfter(1)}">明天 9:00</button>
     <button class="btn sm ghost" data-act="later" data-to="${dayAfter(3)}">3 天后</button>
     <button class="btn sm ghost" data-act="later" data-to="${dayAfter(7)}">下周</button>`;
@@ -144,10 +148,12 @@ async function send(action: FollowupAction, extra: Record<string, unknown> = {})
 async function askSteps() {
   const it = item();
   if (!it) return;
-  const next = it.steps.find((s) => s.state !== 'done')?.text ?? it.text;
-  const steps = await openStepsDialog(next ? [next] : []);
-  if (!steps) return;
-  await send('smaller', { steps });
+  const initial = it.steps.length
+    ? it.steps.map((s) => ({ id: s.id, text: s.text }))
+    : [{ text: it.text }];
+  const edits = await openStepsDialog(initial);
+  if (!edits) return;
+  await send('smaller', { stepEdits: edits });
 }
 
 async function act(kind: string, to?: number, stepId?: string) {

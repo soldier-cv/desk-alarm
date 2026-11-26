@@ -11,19 +11,19 @@ import {
   FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, levelForStrength,
   type ClientPlatform, type Followup, type FollowupAction, type FocusResult,
   type Pursuit, type PursuitStatus, type RecurrenceRule, type ReminderStrength,
-  type ServerMessage, type Settings, type StepState,
+  type ServerMessage, type Settings, type StepEdit, type StepState,
 } from '../api';
 import { actionsFor, effectiveImportance } from '../../../shared/types';
 import { buildRecurrence, fieldsFor, ruleFields, type Freq } from './recurrence-form';
 import { FollowupController } from '../alarm';
 import { applyTheme, loadTheme, saveTheme, THEMES } from '../theme';
-import { openStepsDialog } from '../widgets';
+import { openSnoozeDialog, openStepsDialog } from '../widgets';
 import '../styles-mobile.css';
 
 const app = document.getElementById('app')!;
 
 type View = 'capture' | 'today' | 'detail' | 'settings';
-type ListKind = 'today' | 'inbox' | 'all';
+type ListKind = 'today' | 'todo' | 'done' | 'archived';
 
 let platform: ClientPlatform = 'android';
 let view: View = 'capture';
@@ -150,7 +150,7 @@ function renderCapture() {
   host.innerHTML = `
   <div class="cap-wrap">
     <div class="cap-card">
-      <label>写一句话、链接或目录。带时间就设截止，不带就进收件箱</label>
+      <label>写一句话、链接或目录。带时间就设截止，不带就进待办</label>
       <textarea class="cap-input" id="cap" placeholder="例如：明天 15:00 交周报&#10;例如：把驾照考试拆成几步&#10;例如：https://example.com" autocomplete="off"></textarea>
       <div class="cap-parse" id="parse"></div>
       <div class="cap-imp" id="cap-imp">
@@ -202,7 +202,7 @@ async function saveCapture() {
     document.getElementById('parse')!.innerHTML = '';
     captureStrength = 'weak';
     document.querySelectorAll<HTMLElement>('#cap-imp .chip').forEach((c) => c.classList.toggle('hot', c.dataset.strength === 'weak'));
-    toast(p.remindAt !== null ? '已设截止' : '已存进收件箱');
+    toast(p.remindAt !== null ? '已设截止' : '已存进待办');
     void refresh();
     if (p.remindAt !== null) setView('today');
   } catch (e) {
@@ -216,37 +216,15 @@ function renderListHead() {
   const host = document.getElementById('v-today')!;
   host.innerHTML = `
   <div class="list-tabs">
-    <button data-kind="today" class="${listKind === 'today' ? 'on' : ''}">今天</button>
-    <button data-kind="inbox" class="${listKind === 'inbox' ? 'on' : ''}">收件箱 <span id="ci">${counts.inbox || ''}</span></button>
-    <button data-kind="all" class="${listKind === 'all' ? 'on' : ''}">全部</button>
+    <button data-kind="today" class="${listKind === 'today' ? 'on' : ''}">今日待办</button>
+    <button data-kind="todo" class="${listKind === 'todo' ? 'on' : ''}">待办</button>
+    <button data-kind="done" class="${listKind === 'done' ? 'on' : ''}">已完成</button>
+    <button data-kind="archived" class="${listKind === 'archived' ? 'on' : ''}">已归档</button>
   </div>
   <div class="list-scroll" id="list-scroll"></div>`;
   host.querySelectorAll<HTMLElement>('.list-tabs button').forEach((b) => {
     b.onclick = () => { listKind = b.dataset.kind as ListKind; renderListHead(); void loadList(); };
   });
-}
-
-function focusHtml(): string {
-  if (listKind !== 'today') return '';
-  if (!focus || !focus.items.length) {
-    return `<div class="focus-card"><div class="focus-head"><b>今日聚焦</b></div>
-      <div class="focus-empty">今天没有需要强推的事。</div></div>`;
-  }
-  return `<div class="focus-card">
-    <div class="focus-head"><b>今日聚焦</b><span>按截止时间排序</span></div>
-    ${focus.items.map((it) => `
-      <div class="focus-item">
-        <div class="fi-title">${esc(it.pursuit.text)}</div>
-        <div class="fi-reason">${esc(it.reason)}</div>
-        ${it.suggestedNextStep ? `<div class="fi-next">下一步：${esc(it.suggestedNextStep)}</div>` : ''}
-        <div class="acts">
-          <button class="btn" data-follow="done" data-id="${esc(it.pursuit.id)}" data-step="${esc(it.pursuit.steps.find((s) => s.state !== 'done')?.id ?? '')}">完成</button>
-          <button class="btn" data-follow="smaller" data-id="${esc(it.pursuit.id)}">拆小</button>
-          <button class="btn" data-follow="later" data-id="${esc(it.pursuit.id)}">延期</button>
-          <button class="btn" data-follow="archive" data-id="${esc(it.pursuit.id)}">归档</button>
-        </div>
-      </div>`).join('')}
-  </div>`;
 }
 
 function entryHtml(p: Pursuit): string {
@@ -278,7 +256,7 @@ function renderEntries() {
   const list = pursuits.length
     ? pursuits.map(entryHtml).join('')
     : '<div class="empty">这里还没有推进项。<br>去「随手记」写一条吧。</div>';
-  box.innerHTML = focusHtml() + list;
+  box.innerHTML = list;
   bindFollowButtons(box);
   box.querySelectorAll<HTMLElement>('[data-open]').forEach((el) => {
     el.onclick = () => openDetail(el.dataset.open!);
@@ -297,10 +275,9 @@ function bindFollowButtons(root: HTMLElement) {
 
 async function loadList() {
   try {
-    const [list, f] = await Promise.all([api.pursuits(listKind), api.focus()]);
+    const list = await api.pursuits(listKind);
     pursuits = [...list.pursuits].sort((a, b) =>
       (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity) || a.importanceSort - b.importanceSort);
-    focus = f;
     renderEntries();
   } catch {
     toast('加载失败，请检查服务端连接');
@@ -497,17 +474,23 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
     toast('当前状态不允许这个操作');
     return;
   }
-  if (action === 'smaller' && !extra.steps) {
-    const next = p.steps.find((s) => s.state !== 'done')?.text ?? p.text;
-    const steps = await openStepsDialog(next ? [next] : []);
-    if (!steps) return;
-    extra.steps = steps;
+  if (action === 'smaller' && !extra.stepEdits) {
+    const initial: StepEdit[] = p.steps.length
+      ? p.steps.map((s) => ({ id: s.id, text: s.text }))
+      : [{ text: p.text }];
+    const edits = await openStepsDialog(initial);
+    if (!edits) return;
+    extra.stepEdits = edits;
   }
   if (action === 'later' && !extra.to) {
-    const d = new Date(serverNow());
-    d.setDate(d.getDate() + 1);
-    d.setHours(9, 0, 0, 0);
-    extra.to = d.getTime();
+    const at = await new Promise<number | null>((resolve) => {
+      openSnoozeDialog({
+        title: `延期「${p.text.slice(0, 20)}」`, now: serverNow(),
+        onPick: resolve, onCustom: () => resolve(null),
+      });
+    });
+    if (at === null) return;
+    extra.to = at;
   }
   try {
     localHandled.set(id, Date.now());
@@ -515,6 +498,7 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
     await api.followup(id, {
       action, version: versionOf(p),
       ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),
+      ...(Array.isArray(extra.stepEdits) ? { stepEdits: extra.stepEdits as StepEdit[] } : {}),
       ...(extra.to ? { to: Number(extra.to) } : {}),
       ...(extra.stepId ? { stepId: String(extra.stepId) } : {}),
     });

@@ -1,5 +1,6 @@
 import type { MyStats, NudgeLevel, Overview, PursuitNature, PursuitStatus } from '../../../shared/types.js';
 import { one, rows } from '../db.js';
+import { buildFocus } from '../drive.js';
 import { schedulerStats } from '../scheduler.js';
 
 const STATUSES: PursuitStatus[] = ['inbox', 'active', 'paused', 'done', 'archived'];
@@ -62,7 +63,7 @@ export async function getOverview(): Promise<Overview> {
 
 /**
  * 单用户看板。PG 连接固定 timezone=UTC，所以 now()::date 就是项目的 UTC 日界线。
- * focus 按当天 nudges 数（被推进触达的次数），done 按完成时刻，pending 按未投递的 nudge。
+ * 今日聚焦取 buildFocus 的条数（与主界面同一口径）；7 天柱状图的 focus 按当天 nudges 数（被触达次数）。
  */
 export async function getMyStats(userId: string): Promise<MyStats> {
   const daily = await rows<{ day: string; focus: number; done: number; pending: number }>(
@@ -85,6 +86,7 @@ export async function getMyStats(userId: string): Promise<MyStats> {
 
   const days = daily.slice(-7).map((r) => ({ day: r.day, focus: r.focus, done: r.done, pending: r.pending }));
   const today = daily[daily.length - 1] ?? { day: '', focus: 0, done: 0, pending: 0 };
+  const focusCount = (await buildFocus(userId)).items.length;
 
   // 今天还没结束时不算断：从前一天起算连续天数
   let streakDays = 0;
@@ -99,6 +101,10 @@ export async function getMyStats(userId: string): Promise<MyStats> {
       WHERE user_id = $1 AND completed_at >= date_trunc('week', now())`,
     [userId],
   );
+  const totalRow = await one<{ n: number }>(
+    "SELECT count(*)::int AS n FROM pursuits WHERE user_id = $1 AND status = 'done'",
+    [userId],
+  );
 
   const byNature: Record<PursuitNature, number> = { one_off: 0, project: 0 };
   for (const r of await rows<{ nature: string; n: number }>(
@@ -109,8 +115,9 @@ export async function getMyStats(userId: string): Promise<MyStats> {
   return {
     serverTs: Date.now(),
     completedThisWeek: weekRow?.n ?? 0,
+    completedTotal: totalRow?.n ?? 0,
     streakDays,
-    today: { focus: today.focus, done: today.done, pendingFollowup: today.pending },
+    today: { focus: focusCount, done: today.done, pendingFollowup: today.pending },
     days,
     byNature,
   };

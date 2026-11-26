@@ -16,6 +16,7 @@ const src = {
   scheduler: read('server/src/scheduler.ts'),
   db: read('server/src/db.ts'),
   tools: read('server/src/mcp/tools.ts'),
+  stats: read('server/src/repo/stats.ts'),
   api: read('app/src/api.ts'),
   alarm: read('app/src/alarm.ts'),
   takeover: read('app/src/ui/takeover.ts'),
@@ -105,7 +106,9 @@ ok('月末钳位', /setDayClamped|lastDay|Math\.min\(.*getDate/.test(src.policy)
 ok('按截止时间排序、逾期在前', /sort\(byDue\)/.test(src.drive) && /function byDue/.test(src.drive));
 
 console.log('\n客户端今日推进');
-ok('有今日聚焦卡', /focus/i.test(src.main) && /聚焦/.test(src.main));
+ok('待办/今日待办分视图', /'todo'/.test(src.api) && /'today'/.test(src.api) && /今日待办/.test(src.main));
+ok('今日按截止时间从近到远', /dueAt \!== null && p\.dueAt <= end/.test(src.api));
+ok('看板带累计完成数', /completedTotal/.test(src.types) && /completedTotal/.test(src.stats));
 ok('跟进动作按钮', /完成|延期|拆小|归档/.test(src.main));
 ok('强弱驱动表现', /strengthOfLevel/.test(src.alarm) && /onNotify/.test(src.alarm) && /onTakeover/.test(src.alarm));
 ok('弱提醒重复 1/10/30/60 后每 120 分钟', /120 \* 60_000/.test(src.alarm));
