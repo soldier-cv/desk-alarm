@@ -362,11 +362,17 @@ select.input { appearance: none; cursor: pointer; padding-right: 28px; }
 
 /* 临近梯度：强调色从行首渗入，越近越浓。
    背景色（hover/选中）和背景图（梯度）是两层，互不覆盖。
-   浓度用 color-mix 从 --flare 派生，换主题时自动跟着变 */
-.item.u-soon  { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 5%, transparent), transparent 55%); }
-.item.u-close { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 9%, transparent), transparent 62%); }
-.item.u-due   { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 14%, transparent), transparent 70%); }
-.item.u-over  { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 19%, transparent), transparent 70%); }
+   浓度用 color-mix 从 --flare 派生，换主题时自动跟着变。
+   浅色主题下 5%~19% 混透明几乎看不见，故直接给到 12%~40%，
+   再叠一条左侧内阴影，让暖度在两套主题里都一眼可辨 */
+.item.u-soon  { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 12%, transparent), transparent 60%);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--flare) 35%, transparent); }
+.item.u-close { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 20%, transparent), transparent 70%);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--flare) 55%, transparent); }
+.item.u-due   { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 30%, transparent), transparent 82%);
+  box-shadow: inset 3px 0 0 var(--flare); }
+.item.u-over  { background-image: linear-gradient(90deg, color-mix(in srgb, var(--flare) 40%, transparent), transparent 100%);
+  box-shadow: inset 4px 0 0 var(--flare); }
 
 .item.done .it-title { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--strike); }
 .cbox { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--line-ctrl);

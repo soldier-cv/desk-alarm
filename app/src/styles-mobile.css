@@ -6,9 +6,10 @@
   --line: #24262A; --line-input: #6A6E75; --line-ctrl: #6A6E75; --line-soft: #1B1D20;
   --text: #ECEDEF; --muted: #8C9097; --dim: #82868D;
   --flare: #FF5C2B; --on-flare: #140A06; --flare-tint: rgba(255,92,43,.12); --flare-line: rgba(255,92,43,.38);
-  /* 临近梯度的四档浓度。不用 color-mix：旧安卓 WebView 不支持，会整条渐变失效 */
-  --flare-05: rgba(255,92,43,.05); --flare-09: rgba(255,92,43,.09);
-  --flare-14: rgba(255,92,43,.14); --flare-19: rgba(255,92,43,.19);
+  /* 临近梯度的四档浓度。不用 color-mix：旧安卓 WebView 不支持，会整条渐变失效。
+     名称沿用 05/09/14/19，实际浓度已调高，浅色主题下才看得出来 */
+  --flare-05: rgba(255,92,43,.12); --flare-09: rgba(255,92,43,.20);
+  --flare-14: rgba(255,92,43,.30); --flare-19: rgba(255,92,43,.40);
   --dot-soon: #6B5A4E; --dot-close: #B07A52;
   --ok: #6FA392; --offline-dot: #9AA0A6; --danger-text: #FF8A7C; --warn-text: #C9A186;
   --chip-hot-text: #FFB292; --scroll-thumb: #2A2D31;
@@ -25,8 +26,8 @@
   --line: #D5CFC4; --line-input: #8C8477; --line-ctrl: #8C8477; --line-soft: #DDD7CC;
   --text: #3C3833; --muted: #635C53; --dim: #6A635A;
   --flare: #8C4A3F; --on-flare: #FBF8F3; --flare-tint: rgba(140,74,63,.10); --flare-line: rgba(140,74,63,.34);
-  --flare-05: rgba(140,74,63,.05); --flare-09: rgba(140,74,63,.09);
-  --flare-14: rgba(140,74,63,.14); --flare-19: rgba(140,74,63,.19);
+  --flare-05: rgba(140,74,63,.12); --flare-09: rgba(140,74,63,.20);
+  --flare-14: rgba(140,74,63,.30); --flare-19: rgba(140,74,63,.40);
   --dot-soon: #9A8D7E; --dot-close: #A5764F;
   --ok: #4E6F62; --offline-dot: #8C8477; --danger-text: #8E3B30; --warn-text: #8A5A34;
   --chip-hot-text: #7C4137; --scroll-thumb: #C9C1B3;

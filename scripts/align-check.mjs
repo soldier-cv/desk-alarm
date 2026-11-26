@@ -108,6 +108,8 @@ ok('按截止时间排序、逾期在前', /sort\(byDue\)/.test(src.drive) && /f
 console.log('\n客户端今日推进');
 ok('待办/今日待办分视图', /'todo'/.test(src.api) && /'today'/.test(src.api) && /今日待办/.test(src.main));
 ok('今日按截止时间从近到远', /dueAt \!== null && p\.dueAt <= end/.test(src.api));
+ok('临近梯度四档可见', /u-soon/.test(src.styles) && /u-close/.test(src.styles) &&
+  /u-due/.test(src.styles) && /u-over/.test(src.styles) && /inset 3px 0 0/.test(src.styles));
 ok('看板带累计完成数', /completedTotal/.test(src.types) && /completedTotal/.test(src.stats));
 ok('跟进动作按钮', /完成|延期|拆小|归档/.test(src.main));
 ok('强弱驱动表现', /strengthOfLevel/.test(src.alarm) && /onNotify/.test(src.alarm) && /onTakeover/.test(src.alarm));
