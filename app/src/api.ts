@@ -319,6 +319,8 @@ export const api = {
   updateStep: (id: string, body: UpdateStepRequest) =>
     req<{ step: Step; pursuit: Pursuit }>(`/steps/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
+  deleteStep: (id: string) => req<{ ok: boolean }>(`/steps/${id}`, { method: 'DELETE' }),
+
   /** 服务端暂未暴露跟进历史路由；拿不到时退回会话内记录 */
   followups: (id: string) => req<{ followups: Followup[] }>(`/pursuits/${id}/followups`)
     .catch(() => ({ followups: cachedFollowups(id) })),

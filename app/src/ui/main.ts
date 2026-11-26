@@ -672,9 +672,11 @@ function renderEditor() {
       <div class="fld"><label>步骤清单</label>
         <div class="steps">
           ${p.steps.length ? p.steps.map((s) => `
-            <label class="step ${s.state === 'done' ? 'done' : ''}">
-              <input type="checkbox" data-step="${esc(s.id)}" ${s.state === 'done' ? 'checked' : ''}>
-              <span>${esc(s.text)}</span></label>`).join('')
+            <div class="step ${s.state === 'done' ? 'done' : ''}">
+              <input type="checkbox" data-step="${esc(s.id)}" ${s.state === 'done' ? 'checked' : ''} title="标记完成">
+              <input class="step-text" data-step-text="${esc(s.id)}" value="${esc(s.text)}" aria-label="步骤文字">
+              <button type="button" class="step-del" data-step-del="${esc(s.id)}" title="删除步骤" aria-label="删除步骤">×</button>
+            </div>`).join('')
             : '<div class="hint">还没有步骤。拆小之后推进会更顺。</div>'}
         </div>
         <div class="add-step">
@@ -720,7 +722,7 @@ function renderEditor() {
       <button class="btn" data-act="follow-later">延期</button>
       <button class="btn" data-act="follow-smaller">拆小</button>
       <button class="btn" data-act="clone">克隆</button>
-      <button class="btn danger sp-left" data-act="archive">归档</button>
+      <button class="btn danger" data-act="archive">归档</button>
     </div>`;
 
   const when = $<HTMLButtonElement>('#f-when');
@@ -1617,7 +1619,7 @@ function onListClick(ev: Event) {
 
 function onEditorClick(ev: Event) {
   const t = (ev.target as HTMLElement).closest<HTMLElement>(
-    '[data-act],[data-strength],[data-nature]',
+    '[data-act],[data-strength],[data-nature],[data-step-del]',
   );
   const p = findPursuit(state.selected);
   if (!t || !p) return;
@@ -1629,6 +1631,10 @@ function onEditorClick(ev: Event) {
 
   if (t.dataset.strength) { savePatch({ strength: t.dataset.strength }); return; }
   if (t.dataset.nature) { savePatch({ nature: t.dataset.nature }); return; }
+  if (t.dataset.stepDel) {
+    void api.deleteStep(t.dataset.stepDel).then(refresh).catch((e) => flash(msgOf(e)));
+    return;
+  }
 
   const act = t.dataset.act;
   if (!act) return;
@@ -1664,15 +1670,26 @@ function onEditorClick(ev: Event) {
 function onEditorChange(ev: Event) {
   const t = ev.target as HTMLInputElement;
   const p = findPursuit(state.selected);
-  if (!p || !t.dataset.step) return;
-  const stateName: StepState = t.checked ? 'done' : 'todo';
-  void api.updateStep(t.dataset.step, { state: stateName })
-    .then(refresh).catch((e) => flash(msgOf(e)));
+  if (!p) return;
+  if (t.dataset.stepText) {
+    t.blur();
+    const text = t.value.trim();
+    if (!text) { void refresh(); return; }
+    void api.updateStep(t.dataset.stepText, { text })
+      .then(refresh).catch((e) => flash(msgOf(e)));
+    return;
+  }
+  if (t.dataset.step) {
+    const stateName: StepState = t.checked ? 'done' : 'todo';
+    void api.updateStep(t.dataset.step, { state: stateName })
+      .then(refresh).catch((e) => flash(msgOf(e)));
+  }
 }
 
 function onEditorKeydown(ev: KeyboardEvent) {
   if (ev.key !== 'Enter') return;
   const t = ev.target as HTMLInputElement;
+  if (t.dataset.stepText) { ev.preventDefault(); t.blur(); return; }
   if (t.id !== 'new-step') return;
   ev.preventDefault();
   const p = findPursuit(state.selected);

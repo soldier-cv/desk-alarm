@@ -7,12 +7,13 @@ import { FOLLOWUP_ACTIONS } from '../../../shared/types.js';
 import { requireHuman } from '../auth.js';
 import { hub } from '../hub.js';
 import { log } from '../log.js';
+import { one } from '../db.js';
 import { buildFocus, followUp } from '../drive.js';
 import { listMissed } from '../repo/nudges.js';
 import {
   clonePursuit, createPursuit, deletePursuit, getPursuit, listPursuits, updatePursuit,
 } from '../repo/pursuits.js';
-import { addStep, updateStep } from '../repo/steps.js';
+import { addStep, deleteStep, updateStep } from '../repo/steps.js';
 import { getSettings, saveSettings } from '../repo/settings.js';
 
 const KINDS = ['text', 'link', 'path', 'image', 'audio'] as const;
@@ -206,6 +207,20 @@ export async function pursuitRoutes(app: FastifyInstance) {
     const pursuit = await getPursuit(step.pursuitId, userId);
     if (pursuit) hub.broadcastToUser(userId, { t: 'pursuit.stepped', pursuit });
     return { step, pursuit };
+  });
+
+  app.delete('/steps/:stepId', { preHandler: requireHuman }, async (req, reply) => {
+    const stepId = (req.params as { stepId: string }).stepId;
+    const userId = req.session!.user.id;
+    const owned = await one<{ pursuit_id: string }>(
+      'SELECT pursuit_id FROM steps WHERE id = $1 AND user_id = $2', [stepId, userId],
+    );
+    if (!owned) return reply.code(404).send({ error: 'NOT_FOUND', message: '步骤不存在' });
+    const removed = await deleteStep(stepId, userId);
+    if (!removed) return reply.code(404).send({ error: 'NOT_FOUND', message: '步骤不存在' });
+    const pursuit = await getPursuit(owned.pursuit_id, userId);
+    if (pursuit) hub.broadcastToUser(userId, { t: 'pursuit.stepped', pursuit });
+    return { ok: true };
   });
 
   app.post('/pursuits/:id/followup', async (req, reply) => {

@@ -326,9 +326,11 @@ function renderDetail() {
       <div class="set-group">
         <h3>步骤清单</h3>
         ${p.steps.length ? p.steps.map((s) => `
-          <label class="step ${s.state === 'done' ? 'done' : ''}">
-            <input type="checkbox" data-step="${esc(s.id)}" ${s.state === 'done' ? 'checked' : ''}>
-            <span>${esc(s.text)}</span></label>`).join('')
+          <div class="step ${s.state === 'done' ? 'done' : ''}">
+            <input type="checkbox" data-step="${esc(s.id)}" ${s.state === 'done' ? 'checked' : ''} title="标记完成">
+            <input class="step-text" data-step-text="${esc(s.id)}" value="${esc(s.text)}" aria-label="步骤文字">
+            <button type="button" class="step-del" data-step-del="${esc(s.id)}" title="删除步骤" aria-label="删除步骤">×</button>
+          </div>`).join('')
           : '<div class="set-val">还没有步骤。</div>'}
         <div class="add-step"><input class="input" id="new-step" placeholder="加一个步骤，回车">
           <button class="btn" id="add-step">添加</button></div>
@@ -394,6 +396,27 @@ function renderDetail() {
       void api.updateStep(box.dataset.step!, { state: stateName }).then(r => {
         const i = pursuits.findIndex((x) => x.id === p.id);
         if (i >= 0) pursuits[i] = r.pursuit;
+        renderDetail();
+      }).catch((e) => toast(msgOf(e)));
+    };
+  });
+  host.querySelectorAll<HTMLInputElement>('[data-step-text]').forEach((input) => {
+    input.onchange = () => {
+      const text = input.value.trim();
+      if (!text) { renderDetail(); return; }
+      void api.updateStep(input.dataset.stepText!, { text }).then(r => {
+        const i = pursuits.findIndex((x) => x.id === p.id);
+        if (i >= 0) pursuits[i] = r.pursuit;
+        renderDetail();
+      }).catch((e) => toast(msgOf(e)));
+    };
+    input.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); } };
+  });
+  host.querySelectorAll<HTMLElement>('[data-step-del]').forEach((btn) => {
+    btn.onclick = () => {
+      void api.deleteStep(btn.dataset.stepDel!).then(() => {
+        const i = pursuits.findIndex((x) => x.id === p.id);
+        if (i >= 0) pursuits[i].steps = pursuits[i].steps.filter((s) => s.id !== btn.dataset.stepDel);
         renderDetail();
       }).catch((e) => toast(msgOf(e)));
     };

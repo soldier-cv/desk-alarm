@@ -234,11 +234,19 @@ try {
     String(stepDone.json.pursuit?.progress));
   const added = await api(`/pursuits/${projId}/steps`, { method: 'POST', token: ta, body: { text: '发给老板' } });
   ok('新增步骤成功', added.json.pursuit?.steps?.length === 4);
+  const deletedStepId = added.json.pursuit.steps.find((s) => s.text === '发给老板').id;
+  const deleted = await api(`/steps/${deletedStepId}`, { method: 'DELETE', token: ta });
+  ok('删除步骤成功', deleted.status === 200);
+  const afterDelete = await api(`/pursuits/${projId}`, { token: ta });
+  ok('删除后只剩 3 步', afterDelete.json.pursuit?.steps?.length === 3 &&
+    !afterDelete.json.pursuit.steps.some((s) => s.id === deletedStepId));
+  const versionBumped = afterDelete.json.pursuit.version === added.json.pursuit.version + 1;
+  ok('删除步骤递增版本', versionBumped);
 
   /* ---------------------------------------------------------- 跟进 */
   console.log('\n跟进');
-  const beforeVer = added.json.pursuit.version;
-  const beforeActivity = added.json.pursuit.lastActivityAt;
+  const beforeVer = afterDelete.json.pursuit.version;
+  const beforeActivity = afterDelete.json.pursuit.lastActivityAt;
   const later = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
     action: 'later', to: Date.now() + 2 * 60_000, version: beforeVer, note: '明天再说',
   } });
@@ -255,7 +263,7 @@ try {
   const smaller = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
     action: 'smaller', version: later.json.pursuit.version, steps: ['先写第一段'],
   } });
-  ok('smaller 补了步骤', smaller.json.pursuit?.steps?.length === 5);
+  ok('smaller 补了步骤', smaller.json.pursuit?.steps?.length === 4);
 
   const done = await api(`/pursuits/${projId}/followup`, { method: 'POST', token: ta, body: {
     action: 'done', version: smaller.json.pursuit.version,
@@ -333,7 +341,7 @@ try {
     cloned.json.pursuit?.status === 'active' && cloned.json.pursuit?.dueAt === null &&
     cloned.json.pursuit?.completedAt === null);
   ok('克隆项复制步骤文本但重置为 todo',
-    cloned.json.pursuit?.steps?.length === 5 &&
+    cloned.json.pursuit?.steps?.length === 4 &&
     cloned.json.pursuit.steps.every((s) => s.state === 'todo'));
   const cloneFu = await db();
   const cloneFuRows = await cloneFu.query('SELECT count(*)::int AS n FROM followups WHERE pursuit_id = $1', [cloneId]);
