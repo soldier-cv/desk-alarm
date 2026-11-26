@@ -68,7 +68,6 @@ function renderActions(p: Payload, it: Pursuit) {
   el.acts.innerHTML = `
     <button class="btn solid" data-act="done" data-step="${esc(next?.id ?? '')}">完成</button>
     <button class="btn ghost" data-act="smaller">拆小</button>
-    <button class="btn ghost" data-act="later">延期</button>
     <button class="btn danger" data-act="archive">归档</button>
     ${more ? `<button class="btn ghost" data-act="next">下一条（${p.items.length - p.index - 1}）</button>` : ''}`;
 
@@ -159,7 +158,7 @@ async function act(kind: string, to?: number, stepId?: string) {
   switch (kind) {
     case 'done': await send('done', stepId ? { stepId } : {}); break;
     case 'smaller': await askSteps(); break;
-    case 'later': await send('later', { to: to ?? dayAfter(1) }); break;
+    case 'later': if (to) await send('later', { to }); break;
     case 'archive': await send('archive'); break;
     case 'next':
       if (current && current.index < current.items.length - 1) {

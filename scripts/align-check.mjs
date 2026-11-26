@@ -120,6 +120,10 @@ ok('静音时段处理', /inQuietHours/.test(src.alarm));
 
 console.log('\n界面计数与跟进回归');
 const mobileSrc = read('app/src/ui/mobile.ts');
+ok('行按钮按状态派生', /export function rowActions/.test(src.api) &&
+  /rowActions\(p\.status\)/.test(src.main) && /rowActions\(p\.status\)/.test(mobileSrc));
+ok('归档可直接删除', /deletePursuit/.test(src.api) && /data-del/.test(src.main) && /data-del/.test(mobileSrc));
+ok('底部动作按状态派生', /actionsFor\(p\.status\)\.includes\(a\)/.test(src.main));
 ok('全部计数等于各状态之和', /function countAll/.test(src.main) && /Object\.values\(counts\)/.test(src.main));
 ok('按钮按状态派生（actionsFor）',
   /actionsFor\(p\.status\)/.test(src.main) && /actionsFor\(p\.status\)/.test(mobileSrc));

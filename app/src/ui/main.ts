@@ -9,7 +9,7 @@ import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   hhmm, hostOf, importanceForStrength, levelForStrength, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized,
   parseInput, probeServer, saveConfig, serverNow, staleLabel, switchServer,
-  versionOf, warmthOf, FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL,
+  versionOf, warmthOf, FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, rowActions,
   type CountsResult, type Device, type Followup, type FollowupAction, type FocusResult,
   type MyStats, type Overview, type Pursuit, type PursuitStatus, type PursuitView,
   type ReminderStrength,
@@ -41,6 +41,18 @@ function native<T = void>(cmd: string, args?: Record<string, unknown>): Promise<
     flash('操作失败：' + (err instanceof Error ? err.message : String(err)));
     return null;
   });
+}
+
+/** 无返回值的命令：成功 resolve(true)，失败由调用方看到错误提示 */
+async function nativeOk(cmd: string, args?: Record<string, unknown>): Promise<boolean> {
+  if (!hasTauri()) { flash('这个功能只在桌面客户端里可用'); return false; }
+  try {
+    await invoke(cmd, args);
+    return true;
+  } catch (err) {
+    flash('操作失败：' + (err instanceof Error ? err.message : String(err)));
+    return false;
+  }
 }
 
 function quiet<T = void>(cmd: string, args?: Record<string, unknown>): void {
@@ -422,7 +434,6 @@ function renderShell() {
       <span id="s-server">服务端 -</span>
       <span class="skew">时钟偏差 <span class="mono" id="s-skew">0 ms</span></span>
       <div class="sp"></div>
-      <span id="s-lock">设备 在线</span>
       <span>登录为 <b id="s-user">${esc(loadConfig().user?.username ?? '?')}</b></span>
       <button class="btn sm" id="btn-logout">退出登录</button>
     </div>
@@ -474,8 +485,6 @@ function renderShell() {
   $<HTMLElement>('#editor').addEventListener('change', onEditorChange);
   $<HTMLElement>('#editor').addEventListener('input', onEditorInput);
   $<HTMLElement>('#editor').addEventListener('keydown', onEditorKeydown);
-
-  renderDeviceStatus();
 }
 
 /* -------------------------------------------------- 更新状态（顶栏） */
@@ -612,7 +621,8 @@ function rowHtml(p: Pursuit): string {
       </div>
     </div>
     <div class="it-act">
-      <button class="btn sm" data-follow="done" data-id="${esc(p.id)}">完成</button>
+      ${rowActions(p.status).map((a) => `<button class="btn sm" data-follow="${a}" data-id="${esc(p.id)}">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
+      ${p.status === 'archived' ? `<button class="btn sm danger" data-del="${esc(p.id)}" title="删除这条">删除</button>` : ''}
     </div>
   </div>`;
 }
@@ -719,10 +729,12 @@ function renderEditor() {
       </div>
     </div>
     <div class="ed-foot">
-      <button class="btn" data-act="follow-later">延期</button>
-      <button class="btn" data-act="follow-smaller">拆小</button>
+      ${(['later', 'smaller', 'archive', 'reopen'] as FollowupAction[])
+        .filter((a) => actionsFor(p.status).includes(a))
+        .map((a) => `<button class="btn ${a === 'archive' ? 'danger' : ''}" data-act="follow-${a}">${FOLLOWUP_ACTION_LABEL[a]}</button>`)
+        .join('')}
       <button class="btn" data-act="clone">克隆</button>
-      <button class="btn danger" data-act="archive">归档</button>
+      ${p.status === 'archived' ? `<button class="btn danger" data-act="delete">删除</button>` : ''}
     </div>`;
 
   const when = $<HTMLButtonElement>('#f-when');
@@ -807,16 +819,6 @@ function localLogPolicy(): LogPolicy {
   } catch { return { ...DEFAULT_LOG_POLICY }; }
 }
 
-function renderDeviceStatus() {
-  const el = $<HTMLElement>('#s-lock');
-  if (!el) return;
-  const mine = loadConfig().device?.id;
-  // 服务端按实时通道判在线；设备行里的 online 是登录时的旧值，不能拿来显示当前状态
-  const online = mine ? linkState === 'open' : false;
-  el.textContent = online ? '设备 在线' : '设备 离线';
-  el.title = mine ? '本机推送设备：实时通道连着就算在线' : '本机还没有注册推送设备';
-}
-
 const hhmmOfMin = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const minOfHhmm = (v: string) => {
   const [h, m] = v.split(':').map(Number);
@@ -893,7 +895,11 @@ function renderSettingsView(box: HTMLElement) {
       </div>
       <div class="set-row"><div><b>写入本地文件</b><small>应用数据目录下的 logs 文件夹</small></div>
         <input type="checkbox" class="switch" id="log-enabled"></div>
-      <div class="set-actions"><button class="btn sm" id="log-save">保存日志设置</button><span id="log-msg" class="hint"></span></div>
+      <div class="set-actions">
+        <button class="btn sm" id="log-save">保存日志设置</button>
+        <button class="btn sm ghost" id="log-open">打开日志目录</button>
+        <span id="log-msg" class="hint"></span>
+      </div>
     </section>
   </div>`;
 
@@ -960,6 +966,7 @@ function renderSettingsView(box: HTMLElement) {
   $<HTMLButtonElement>('#set-ping').onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
   $<HTMLButtonElement>('#set-save').onclick = () => void saveSettingsForm();
   $<HTMLButtonElement>('#log-save').onclick = () => void saveLogPolicy();
+  $<HTMLButtonElement>('#log-open').onclick = () => void nativeOk('open_logs_dir');
   box.querySelectorAll<HTMLElement>('[data-test-strength]').forEach((b) => {
     b.onclick = () => testFollowup(b.dataset.testStrength === 'strong' ? 'strong' : 'weak');
   });
@@ -1091,11 +1098,11 @@ async function saveLogPolicy() {
     retentionDays: Number($<HTMLInputElement>('#log-days').value),
     enabled: $<HTMLInputElement>('#log-enabled').checked,
   };
-  const ok = await native('set_log_policy', {
+  const ok = await nativeOk('set_log_policy', {
     level: p.level, enabled: p.enabled, retentionDays: p.retentionDays,
   });
-  msg.textContent = ok === null ? '保存失败' : '已保存';
-  if (ok !== null) localStorage.setItem(LOG_KEY, JSON.stringify(p));
+  msg.textContent = ok ? '已保存' : '保存失败';
+  if (ok) localStorage.setItem(LOG_KEY, JSON.stringify(p));
 }
 
 async function reloadPageData() {
@@ -1612,6 +1619,14 @@ async function runClone(id: string) {
 
 function onListClick(ev: Event) {
   const t = ev.target as HTMLElement;
+  const del = t.closest<HTMLElement>('[data-del]');
+  if (del) {
+    if (!window.confirm('确定删除这条归档记录？删除后不可恢复。')) return;
+    void api.deletePursuit(del.dataset.del!)
+      .then(() => { if (state.selected === del.dataset.del) state.selected = null; void refresh(); })
+      .catch((e) => flash(msgOf(e)));
+    return;
+  }
   const fa = t.closest<HTMLElement>('[data-follow]');
   if (fa) { void runFollowup(fa.dataset.id!, fa.dataset.follow as FollowupAction); return; }
   const f = t.closest<HTMLElement>('[data-focus-act]');
@@ -1655,6 +1670,13 @@ function onEditorClick(ev: Event) {
     }
     case 'clear-due': savePatch({ dueAt: null }); return;
     case 'clone': void runClone(p.id); return;
+    case 'delete':
+      if (!window.confirm('确定删除这条归档记录？删除后不可恢复。')) return;
+      void api.deletePursuit(p.id).then(() => {
+        state.selected = null;
+        void refresh();
+      }).catch((e) => flash(msgOf(e)));
+      return;
     case 'save-rule': {
       const freq = $<HTMLButtonElement>('#f-freq').dataset.v ?? 'none';
       const fields = {
@@ -1749,7 +1771,6 @@ function setLink(s: 'connecting' | 'open' | 'closed') {
   const self = state.devices.find((d) => d.id === mine);
   if (self) self.online = s === 'open';
   renderSidebar();
-  renderDeviceStatus();
 }
 
 const SKEW_MAX_AUTO = 10_000;
@@ -1914,7 +1935,6 @@ function applyDevices(devices: Device[]) {
   const self = state.devices.find((d) => d.id === mine);
   if (self) self.online = linkState === 'open';
   renderSidebar();
-  renderDeviceStatus();
   if ($('#set-devices')) renderDeviceRows();
 }
 

@@ -166,6 +166,17 @@ pub fn prune_on_startup(app: &AppHandle) {
     prune(app, policy.retention_days);
 }
 
+/// 在系统文件管理器里打开日志目录，方便直接看按天写下的日志文件。
+#[tauri::command]
+pub fn open_logs_dir(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = logs_dir(&app).ok_or_else(|| "拿不到日志目录".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 fn prune(app: &AppHandle, retention_days: u32) {
     let Some(dir) = logs_dir(app) else {
         return;

@@ -321,6 +321,8 @@ export const api = {
 
   deleteStep: (id: string) => req<{ ok: boolean }>(`/steps/${id}`, { method: 'DELETE' }),
 
+  deletePursuit: (id: string) => req<{ ok: boolean }>(`/pursuits/${id}`, { method: 'DELETE' }),
+
   /** 服务端暂未暴露跟进历史路由；拿不到时退回会话内记录 */
   followups: (id: string) => req<{ followups: Followup[] }>(`/pursuits/${id}/followups`)
     .catch(() => ({ followups: cachedFollowups(id) })),
@@ -631,6 +633,11 @@ export const FOLLOWUP_ACTION_LABEL: Record<string, string> = {
   done: '完成', partial: '推了一点（未完成）', later: '延期',
   smaller: '拆小', archive: '归档', reopen: '撤回', ignored: '忽略',
 };
+
+/** 列表行上直接可点的跟进动作，按状态派生；归档项没有跟进动作 */
+export function rowActions(status: PursuitStatus): FollowupAction[] {
+  return status === 'done' ? ['archive', 'reopen'] : status === 'archived' ? [] : ['done'];
+}
 
 /** 用户常用逗号分隔，别让多个步骤挤成一条 */
 export function parseSteps(value: string): string[] {

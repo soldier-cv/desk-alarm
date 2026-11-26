@@ -163,6 +163,7 @@ pub fn run() {
             logging::log_event,
             logging::get_log_policy,
             logging::set_log_policy,
+            logging::open_logs_dir,
             update::check_update,
             update::download_update,
             update::install_update,

@@ -8,7 +8,7 @@ import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer, saveConfig,
   serverNow, staleLabel, switchServer, versionOf, warmthOf,
-  FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, levelForStrength,
+  FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, levelForStrength, rowActions,
   type ClientPlatform, type Followup, type FollowupAction, type FocusResult,
   type Pursuit, type PursuitStatus, type RecurrenceRule, type ReminderStrength,
   type ServerMessage, type Settings, type StepEdit, type StepState,
@@ -243,9 +243,8 @@ function entryHtml(p: Pursuit): string {
     </div>
     <div class="prog"><i style="width:${total ? Math.round(done / total * 100) : 0}%"></i></div>
     <div class="acts">
-      <button class="btn" data-follow="done" data-id="${esc(p.id)}">完成</button>
-      <button class="btn" data-follow="later" data-id="${esc(p.id)}">延期</button>
-      <button class="btn" data-follow="archive" data-id="${esc(p.id)}">归档</button>
+      ${rowActions(p.status).map((a) => `<button class="btn" data-follow="${a}" data-id="${esc(p.id)}">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
+      ${p.status === 'archived' ? `<button class="btn danger" data-del="${esc(p.id)}">删除</button>` : ''}
     </div>
   </div>`;
 }
@@ -269,6 +268,16 @@ function bindFollowButtons(root: HTMLElement) {
       ev.stopPropagation();
       void mobileFollowup(b.dataset.id!, b.dataset.follow as FollowupAction,
         b.dataset.step ? { stepId: b.dataset.step } : {});
+    };
+  });
+  root.querySelectorAll<HTMLElement>('[data-del]').forEach((b) => {
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      if (!window.confirm('确定删除这条归档记录？删除后不可恢复。')) return;
+      void api.deletePursuit(b.dataset.del!).then(() => {
+        if (selectedId === b.dataset.del) selectedId = null;
+        void refresh();
+      }).catch((e) => toast(msgOf(e)));
     };
   });
 }
@@ -381,10 +390,11 @@ function renderDetail() {
       </div>
 
       <div class="set-group">
-        <button class="btn solid block" data-follow="done" data-id="${esc(p.id)}" data-step="${esc(p.steps.find((s) => s.state !== 'done')?.id ?? '')}">完成${p.steps.some((s) => s.state !== 'done') ? '这一步' : ''}</button>
-        <button class="btn block" data-follow="later" data-id="${esc(p.id)}" style="margin-top:8px">延期</button>
-        <button class="btn block" data-follow="smaller" data-id="${esc(p.id)}" style="margin-top:8px">拆小</button>
-        <button class="btn block" data-follow="archive" data-id="${esc(p.id)}" style="margin-top:8px">归档</button>
+        ${(['done', 'later', 'smaller', 'archive', 'reopen'] as FollowupAction[])
+          .filter((a) => actionsFor(p.status).includes(a))
+          .map((a, i) => `<button class="btn block ${a === 'done' ? 'solid' : ''}" data-follow="${a}" data-id="${esc(p.id)}" ${a === 'done' ? `data-step="${esc(p.steps.find((s) => s.state !== 'done')?.id ?? '')}"` : ''} style="margin-top:${i ? 8 : 0}px">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
+        <button class="btn block" id="clone" data-id="${esc(p.id)}" style="margin-top:8px">克隆</button>
+        ${p.status === 'archived' ? `<button class="btn block danger" data-del="${esc(p.id)}" style="margin-top:8px">删除</button>` : ''}
       </div>
     </div>`;
 
@@ -558,7 +568,7 @@ function showMobileTakeover(p: Pursuit, total: number) {
       <h2>${esc(p.text)}</h2>
       <div class="mt-reason">到点了：${esc(p.text)}</div>
       <div class="acts">
-        <button class="btn solid" data-follow="done" data-id="${esc(p.id)}" data-step="${esc(next?.id ?? '')}">${next ? '完成这一步' : '完成'}</button>
+        <button class="btn solid" data-follow="done" data-id="${esc(p.id)}" data-step="${esc(next?.id ?? '')}">完成</button>
         <button class="btn" data-follow="smaller" data-id="${esc(p.id)}">拆小</button>
         <button class="btn" data-follow="later" data-id="${esc(p.id)}">延期</button>
         <button class="btn" data-follow="archive" data-id="${esc(p.id)}">归档</button>
