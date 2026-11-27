@@ -22,6 +22,47 @@ fn close_behavior_file(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|p| p.join("close-behavior.txt"))
 }
 
+/// 默认全局快捷键。设置页改完写进 app_data_dir，重启后仍由 Rust 在 webview 加载前注册。
+#[cfg(desktop)]
+pub const DEFAULT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+Space";
+
+#[cfg(desktop)]
+fn capture_hotkey_file(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|p| p.join("capture-hotkey.txt"))
+}
+
+#[cfg(desktop)]
+pub fn capture_hotkey(app: &AppHandle) -> String {
+    capture_hotkey_file(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.parse::<Shortcut>().is_ok())
+        .unwrap_or_else(|| DEFAULT_CAPTURE_HOTKEY.to_string())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn get_capture_hotkey(app: AppHandle) -> String {
+    capture_hotkey(&app)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn set_capture_hotkey(app: AppHandle, accelerator: String) -> Result<String, String> {
+    let acc = accelerator.trim();
+    let acc = if acc.is_empty() { DEFAULT_CAPTURE_HOTKEY } else { acc };
+    let _: Shortcut = acc.parse().map_err(|e| format!("无效的快捷键 {acc}：{e:?}"))?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("capture-hotkey.txt"), acc).map_err(|e| e.to_string())?;
+    let _ = app.global_shortcut().unregister_all();
+    register_capture_hotkey(&app, acc)?;
+    Ok(acc.to_string())
+}
+
 /// 前端没保存过设置前保持 tray，别让老用户升级后按钮行为突然变了
 #[cfg(desktop)]
 pub fn close_behavior(app: &AppHandle) -> String {

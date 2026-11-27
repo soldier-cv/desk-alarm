@@ -18,10 +18,6 @@ use tauri_plugin_opener::init as opener_init;
 #[cfg(desktop)]
 const AUTOSTART_ARG: &str = "--minimized";
 
-/// Ctrl+Shift+Space 随手记一条。写死在 Rust 侧，程序刚起来热键就能用。
-#[cfg(desktop)]
-const CAPTURE_HOTKEY: &str = "Ctrl+Shift+Space";
-
 /// 命令行里有没有 --minimized。开机自启时带这个，只进托盘不弹窗。
 #[cfg(desktop)]
 fn started_minimized() -> bool {
@@ -89,7 +85,8 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 tray::build(&handle)?;
-                commands::register_capture_hotkey(&handle, CAPTURE_HOTKEY)
+                let hotkey = commands::capture_hotkey(&handle);
+                commands::register_capture_hotkey(&handle, &hotkey)
                     .map_err(|e| format!("全局热键注册失败: {e}"))?;
 
                 // 开机自启来的：别弹主窗口，用户点托盘图标再开
@@ -160,6 +157,10 @@ pub fn run() {
             commands::set_close_behavior,
             #[cfg(desktop)]
             commands::get_close_behavior,
+            #[cfg(desktop)]
+            commands::get_capture_hotkey,
+            #[cfg(desktop)]
+            commands::set_capture_hotkey,
             logging::log_event,
             logging::get_log_policy,
             logging::set_log_policy,

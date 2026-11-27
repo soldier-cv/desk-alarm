@@ -4,6 +4,12 @@ dist/
 build/
 target/
 target-fresh/
+target-alt/
+target-alt2/
+target-alt3/
+target-alt4/
+target-alt5/
+target-alt6/
 .playwright-mcp/
 
 # 数据与缓存

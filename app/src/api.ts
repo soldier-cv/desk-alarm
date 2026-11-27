@@ -504,7 +504,7 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
   };
   const dated = pickDate(explicit, true) ?? pickDate(shortDate, false);
   const rel = s.match(/(半|\d+|[零〇一二两三四五六七八九十]+)\s*(分钟|分|小时|时|钟头)\s*(之?后)?/);
-  const abs = s.match(/(今天|明天|后天|大后天|周[一二三四五六日天])[^\d]{0,4}(\d{1,2})\s*[:：点]\s*(\d{2})?/);
+  const abs = s.match(/(?<![\d:])(今天|明天|后天|大后天|周[一二三四五六日天])?\s*(上午|中午|下午|晚上|凌晨|夜里|傍晚)?\s*(\d{1,2})\s*[:：点]\s*(\d{1,2}|半)?\s*分?/);
   const clock = s.match(/^\s*(\d{1,2})[:：](\d{2})\s*$/);
 
   if (dated) {
@@ -519,7 +519,8 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
     out.timeLabel = mins >= 60 ? `${(mins / 60).toFixed(mins % 60 ? 1 : 0)} 小时后` : `${mins} 分钟后`;
   } else if (abs) {
     const d = new Date(now);
-    const dayWord = abs[1];
+    const dayWord = abs[1] ?? '';
+    const part = abs[2] ?? '';
     if (dayWord === '明天') d.setDate(d.getDate() + 1);
     else if (dayWord === '后天') d.setDate(d.getDate() + 2);
     else if (dayWord === '大后天') d.setDate(d.getDate() + 3);
@@ -530,10 +531,20 @@ export function parseInput(raw: string, now = serverNow()): Parsed {
       if (delta <= 0) delta += 7;
       d.setDate(d.getDate() + delta);
     }
-    d.setHours(Number(abs[2]), Number(abs[3] ?? 0), 0, 0);
+    let hour = Number(abs[3]);
+    const minute = abs[4] === '半' ? 30 : Number(abs[4] ?? 0);
+    if (part === '下午' || part === '晚上' || part === '傍晚' || part === '中午') {
+      if (hour < 12) hour += 12;
+    } else if (part === '凌晨' || part === '夜里' || part === '上午') {
+      if (hour === 12) hour = 0;
+    }
+    d.setHours(hour, minute, 0, 0);
     if (d.getTime() <= now) d.setDate(d.getDate() + 1);
     out.remindAt = d.getTime();
-    out.timeLabel = `${dayWord} ${String(abs[2]).padStart(2, '0')}:${String(abs[3] ?? '00').padStart(2, '0')}`;
+    const nextDay = d.getDate() !== new Date(now).getDate() || d.getMonth() !== new Date(now).getMonth();
+    const labelDay = dayWord || (nextDay ? '明天' : '今天');
+    const p = (n: number) => String(n).padStart(2, '0');
+    out.timeLabel = `${labelDay}${part} ${p(hour)}:${p(minute)}`;
   } else if (clock) {
     const d = new Date(now);
     d.setHours(Number(clock[1]), Number(clock[2]), 0, 0);

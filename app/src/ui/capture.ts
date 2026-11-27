@@ -18,7 +18,7 @@ const hint = document.querySelector<HTMLDivElement>('#hint')!;
 const bar = document.querySelector<HTMLDivElement>('#bar')!;
 const strSeg = document.querySelector<HTMLDivElement>('#str-seg')!;
 const capIco = document.querySelector<HTMLElement>('#cap-ico');
-if (capIco) capIco.innerHTML = ICO.add(18);
+if (capIco) capIco.innerHTML = ICO.add(24);
 
 let picked: Parsed = parseInput('');
 let strength: ReminderStrength = 'weak';

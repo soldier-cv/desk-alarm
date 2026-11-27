@@ -4,6 +4,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+#[cfg(desktop)]
+use tauri::PhysicalPosition;
 
 /// 接管窗口是否允许被关掉。
 /// 平时是 false，只有前端明确处理完（完成/推迟/静音）才置 true 再关。
@@ -81,10 +83,34 @@ pub fn block_takeover_close(app: &AppHandle, label: &str) -> bool {
 pub fn show_capture(app: &AppHandle) {
     if let Some(w) = get(app, "capture") {
         #[cfg(desktop)]
-        let _ = w.set_always_on_top(true);
+        {
+            // center 只在建窗时生效，拖过一次后每次唤起都停在旧位置
+            center_capture_on_main(app, &w);
+            let _ = w.set_always_on_top(true);
+        }
         let _ = w.show();
         let _ = w.set_focus();
     }
+}
+
+/// 对齐到主窗口正中。主窗口隐藏时用它的记忆位置，热键在托盘状态下也能落在正确屏幕。
+#[cfg(desktop)]
+fn center_capture_on_main(app: &AppHandle, capture: &WebviewWindow) {
+    let Some(main) = get(app, "main") else {
+        let _ = capture.center();
+        return;
+    };
+    let (Ok(pos), Ok(size), Ok(cap_size)) = (
+        main.outer_position(),
+        main.outer_size(),
+        capture.outer_size(),
+    ) else {
+        let _ = capture.center();
+        return;
+    };
+    let x = pos.x + (size.width as i32 - cap_size.width as i32) / 2;
+    let y = pos.y + (size.height as i32 - cap_size.height as i32) / 2;
+    let _ = capture.set_position(PhysicalPosition::new(x, y));
 }
 
 pub fn hide_capture(app: &AppHandle) {

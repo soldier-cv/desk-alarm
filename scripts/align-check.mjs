@@ -18,6 +18,7 @@ const src = {
   tools: read('server/src/mcp/tools.ts'),
   stats: read('server/src/repo/stats.ts'),
   api: read('app/src/api.ts'),
+  commandsRs: read('app/src-tauri/src/commands.rs'),
   alarm: read('app/src/alarm.ts'),
   takeover: read('app/src/ui/takeover.ts'),
   main: read('app/src/ui/main.ts'),
@@ -127,6 +128,7 @@ ok('行按钮按状态派生', /export function rowActions/.test(src.api) &&
   /rowActions\(p\.status\)/.test(src.main) && /rowActions\(p\.status\)/.test(mobileSrc));
 ok('归档可直接删除', /deletePursuit/.test(src.api) && /data-del/.test(src.main) && /data-del/.test(mobileSrc));
 ok('底部动作按状态派生', /actionsFor\(p\.status\)\.includes\(a\)/.test(src.main));
+ok('详情底部不提供完成按钮', !/ed-foot-main/.test(src.main) && !/follow-done/.test(src.main));
 ok('全部计数等于各状态之和', /function countAll/.test(src.main) && /Object\.values\(counts\)/.test(src.main));
 ok('按钮按状态派生（actionsFor）',
   /actionsFor\(p\.status\)/.test(src.main) && /actionsFor\(p\.status\)/.test(mobileSrc));
@@ -159,10 +161,24 @@ ok('有地址规范化函数', /export function normalizeBaseUrl/.test(src.api))
 ok('有连通性探测', /export async function probeServer/.test(src.api));
 ok('登录页地址是可编辑输入框', /id="base"/.test(src.main));
 ok('登录页有测试连接按钮', /id="test"/.test(src.main));
-ok('登录后有切换入口', /id="btn-server"/.test(src.main) && /openServerPanel/.test(src.main));
+ok('登录后有切换入口', /id="set-server"/.test(src.main) && /openServerPanel/.test(src.main));
 ok('换地址会清会话', /switchServer/.test(src.api) && /token: ''/.test(src.api));
 ok('带 scheme 的不补协议（防注入）', /\[a-z\]\[a-z0-9\+\.\-\]\*:/.test(src.api) || /\^\[a-z\]/.test(src.api));
 ok('登录时先落盘再请求', /switchServer\(norm\);[\s\S]{0,500}api\.login/.test(src.main));
+
+console.log('\n桌面交互');
+ok('全局快捷键可在设置页配置', /id="set-hotkey"/.test(src.main) && /set_capture_hotkey/.test(src.commandsRs));
+ok('快捷键改动会持久化并由 Rust 提前注册', /capture-hotkey\.txt/.test(src.commandsRs) && /capture_hotkey\(&handle\)/.test(read('app/src-tauri/src/lib.rs')));
+ok('列表行不提供左侧完成勾选', !/it-check/.test(src.main) && !/it-check/.test(src.styles));
+ok('列表行恢复已发布卡片样式', /\.item \{[\s\S]{0,300}?border-radius: var\(--shape-md\)/.test(src.styles) && /\.item \{[\s\S]{0,300}?border: 1px solid var\(--md-outline-variant\)/.test(src.styles));
+ok('强提醒条目有 ⚡ 徽标', /str-badge/.test(src.main) && /\.str-badge/.test(src.styles));
+ok('连接状态显示在设置页服务端地址处', /id="set-conn"/.test(src.main) && !/id="sdot"/.test(src.main) && !/conn-dot/.test(src.main));
+ok('捕获输入框图标与输入框同量级', /ICO\.add\(24\)/.test(src.main) && /ICO\.add\(24\)/.test(read('app/src/ui/capture.ts')));
+ok('更新入口移到左上品牌位', /id="btn-brand"/.test(src.main) && /id="update-dot"/.test(src.main) && !/id="btn-update"/.test(src.main) && /'#btn-brand'[^\n]*openAbout\(\)/.test(src.main));
+ok('设置页顶部显示当前用户信息', /set-user-card/.test(src.main) && /su-avatar/.test(src.styles));
+ok('头像进入当前用户设置', /id="btn-user"/.test(src.main) && /#btn-user'\)\.onclick = \(\) => setView\('settings'\)/.test(src.main));
+ok('侧栏底部只留配色与退出', /sb-tools[\s\S]{0,300}id="btn-theme"[\s\S]{0,300}id="btn-logout"/.test(src.main) && !/id="btn-update"/.test(src.main));
+ok('中文时段词能解析', /上午\|中午\|下午\|晚上\|凌晨/.test(src.api));
 
 console.log('\n暗色主题可读性');
 ok('输入框用 --line-input（不是 --line）', /\.input \{[\s\S]{0,200}?--line-input/.test(src.styles));

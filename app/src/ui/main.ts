@@ -431,20 +431,18 @@ function renderShell() {
   <div class="app${state.rail ? ' rail' : ''}" id="app-shell">
     <aside class="sidebar">
       <div class="sb-brand">
-        <span class="sb-logo"></span>
-        <b>DeskAlarm</b>
+        <button type="button" class="sb-brand-id" id="btn-brand" title="关于 DeskAlarm / 检查更新">
+          <span class="sb-logo"></span>
+          <b>DeskAlarm</b>
+          <i class="update-dot" id="update-dot" hidden></i>
+        </button>
         <span class="sp"></span>
         <button type="button" class="sb-tool-btn sb-collapse" id="btn-rail" title="折叠 / 展开导航栏" aria-label="折叠导航栏">${ICO.panelCollapse(18)}</button>
       </div>
 
-      <button type="button" class="conn-pill" id="btn-server" title="点击切换服务端">
-        <span class="sdot off" id="sdot"></span>
-        <span class="conn-label" id="stxt">未连接</span>
-      </button>
-
       ${isDesktop() ? `
-      <button type="button" class="sb-fab" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space">
-        ${ICO.add(18)}<span class="fab-txt">快速记</span><span class="fab-kbd">Ctrl+Shift+Space</span>
+      <button type="button" class="sb-fab" id="btn-hotkey" title="快速记一条（Ctrl+Shift+Space）">
+        ${ICO.add(18)}<span class="fab-txt">快速记</span>
       </button>` : ''}
 
       <div class="sb-scroll" id="sidebar"></div>
@@ -454,15 +452,13 @@ function renderShell() {
         <button type="button" class="nav" data-view="dashboard" id="nav-dashboard">
           <span class="nav-ico">${ICO.dashboard(19)}</span><span class="nav-txt">系统看板</span>
         </button>` : ''}
-        <button type="button" class="nav" data-view="settings" id="nav-settings">
-          <span class="nav-ico">${ICO.settings(19)}</span><span class="nav-txt">设置</span>
-        </button>
         <div class="sb-user-row">
-          <div class="sb-avatar" title="${esc(u?.username ?? '')}">${esc((u?.username ?? '?').slice(0, 1).toUpperCase())}</div>
-          <span class="sb-user-name">${esc(u?.username ?? '?')}</span>
+          <div class="sb-user-id" id="btn-user" title="当前用户设置">
+            <div class="sb-avatar">${esc((u?.username ?? '?').slice(0, 1).toUpperCase())}</div>
+            <span class="sb-user-name" title="${esc(u?.username ?? '?')}">${esc(u?.username ?? '?')}</span>
+          </div>
           <div class="sb-tools">
             <button type="button" class="sb-tool-btn" id="btn-theme" title="切换配色"></button>
-            <button type="button" class="sb-tool-btn" id="btn-update" title="关于 / 检查更新" aria-label="检查更新">${ICO.update(18)}</button>
             <button type="button" class="sb-tool-btn" id="btn-logout" title="退出登录" aria-label="退出登录">${ICO.logout(18)}</button>
           </div>
         </div>
@@ -487,7 +483,7 @@ function renderShell() {
 
             <div class="capture-bar" id="capture-bar">
               <div class="capture-in">
-                <span class="prompt">${ICO.add(18)}</span>
+                <span class="prompt">${ICO.add(24)}</span>
                 <input id="cap" placeholder="想到什么就记下来，回车进待办，带时间自动设截止" autocomplete="off">
                 <div class="cap-str-seg" id="cap-str-seg">
                   <button type="button" class="on" data-strength="weak" title="到点发通知，未填时间默认 1 天后">弱</button>
@@ -507,6 +503,7 @@ function renderShell() {
   </div>`;
 
   if (isDesktop()) $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
+  $<HTMLElement>('#btn-user').onclick = () => setView('settings');
   $<HTMLButtonElement>('#btn-rail')!.onclick = () => {
     state.rail = !state.rail;
     localStorage.setItem(RAIL_KEY, state.rail ? '1' : '0');
@@ -514,8 +511,7 @@ function renderShell() {
     shell.classList.toggle('rail', state.rail);
     shell.classList.toggle('drawer-open', !state.rail);
   };
-  $<HTMLButtonElement>('#btn-update')!.onclick = () => openAbout();
-  $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
+  $<HTMLButtonElement>('#btn-brand')!.onclick = () => openAbout();
   renderThemeButton();
   $<HTMLButtonElement>('#btn-theme')!.onclick = () => toggleTheme();
   $<HTMLButtonElement>('#btn-logout')!.onclick = async () => {
@@ -601,13 +597,15 @@ function onGlobalKeydown(ev: KeyboardEvent) {
 /* -------------------------------------------------- 更新角标与提示 */
 
 function renderUpdateBadge() {
-  const btn = document.getElementById('btn-update');
-  if (!btn) return;
+  const brand = document.getElementById('btn-brand');
+  const dot = document.getElementById('update-dot');
+  if (!brand || !dot) return;
   const s = updateBadge();
-  btn.classList.toggle('has-update', s.available);
-  const title = !s.available ? '关于 / 检查更新' : s.ready ? `安装更新 v${s.version}` : `发现新版本 v${s.version}`;
-  btn.title = title;
-  btn.setAttribute('aria-label', title);
+  dot.hidden = !s.available;
+  const title = !s.available ? '关于 DeskAlarm / 检查更新'
+    : s.ready ? `安装更新 v${s.version}` : `发现新版本 v${s.version}，点击查看`;
+  brand.title = title;
+  brand.setAttribute('aria-label', title);
 }
 onUpdateChange(renderUpdateBadge);
 
@@ -707,7 +705,6 @@ function renderSidebar() {
         </div>`).join('') || '<div class="nav-note">暂无在线设备</div>'}
     </div>`;
 
-  document.getElementById('nav-settings')?.classList.toggle('on', state.view === 'settings');
   document.getElementById('nav-dashboard')?.classList.toggle('on', state.view === 'dashboard');
 }
 
@@ -727,13 +724,9 @@ function rowHtml(p: Pursuit): string {
   const isDone = p.status === 'done';
   const isArchived = p.status === 'archived';
   const actions = rowActions(p.status);
-  const checkAttr = isDone || isArchived
-    ? 'class="it-check static"'
-    : `class="it-check${p.strength === 'strong' ? ' strong' : ''}" data-follow="done" data-id="${esc(p.id)}" title="完成"`;
 
   return `
   <div class="item u-${u}${isDone ? ' done' : ''}${state.selected === p.id ? ' on' : ''}" data-id="${esc(p.id)}" data-u="${u}">
-    <button type="button" ${checkAttr}>${ICO.check(13)}</button>
     <div class="it-main">
       <div class="it-time">
         ${u === 'none' ? '' : `<i class="udot ${u}"></i>`}
@@ -835,25 +828,17 @@ function renderEditor() {
   const rf = ruleFields(p.recurrence);
   const ruleFieldsShown = fieldsFor(freq);
   const due = p.dueAt === null ? '未设截止' : `${dayLabel(p.dueAt)} ${hhmm(p.dueAt)}`;
-  const canDone = actionsFor(p.status).includes('done');
   const secBtns: string[] = [];
-  for (const a of (['later', 'smaller', 'reopen'] as FollowupAction[])) {
+  for (const a of (['later', 'smaller'] as FollowupAction[])) {
     if (actionsFor(p.status).includes(a)) {
-      secBtns.push(`<button type="button" class="btn tonal" data-act="follow-${a}">${FOLLOWUP_ACTION_LABEL[a]}</button>`);
+      secBtns.push(`<button type="button" class="btn sm ed-foot-action" data-act="follow-${a}">${FOLLOWUP_ACTION_LABEL[a]}</button>`);
     }
   }
-  secBtns.push(`<button type="button" class="btn ghost" data-act="clone">${ICO.clone(14)}克隆</button>`);
-  if (actionsFor(p.status).includes('archive')) {
-    secBtns.push(`<button type="button" class="btn danger" data-act="follow-archive">${FOLLOWUP_ACTION_LABEL.archive}</button>`);
-  }
-  if (p.status === 'archived') {
-    secBtns.push(`<button type="button" class="btn danger" data-act="delete">${ICO.trash(14)}删除</button>`);
-  }
+  secBtns.push(`<button type="button" class="btn sm ed-foot-action" data-act="clone">${ICO.clone(14)}克隆</button>`);
 
   box.innerHTML = `
     <div class="ed-head">
       <b>推进详情</b>
-      <span class="ed-saved" id="ed-saved"></span>
       <button type="button" class="btn icon-only sm" data-act="close-editor" title="收起详情 (Esc)" aria-label="收起详情">${ICO.close(16)}</button>
     </div>
     <div class="ed-body">
@@ -907,9 +892,11 @@ function renderEditor() {
     </div>
 
     <div class="ed-foot">
-      ${canDone ? `
-        <button type="button" class="btn solid ed-foot-main" data-act="follow-done">${ICO.check(15)}完成</button>` : ''}
-      <div class="ed-foot-grid">${secBtns.join('')}</div>
+      <div class="ed-foot-bar">
+        <span class="ed-saved" id="ed-saved">修改即时保存</span>
+        <div class="ed-foot-actions">${secBtns.join('')}</div>
+        <button type="button" class="btn icon-only sm ghost ed-foot-more" data-act="more" title="更多操作" aria-label="更多操作">···</button>
+      </div>
     </div>`;
 
   const when = $<HTMLButtonElement>('#f-when');
@@ -1008,19 +995,39 @@ const minOfHhmm = (v: string) => {
 function renderSettingsView(box: HTMLElement) {
   const existing = box.querySelector('.settings');
   if (existing && existing.childElementCount) return;
-  const admin = loadConfig().user?.role === 'admin';
+  const user = loadConfig().user;
+  const admin = user?.role === 'admin';
   const s = loadConfig().settings;
   const cb = closeBehavior();
+  const userCard = user ? `
+    <section class="set-card set-user-card">
+      <div class="su-avatar">${esc(user.username.slice(0, 1).toUpperCase())}</div>
+      <div class="su-info">
+        <b>${esc(user.username)}</b>
+        <div class="su-meta">
+          <span class="su-role">${admin ? '管理员' : '普通用户'}</span>
+          <span class="mono">ID ${esc(user.id.slice(0, 8))}</span>
+          <span>加入于 ${new Date(user.createdAt).toLocaleDateString('zh-CN')}</span>
+        </div>
+      </div>
+    </section>` : '';
   box.innerHTML = `
   <div class="settings">
+    ${userCard}
     <section class="set-card">
       <h2>常规与外观</h2>
       <div class="set-row"><div><b>配色主题</b><small>当前：<span id="set-theme"></span></small></div>
         <button type="button" class="btn sm tonal" id="set-theme-btn"></button></div>
-      <div class="set-row"><div><b>服务端地址</b><small>${esc(loadConfig().baseUrl || '未配置')} · 换地址会清掉当前登录</small></div>
+      <div class="set-row"><div><b>服务端地址</b><small>${esc(loadConfig().baseUrl || '未配置')} · <span id="set-conn" class="set-conn">连接中…</span> · 换地址会清掉当前登录</small></div>
         <button type="button" class="btn sm tonal" id="set-server">切换服务端</button></div>
       <div class="set-row"><div><b>关闭主窗口</b><small>点击标题栏关闭按钮时的行为</small></div>
         <button type="button" class="input trigger" style="width:168px" id="set-close" data-v="${cb}"><span class="trigger-label">${cb === 'quit' ? '退出程序' : '隐藏到托盘'}</span><span class="trigger-arrow">${ICO.chevronDown(15)}</span></button></div>
+      ${isDesktop() ? `<div class="set-row"><div><b>快速记快捷键</b><small>全局生效，形如 Ctrl+Shift+Space；留空恢复默认</small></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="input mono" id="set-hotkey" style="width:168px" spellcheck="false" autocomplete="off">
+          <button type="button" class="btn sm tonal" id="set-hotkey-save">保存</button>
+          <span id="hotkey-msg" class="hint"></span>
+        </div></div>` : ''}
       ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随系统登录静默进托盘</small></div>
         <input type="checkbox" class="switch" id="set-auto"></div>` : ''}
       <div class="set-row"><div><b>自动检查更新</b><small>开启后启动时和每 30 分钟检查一次，只提示不自动安装</small></div>
@@ -1088,7 +1095,19 @@ function renderSettingsView(box: HTMLElement) {
     $<HTMLButtonElement>('#set-theme-btn').textContent = `切换到${other.label}`;
   };
   paintThemeRow();
+  paintConnStatus();
   $<HTMLButtonElement>('#set-theme-btn').onclick = () => { toggleTheme(); paintThemeRow(); };
+  if (isDesktop()) {
+    const hotkeyInput = $<HTMLInputElement>('#set-hotkey');
+    void native<string>('get_capture_hotkey').then((v) => { if (v) hotkeyInput.value = v; });
+    $<HTMLButtonElement>('#set-hotkey-save').onclick = () => {
+      void native<string>('set_capture_hotkey', { accelerator: hotkeyInput.value }).then((saved) => {
+        if (!saved) return;
+        hotkeyInput.value = saved;
+        $<HTMLElement>('#hotkey-msg').textContent = '已生效';
+      });
+    };
+  }
   $<HTMLButtonElement>('#set-server').onclick = () => openServerPanel();
   $<HTMLButtonElement>('#set-close').onclick = (ev) => {
     openDropdown(ev.currentTarget as HTMLElement, [
@@ -1752,9 +1771,19 @@ function onEditorClick(ev: Event) {
       savePatch({ recurrence: buildRecurrence(freq, fields) });
       return;
     }
-    case 'follow-done':
-      void runFollowup(p.id, 'done');
+    case 'more': {
+      const items = [
+        ...(actionsFor(p.status).includes('reopen') ? [{ value: 'reopen', label: '撤回' }] : []),
+        ...(actionsFor(p.status).includes('archive') ? [{ value: 'archive', label: '归档' }] : []),
+        ...(p.status === 'archived' ? [{ value: 'delete', label: '删除' }] : []),
+      ];
+      if (!items.length) return;
+      openDropdown(t, items, '', (v) => {
+        if (v === 'delete') void confirmAndDelete(p.id);
+        else void runFollowup(p.id, v as FollowupAction);
+      });
       return;
+    }
     case 'follow-later': askLater(p.id); return;
     case 'follow-smaller':
     case 'follow-archive':
@@ -1826,17 +1855,16 @@ function flashConflict(err: unknown, pursuitId: string) {
   void refresh().then(() => { state.selected = pursuitId; });
 }
 
+function paintConnStatus() {
+  const el = document.getElementById('set-conn');
+  if (!el) return;
+  el.className = `set-conn ${linkState === 'open' ? 'ok' : linkState === 'connecting' ? 'warn' : 'err'}`;
+  el.textContent = linkState === 'open' ? '已连接' : linkState === 'connecting' ? '连接中…' : '已断开';
+}
+
 function setLink(s: 'connecting' | 'open' | 'closed') {
-  const dot = document.getElementById('sdot');
-  const txt = document.getElementById('stxt');
-  const conn = document.getElementById('btn-server');
-  if (!dot || !txt || !conn) return;
   linkState = s;
-  dot.className = `sdot ${s === 'open' ? '' : s === 'connecting' ? 'warn' : 'alert'}`;
-  txt.textContent = s === 'open' ? '已连接' : s === 'connecting' ? '连接中…' : '已断开';
-  conn.title = s === 'closed'
-    ? `已断开，正在自动重连 · ${loadConfig().baseUrl}（点击切换）`
-    : `已连至 ${loadConfig().baseUrl}（点击切换服务端）`;
+  paintConnStatus();
   const mine = loadConfig().device?.id;
   const self = state.devices.find((d) => d.id === mine);
   if (self) self.online = s === 'open';
