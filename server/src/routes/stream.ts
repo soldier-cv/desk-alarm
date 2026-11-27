@@ -5,10 +5,11 @@ import { followUp } from '../drive.js';
 import { hub } from '../hub.js';
 import { log } from '../log.js';
 import { listMissed } from '../repo/nudges.js';
-import { getPursuit } from '../repo/pursuits.js';
+import { getPursuit, listPursuits } from '../repo/pursuits.js';
 import { updateStep } from '../repo/steps.js';
 import { listDevices, markOfflineHint, markOnline, touch } from '../repo/devices.js';
 import { getSettings } from '../repo/settings.js';
+import { inQuietHours } from '../policy.js';
 
 export async function streamRoutes(app: FastifyInstance) {
   app.get('/stream', { websocket: true }, (socket, req) => {
@@ -29,8 +30,18 @@ export async function streamRoutes(app: FastifyInstance) {
       const userId = session.user.id;
       const device = session.device;
       const client = hub.add(userId, device.id, socket);
-      // listMissed 取的是「截止到现在仍未投递」的 nudge，不依赖设备上次在线时间
-      const missed = await listMissed(userId, Date.now());
+      const nowMs = Date.now();
+      const missed = await listMissed(userId, nowMs);
+      const settings = await getSettings(userId);
+      const activePursuits = await listPursuits(userId, { status: 'active' });
+      const overdue = inQuietHours(settings, nowMs)
+        ? []
+        : activePursuits
+            .filter((p) =>
+              p.dueAt !== null && p.dueAt <= nowMs &&
+              (p.deviceIds.length === 0 || p.deviceIds.includes(device.id)),
+            )
+            .sort((a, b) => (a.dueAt ?? 0) - (b.dueAt ?? 0));
       await markOnline(device.id);
       log.info('ws connected', {
         user: session.user.username, device: device.name, connections: hub.connectionCount,
@@ -39,11 +50,12 @@ export async function streamRoutes(app: FastifyInstance) {
 
       const welcome: ServerMessage & { missed: Nudge[] } = {
         t: 'welcome',
-        serverTs: Date.now(),
+        serverTs: nowMs,
         deviceId: device.id,
-        settings: await getSettings(userId),
+        settings,
         devices,
         missed,
+        overdue,
       };
       hub.send(client, welcome);
       // 新设备上线后让同账号其它端立刻刷新设备列表，不必等下次登录或改设置

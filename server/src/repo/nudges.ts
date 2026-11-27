@@ -100,6 +100,14 @@ export async function markFailed(id: number, error: string): Promise<void> {
   });
 }
 
+export async function ackPendingForPursuit(q: Tx, pursuitId: string, action: string): Promise<void> {
+  await q.run(
+    `UPDATE nudges SET state = 'acked', acked_at = now(), ack_action = $2
+      WHERE pursuit_id = $1 AND state = 'pending'`,
+    [pursuitId, action],
+  );
+}
+
 export async function markAcked(id: number, action: string): Promise<void> {
   await tx(async (q) => {
     await q.run(

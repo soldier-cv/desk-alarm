@@ -1,6 +1,32 @@
 import type { Pursuit, RecurrenceRule, Settings } from '../../shared/types.js';
 
-const DAY = 24 * 60 * 60 * 1000;
+const MIN = 60 * 1000;
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
+
+/** 强提醒逾期复催槽位：0=到点，1=+15m，2=+1h，之后每 2h 递增 */
+export function strongRenudgeSlot(overdueMs: number): number {
+  if (overdueMs < 15 * MIN) return 0;
+  if (overdueMs < 60 * MIN) return 1;
+  if (overdueMs < 180 * MIN) return 2;
+  return 2 + Math.floor((overdueMs - 60 * MIN) / (120 * MIN));
+}
+
+/** 弱提醒单条复催槽位：0=到点，1=+30m（更久后交由用户级 3h 汇总） */
+export function weakSingleSlot(overdueMs: number): number {
+  return overdueMs >= 30 * MIN ? 1 : 0;
+}
+
+export const WEAK_DIGEST_INTERVAL_MS = 3 * HOUR;
+
+export function overdueDurationText(overdueMs: number): string {
+  const min = Math.floor(Math.max(0, overdueMs) / MIN);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} 小时`;
+  return `${Math.floor(h / 24)} 天`;
+}
 
 export function stalenessOf(lastActivityAt: number, nowMs: number): number {
   return Math.max(0, nowMs - lastActivityAt);

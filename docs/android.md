@@ -1,10 +1,10 @@
 # Android 端
 
-Android 端的 Rust 源码和 Windows 端共用，协议、解析、提醒逻辑（`api.ts` / `alarm.ts` / `theme.ts`）也共用；但**界面是独立的一套**：桌面三栏布局在窄屏上会被挤烂，所以 Android 走 `mobile.html` + `src/ui/mobile.ts` + `styles-mobile.css`，顶部状态 + 底部三页签（随手记 / 今天 / 设置）。`tauri.android.conf.json` 让 Android 只建 `main` 一个窗口并指向 `mobile.html`——若沿用桌面的三个窗口配置，capture 小窗会盖在最上面，表现为「打开就是空白随手记页」。
+Android 端的 Rust 源码和 Windows 端共用，协议、解析、提醒逻辑（`api.ts` / `alarm.ts` / `theme.ts` / `tokens.css` / `widgets.ts`）也共用；但**界面是独立的一套**：桌面布局在窄屏上会被挤烂，所以 Android 走 `mobile.html` + `src/ui/mobile.ts` + `styles-mobile.css`，遵循 Material Design 3 移动端范式：顶部应用栏（含连接切换与主题快切）+ 底部四页签导航栏（今日 / 待办 / 看板 / 设置，带药丸选中指示器与计数角标）+ 全局右下角 FAB 唤起「随手记」Modal Bottom Sheet。默认首屏直达「今日」，详情页支持直接编辑标题与截止时间，强提醒采用全屏模态并将操作区下沉至底部拇指热区。`tauri.android.conf.json` 让 Android 只建 `main` 一个窗口并指向 `mobile.html`——若沿用桌面的三个窗口配置，capture 小窗会盖在最上面，表现为「打开就是空白随手记页」。
 
 Android 端的差异：
 
-1. **后台保活与锁屏即时到达**：`DeskAlarmKeepAliveService` 是常驻前台服务，在**原生层**持有 WebSocket、20 秒心跳和 `PARTIAL_WAKE_LOCK`。锁屏后 WebView 的 JS 会被系统冻结，若连接和通知留在 JS 里就会断心跳、到点弹不出，开屏才补发一串——所以原生服务自己连 `/stream`、自己弹通知。登录成功后 JS 通过 `plugin:push|start` 把服务端地址和 token 交给它。JS 侧仍保留一条 WS 只用于界面同步，但**不再弹系统通知**（避免和原生重复）。原生服务只认 `pursuit.nudge`（L1 静默、L2+ 通知）、`pursuit.followed` / `pursuit.deleted`（停铃）和 `welcome` 里的 `missed`（合成一条汇总）；重复间隔与桌面 `alarm.ts` 的阶梯一致、无次数上限，静音时段顺延。通知渠道保留 `deskalarm_strong` / `deskalarm_weak` 两个，但不再按强弱判定，而是按 nudge 等级。不依赖 Google 服务，国产 ROM 可用
+1. **后台保活与锁屏即时到达**：`DeskAlarmKeepAliveService` 是常驻前台服务，在**原生层**持有 WebSocket、20 秒心跳和 `PARTIAL_WAKE_LOCK`。锁屏后 WebView 的 JS 会被系统冻结，若连接和通知留在 JS 里就会断心跳、到点弹不出，开屏才补发一串——所以原生服务自己连 `/stream`、自己弹通知。登录成功后 JS 通过 `plugin:push|start` 把服务端地址和 token 交给它。JS 侧仍保留一条 WS 只用于界面同步和前台强提醒模态，**不再弹系统通知**（避免和原生重复）。原生服务认 `pursuit.nudge`（L2 轻提醒、L4 强提醒常驻通知）、`pursuit.overdue_digest`（弱提醒每 3 小时汇总）、`pursuit.followed` / `pursuit.deleted`（清通知）和 `welcome` 里的 `overdue` / `missed`（强提醒上线即发高优先级常驻通知，弱提醒合并成 1 条汇总）；逾期复催节奏完全由服务端驱动，原生层不再维护本地定时器，静音时段跳过。不依赖 Google 服务，国产 ROM 可用
 2. **机器指纹**：`machine_id()` 在 Android 上读 `ro.serialno` 等系统属性，不是 Windows 注册表
 3. **无设备锁定 / PIN**：桌面和移动端都不提供设备锁定与 PIN，锁屏后照常接收提醒。
 4. **图标**：`icons/android/` 的 launcher 图标由桌面 `icon.png` 直接生成（无 Tauri 默认的黑色外框），`gen/android/.../res/` 里是同一份拷贝

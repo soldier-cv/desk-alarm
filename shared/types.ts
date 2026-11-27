@@ -309,7 +309,7 @@ export type ClientMessage =
 export type TransportName = 'ws';
 
 export type ServerMessage =
-  | { t: 'welcome'; serverTs: number; deviceId: string; settings: Settings; devices: Device[]; missed: Nudge[] }
+  | { t: 'welcome'; serverTs: number; deviceId: string; settings: Settings; devices: Device[]; missed: Nudge[]; overdue?: Pursuit[] }
   | { t: 'pong'; at: number }
   | { t: 'devices.changed'; devices: Device[] }
   | { t: 'pursuit.created'; pursuit: Pursuit }
@@ -317,6 +317,7 @@ export type ServerMessage =
   | { t: 'pursuit.deleted'; pursuitId: string }
   | { t: 'pursuit.focused'; items: FocusItem[] }
   | { t: 'pursuit.nudge'; pursuit: Pursuit; level: NudgeLevel; channel: NudgeChannel; reason: string; serverTs: number }
+  | { t: 'pursuit.overdue_digest'; count: number; oldestDueAt: number; sample: string; serverTs: number }
   | { t: 'pursuit.stepped'; pursuit: Pursuit }
   | { t: 'pursuit.followed'; pursuit: Pursuit; action: FollowupAction }
   | { t: 'settings.changed'; settings: Settings };

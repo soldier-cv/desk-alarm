@@ -2,7 +2,7 @@ import { driveTick, engineStats } from './drive.js';
 import { env } from './env.js';
 import { log } from './log.js';
 import { getPursuit } from './repo/pursuits.js';
-import { markDelivered, markFailed, takePending, type PendingNudge } from './repo/nudges.js';
+import { markAcked, markDelivered, markFailed, takePending, type PendingNudge } from './repo/nudges.js';
 import { send as sendNudge } from './transport/index.js';
 import { hub } from './hub.js';
 
@@ -33,6 +33,10 @@ async function rotate(): Promise<void> {
         const pursuit = await getPursuit(n.pursuitId, n.userId);
         if (!pursuit) {
           await markFailed(n.id, '推进项已不存在');
+          continue;
+        }
+        if (pursuit.status !== 'active') {
+          await markAcked(n.id, pursuit.status);
           continue;
         }
         // device_id 为 null 表示「推送范围=全部在线设备」。一台都不在线时保持 pending，

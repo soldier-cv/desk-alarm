@@ -1,13 +1,19 @@
 /**
- * 自绘下拉与时间选择：原生控件在各平台样式飘、和主题不搭。
- * 弹层复用 .dp-pop 的外观，定位跟随 anchor，点外面关闭。
+ * 共享 M3 弹层、自绘下拉、日期/时间选择与确认对话框。
+ * 桌面端以 Popover / Dialog 呈现，窄屏移动端自动切换为 Modal Bottom Sheet。
  */
 import type { StepEdit } from '../../shared/types';
+import { ICO } from './icons';
+import './widgets.css';
 
 interface DropItem { value: string; label: string }
 
 let openEl: HTMLElement | null = null;
 let outsideHandler: ((ev: MouseEvent) => void) | null = null;
+
+function isCompactViewport(): boolean {
+  return window.innerWidth < 680;
+}
 
 function closeOpen() {
   if (outsideHandler) document.removeEventListener('mousedown', outsideHandler);
@@ -19,8 +25,10 @@ function closeOpen() {
 function place(el: HTMLElement, anchor: HTMLElement) {
   document.body.appendChild(el);
   const r = anchor.getBoundingClientRect();
-  const w = el.offsetWidth, h = el.offsetHeight;
-  const maxW = window.innerWidth - 16, maxH = window.innerHeight - 16;
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const maxW = window.innerWidth - 12;
+  const maxH = window.innerHeight - 12;
   el.style.left = `${Math.max(8, Math.min(r.left, maxW - w))}px`;
   const below = r.bottom + 6;
   el.style.top = `${below + h <= maxH ? below : Math.max(8, r.top - h - 6)}px`;
@@ -33,7 +41,6 @@ function bindOutside(el: HTMLElement, anchor: HTMLElement) {
   setTimeout(() => document.addEventListener('mousedown', outsideHandler!), 0);
 }
 
-/** 自绘下拉。current 为当前 value，命中项高亮并打勾 */
 export function openDropdown(
   anchor: HTMLElement,
   items: DropItem[],
@@ -44,8 +51,8 @@ export function openDropdown(
   const el = document.createElement('div');
   el.className = 'dp-pop dd-pop';
   el.innerHTML = items.map((it) => `
-    <button class="dd-item${it.value === current ? ' on' : ''}" data-v="${esc(it.value)}">
-      <span>${esc(it.label)}</span><span class="dd-check">✓</span>
+    <button type="button" class="dd-item${it.value === current ? ' on' : ''}" data-v="${esc(it.value)}">
+      <span>${esc(it.label)}</span><span class="dd-check">${ICO.check(15)}</span>
     </button>`).join('');
   place(el, anchor);
   openEl = el;
@@ -60,14 +67,13 @@ export function openDropdown(
 }
 
 const ROW = 34;
-const PAD = 2; // 上下各补两格，让两端也有内容可滚，不会露出空白
+const PAD = 2;
 
 function clockHint(hh: number, mm: number): string {
   const period = hh < 5 ? '凌晨' : hh < 11 ? '上午' : hh < 13 ? '中午' : hh < 18 ? '下午' : '晚上';
   return `${period} ${hh} 点${mm ? ` ${mm} 分` : '整'}`;
 }
 
-/** "23:30 / 晚上8点 / 下午3:15" -> HH:MM。解析不了返回 null */
 function parseClock(s: string): { hh: number; mm: number } | null {
   const t = s.trim();
   const valid = (h: number, m: number) => (h >= 0 && h < 24 && m >= 0 && m < 60 ? { hh: h, mm: m } : null);
@@ -86,27 +92,19 @@ function parseClock(s: string): { hh: number; mm: number } | null {
   return null;
 }
 
-/**
- * 自绘时间选择。HH:MM，任意分钟可选。滚轮 + 顶部输入 + 常用快捷。
- * 一次建 DOM，之后只改 transform，不重建列表（重建会让选中项跳动）。
- */
 export function openTimePicker(
-  anchor: HTMLElement,
+  anchor: HTMLElement | null,
   value: string,
   onPick: (value: string) => void,
+  opts: { modal?: boolean } = {},
 ) {
-  closeOpen();
+  const asModal = opts.modal || !anchor || isCompactViewport();
+  if (!asModal) closeOpen();
   const [h0, m0] = value.split(':').map(Number);
   let hh = Number.isFinite(h0) ? h0 : 0;
   let mm = Number.isFinite(m0) ? m0 : 0;
   const p = (n: number) => String(n).padStart(2, '0');
 
-  const el = document.createElement('div');
-  el.className = 'dp-pop tp-pop';
-  el.tabIndex = -1;
-  openEl = el;
-
-  // 环形补格：i=-2..total+1，data-i 是取模后的真实值
   const track = (total: number) => {
     let out = '';
     for (let i = -PAD; i < total + PAD; i++) {
@@ -116,16 +114,20 @@ export function openTimePicker(
     return out;
   };
 
+  const el = document.createElement('div');
+  el.className = asModal ? 'dp-pop tp-pop inline-modal' : 'dp-pop tp-pop';
+  el.tabIndex = -1;
+
   el.innerHTML = `
     <div class="tp-top">
-      <button class="tp-read" data-tp="edit" title="点击直接输入">
+      <button type="button" class="tp-read" data-tp="edit" title="点击直接输入">
         <span class="tp-time" id="tp-time"></span>
         <span class="tp-ampm" id="tp-ampm"></span>
       </button>
       <div class="tp-hint" id="tp-hint"></div>
     </div>
     <div class="tp-edit" hidden>
-      <input class="tp-input" id="tp-input" placeholder="23:30 / 晚上8点" />
+      <input class="wd-input" id="tp-input" placeholder="23:30 / 晚上8点" />
       <div class="tp-edit-tip">支持 23:30、8点、晚上8点半、下午3:15</div>
     </div>
     <div class="tp-wheel-wrap">
@@ -137,15 +139,21 @@ export function openTimePicker(
       </div>
     </div>
     <div class="tp-chips">
-      <button class="tp-chip" data-tp="now">现在</button>
-      <button class="tp-chip" data-tp="hour">整点</button>
-      <button class="tp-chip" data-tp="plus15">+15 分</button>
-      <button class="tp-chip" data-tp="plus60">+1 小时</button>
+      <button type="button" class="tp-chip" data-tp="now">现在</button>
+      <button type="button" class="tp-chip" data-tp="hour">整点</button>
+      <button type="button" class="tp-chip" data-tp="plus15">+15 分</button>
+      <button type="button" class="tp-chip" data-tp="plus60">+1 小时</button>
     </div>
     <div class="dp-foot">
-      <button class="btn sm" data-tp="cancel">取消</button>
-      <button class="btn solid sm" data-tp="ok">确定</button>
+      <button type="button" class="wd-btn" data-tp="cancel">取消</button>
+      <button type="button" class="wd-btn filled" data-tp="ok">确定</button>
     </div>`;
+
+  let mask: HTMLElement | null = null;
+  const close = () => {
+    if (mask) { mask.remove(); mask = null; }
+    else closeOpen();
+  };
 
   const q = <T extends HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
   let col: 'h' | 'm' = 'h';
@@ -198,16 +206,14 @@ export function openTimePicker(
 
   el.addEventListener('click', (ev) => {
     const t = ev.target as HTMLElement;
-
     const cv = t.closest<HTMLElement>('.tp-cv');
     if (cv) {
       const trackEl = cv.closest<HTMLElement>('.tp-col')!;
       const which = trackEl.dataset.col as 'h' | 'm';
       col = which;
       const cells = [...trackEl.querySelectorAll('.tp-cv')];
-      const delta = cells.indexOf(cv) - PAD; // 第 2 行（索引 PAD）是选中位
-      const cur = which === 'h' ? hh : mm;
-      setCol(which, cur + delta);
+      const delta = cells.indexOf(cv) - PAD;
+      setCol(which, (which === 'h' ? hh : mm) + delta);
       return;
     }
     const colEl = t.closest<HTMLElement>('.tp-col');
@@ -215,11 +221,9 @@ export function openTimePicker(
 
     const act = t.closest<HTMLElement>('[data-tp]')?.dataset.tp;
     if (act === 'edit') { setEditing(true); return; }
-    if (act === 'cancel') { closeOpen(); return; }
-    if (act === 'ok') { onPick(`${p(hh)}:${p(mm)}`); closeOpen(); return; }
-    if (act === 'now') {
-      const d = new Date(); hh = d.getHours(); mm = d.getMinutes(); paint(); return;
-    }
+    if (act === 'cancel') { close(); return; }
+    if (act === 'ok') { onPick(`${p(hh)}:${p(mm)}`); close(); return; }
+    if (act === 'now') { const d = new Date(); hh = d.getHours(); mm = d.getMinutes(); paint(); return; }
     if (act === 'hour') { mm = 0; paint(); return; }
     if (act === 'plus15') { const n = hh * 60 + mm + 15; hh = Math.floor(n / 60) % 24; mm = n % 60; paint(); return; }
     if (act === 'plus60') { hh = (hh + 1) % 24; paint(); return; }
@@ -232,21 +236,19 @@ export function openTimePicker(
   });
 
   el.addEventListener('keydown', (ev) => {
-    const key = ev.key;
     if (editing) {
-      if (key === 'Enter') { ev.preventDefault(); applyInput(); }
-      else if (key === 'Escape') { ev.preventDefault(); setEditing(false); }
+      if (ev.key === 'Enter') { ev.preventDefault(); applyInput(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); setEditing(false); }
       return;
     }
-    if (key === 'ArrowUp') { ev.preventDefault(); setCol(col, (col === 'h' ? hh : mm) + 1); }
-    else if (key === 'ArrowDown') { ev.preventDefault(); setCol(col, (col === 'h' ? hh : mm) - 1); }
-    else if (key === 'ArrowLeft') { ev.preventDefault(); col = 'h'; }
-    else if (key === 'ArrowRight') { ev.preventDefault(); col = 'm'; }
-    else if (key === 'Enter') { ev.preventDefault(); onPick(`${p(hh)}:${p(mm)}`); closeOpen(); }
-    else if (key === 'Escape') { ev.preventDefault(); closeOpen(); }
+    if (ev.key === 'ArrowUp') { ev.preventDefault(); setCol(col, (col === 'h' ? hh : mm) + 1); }
+    else if (ev.key === 'ArrowDown') { ev.preventDefault(); setCol(col, (col === 'h' ? hh : mm) - 1); }
+    else if (ev.key === 'ArrowLeft') { ev.preventDefault(); col = 'h'; }
+    else if (ev.key === 'ArrowRight') { ev.preventDefault(); col = 'm'; }
+    else if (ev.key === 'Enter') { ev.preventDefault(); onPick(`${p(hh)}:${p(mm)}`); close(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); close(); }
   });
 
-  // 滚轮切值。需要 passive:false 才能 preventDefault，否则弹层后面的页面会跟着滚
   el.addEventListener('wheel', (ev) => {
     if (editing) return;
     const colEl = (ev.target as HTMLElement).closest<HTMLElement>('.tp-col');
@@ -258,52 +260,202 @@ export function openTimePicker(
   }, { passive: false });
 
   paint();
-  place(el, anchor);
-  bindOutside(el, anchor);
+  if (asModal) {
+    mask = document.createElement('div');
+    mask.className = `md-mask${isCompactViewport() ? ' sheet-mode' : ''}`;
+    const dlg = document.createElement('div');
+    dlg.className = 'md-dialog sm';
+    dlg.innerHTML = '<div class="md-drag-bar"></div><div class="md-dialog-head"><h3>选择时刻</h3></div><div class="md-dialog-body"></div>';
+    dlg.querySelector('.md-dialog-body')!.appendChild(el);
+    mask.appendChild(dlg);
+    mask.addEventListener('mousedown', (ev) => { if (ev.target === mask) close(); });
+    document.body.appendChild(mask);
+  } else {
+    openEl = el;
+    place(el, anchor!);
+    bindOutside(el, anchor!);
+  }
   el.focus();
 }
 
-/**
- * 拆小步骤编辑。带出已有步骤及 id，可改文字、删行、加行；三处入口共用同一份编辑器。
- */
+/** 跨端日期时间选择器：桌面传 anchor 就近展开，移动端以 M3 Bottom Sheet 呈现 */
+export function openDateTimePicker(opts: {
+  initial: number | null;
+  now: number;
+  anchor?: HTMLElement | null;
+  modal?: boolean;
+  title?: string;
+  onPick: (at: number) => void;
+}) {
+  const { initial, now, anchor, title = '选择日期与时刻', onPick } = opts;
+  const asModal = opts.modal || !anchor || isCompactViewport();
+  if (!asModal) closeOpen();
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const dateKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const selected = new Date(initial ?? now + 3600_000);
+  let hh = selected.getHours();
+  let mm = selected.getMinutes();
+  let viewY = selected.getFullYear();
+  let viewM = selected.getMonth();
+
+  const pop = document.createElement('div');
+  pop.className = asModal ? 'dp-pop inline-modal' : 'dp-pop';
+
+  let mask: HTMLElement | null = null;
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    if (mask) { mask.remove(); mask = null; }
+    else closeOpen();
+  };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+
+  const commit = (at: number) => { onPick(at); close(); };
+  const atTime = (d: Date, h: number, m: number) => {
+    const x = new Date(d);
+    x.setHours(h, m, 0, 0);
+    return x;
+  };
+
+  const render = () => {
+    const lead = new Date(viewY, viewM, 1).getDay();
+    const total = new Date(viewY, viewM + 1, 0).getDate();
+    const cells: string[] = [];
+    for (let i = 0; i < lead; i++) cells.push('<span></span>');
+    for (let d = 1; d <= total; d++) {
+      const key = `${viewY}-${pad(viewM + 1)}-${pad(d)}`;
+      const on = key === dateKey(selected);
+      const isToday = key === dateKey(new Date(now));
+      cells.push(`<button type="button" class="dp-day${on ? ' on' : ''}${isToday ? ' today' : ''}" data-day="${key}">${d}</button>`);
+    }
+    pop.innerHTML = `
+      <div class="dp-quick">
+        <button type="button" data-dp="today9">今天 9:00</button>
+        <button type="button" data-dp="today18">今晚 18:00</button>
+        <button type="button" data-dp="tomorrow9">明早 9:00</button>
+        <button type="button" data-dp="tomorrow18">明晚 18:00</button>
+        <button type="button" data-dp="week">下周一 9:00</button>
+        <button type="button" data-dp="hour">1 小时后</button>
+      </div>
+      <div class="dp-month">
+        <button type="button" class="wd-btn icon" data-dp="prev" aria-label="上个月">${ICO.chevronLeft(16)}</button>
+        <b>${viewY} 年 ${viewM + 1} 月</b>
+        <button type="button" class="wd-btn icon" data-dp="next" aria-label="下个月">${ICO.chevronRight(16)}</button>
+      </div>
+      <div class="dp-grid">
+        ${['日', '一', '二', '三', '四', '五', '六'].map((w) => `<span class="dp-w">${w}</span>`).join('')}
+        ${cells.join('')}
+      </div>
+      <div class="dp-time">
+        <button type="button" class="dp-time-btn" id="dp-time-btn" data-v="${pad(hh)}:${pad(mm)}">
+          <span>时刻 ${pad(hh)}:${pad(mm)}</span><span>${ICO.clock(16)}</span>
+        </button>
+      </div>
+      <div class="dp-foot">
+        <button type="button" class="wd-btn" data-dp="cancel">取消</button>
+        <button type="button" class="wd-btn filled" data-dp="ok">确定</button>
+      </div>`;
+  };
+
+  pop.addEventListener('click', (ev) => {
+    const t = ev.target as HTMLElement;
+    const tb = t.closest<HTMLElement>('#dp-time-btn');
+    if (tb) {
+      openTimePicker(asModal ? null : tb, tb.dataset.v ?? '09:00', (v) => {
+        const [h, m] = v.split(':').map(Number);
+        hh = h; mm = m;
+        render();
+      }, { modal: asModal });
+      return;
+    }
+    const day = t.closest<HTMLElement>('[data-day]');
+    if (day) {
+      const [y, m, d] = day.dataset.day!.split('-').map(Number);
+      selected.setFullYear(y, m - 1, d);
+      render();
+      return;
+    }
+    const act = t.closest<HTMLElement>('[data-dp]')?.dataset.dp;
+    if (!act) return;
+    if (act === 'prev' || act === 'next') {
+      viewM += act === 'next' ? 1 : -1;
+      if (viewM < 0) { viewM = 11; viewY--; }
+      if (viewM > 11) { viewM = 0; viewY++; }
+      render();
+      return;
+    }
+    if (act === 'cancel') { close(); return; }
+    if (act === 'ok') { commit(atTime(selected, hh, mm).getTime()); return; }
+    const base = new Date(now);
+    if (act === 'tomorrow9' || act === 'tomorrow18') base.setDate(base.getDate() + 1);
+    if (act === 'week') {
+      const delta = (8 - base.getDay()) % 7 || 7;
+      base.setDate(base.getDate() + delta);
+    }
+    if (act === 'hour') { commit(now + 3600_000); return; }
+    const hour = act.endsWith('18') ? 18 : 9;
+    const at = atTime(base, hour, 0);
+    commit(at.getTime() <= now ? at.getTime() + 86400_000 : at.getTime());
+  });
+
+  render();
+  if (asModal) {
+    mask = document.createElement('div');
+    mask.className = `md-mask${isCompactViewport() ? ' sheet-mode' : ''}`;
+    const dlg = document.createElement('div');
+    dlg.className = 'md-dialog sm';
+    dlg.innerHTML = `<div class="md-drag-bar"></div><div class="md-dialog-head"><h3>${esc(title)}</h3></div><div class="md-dialog-body"></div>`;
+    dlg.querySelector('.md-dialog-body')!.appendChild(pop);
+    mask.appendChild(dlg);
+    mask.addEventListener('mousedown', (ev) => { if (ev.target === mask) close(); });
+    document.body.appendChild(mask);
+  } else {
+    openEl = pop;
+    place(pop, anchor!);
+    bindOutside(pop, anchor!);
+  }
+}
+
+/** 拆小步骤编辑对话框：支持改文字、删行、加行，两端统一 M3 外观 */
 export function openStepsDialog(initial: StepEdit[]): Promise<StepEdit[] | null> {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    Object.assign(overlay.style, {
-      position: 'fixed', inset: '0', zIndex: '9999', background: 'rgba(0,0,0,.55)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
-    });
-    const box = document.createElement('div');
-    Object.assign(box.style, {
-      background: 'var(--card, #fff)', color: 'var(--foreground, inherit)',
-      borderRadius: '12px', padding: '18px', width: 'min(440px, 100%)',
-      maxHeight: '90vh', overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,.35)',
-    });
-    box.innerHTML = `
-      <h3 style="margin:0 0 6px">${initial.some((s) => s.id) ? '编辑步骤' : '拆成小步骤'}</h3>
-      <p class="hint" style="margin:0 0 12px">可改文字、删行或加行，保存后一次更新；空行会忽略。</p>`;
-    const rows = document.createElement('div');
-    rows.style.display = 'grid';
-    rows.style.gap = '8px';
-    box.appendChild(rows);
+    const mask = document.createElement('div');
+    mask.className = `md-mask${isCompactViewport() ? ' sheet-mode' : ''}`;
+    const dlg = document.createElement('div');
+    dlg.className = 'md-dialog';
+    dlg.setAttribute('role', 'dialog');
+    dlg.setAttribute('aria-modal', 'true');
+    dlg.innerHTML = `
+      <div class="md-drag-bar"></div>
+      <div class="md-dialog-head">
+        <h3>${initial.some((s) => s.id) ? '编辑推进步骤' : '拆成小步骤'}</h3>
+      </div>
+      <p class="md-dialog-sub">把大事项拆成可立刻动手的小步。保存后一次生效，空行会自动忽略。</p>
+      <div class="md-dialog-body"><div class="wd-steps" id="wd-steps"></div></div>
+      <div class="md-dialog-foot">
+        <button type="button" class="wd-btn tonal" id="wd-add">+ 添加一步</button>
+        <span class="sp"></span>
+        <button type="button" class="wd-btn" id="wd-cancel">取消</button>
+        <button type="button" class="wd-btn filled" id="wd-save">保存</button>
+      </div>`;
+    mask.appendChild(dlg);
 
+    const rows = dlg.querySelector<HTMLElement>('#wd-steps')!;
     const close = (value: StepEdit[] | null) => {
       document.removeEventListener('keydown', onKey);
-      overlay.remove();
+      mask.remove();
       resolve(value);
     };
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') close(null);
-    };
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') close(null); };
     document.addEventListener('keydown', onKey);
 
     const addRow = (edit: StepEdit = { text: '' }, focus = false) => {
       const row = document.createElement('div');
+      row.className = 'wd-step-row';
       row.dataset.stepId = edit.id ?? '';
-      row.style.display = 'flex';
-      row.style.gap = '8px';
       const input = document.createElement('input');
-      input.className = 'input';
+      input.className = 'wd-input';
       input.value = edit.text;
       input.placeholder = '这一步要做什么';
       input.addEventListener('keydown', (ev) => {
@@ -314,9 +466,10 @@ export function openStepsDialog(initial: StepEdit[]): Promise<StepEdit[] | null>
       });
       const del = document.createElement('button');
       del.type = 'button';
-      del.className = 'btn sm ghost';
-      del.textContent = '×';
+      del.className = 'wd-btn icon danger-text';
+      del.innerHTML = ICO.close(16);
       del.title = '删掉这一行';
+      del.setAttribute('aria-label', '删掉这一行');
       del.onclick = () => {
         if (rows.children.length > 1) row.remove();
         else input.value = '';
@@ -329,24 +482,9 @@ export function openStepsDialog(initial: StepEdit[]): Promise<StepEdit[] | null>
     initial.forEach((v) => addRow(v));
     if (!initial.length) addRow({ text: '' }, true);
 
-    const actions = document.createElement('div');
-    actions.className = 'set-actions';
-    actions.style.marginTop = '14px';
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'btn sm';
-    add.textContent = '+ 添加一行';
-    add.onclick = () => addRow({ text: '' }, true);
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'btn sm ghost';
-    cancel.textContent = '取消';
-    cancel.onclick = () => close(null);
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.className = 'btn solid sm';
-    save.textContent = '保存';
-    save.onclick = () => {
+    dlg.querySelector('#wd-add')!.addEventListener('click', () => addRow({ text: '' }, true));
+    dlg.querySelector('#wd-cancel')!.addEventListener('click', () => close(null));
+    dlg.querySelector('#wd-save')!.addEventListener('click', () => {
       const list: StepEdit[] = [];
       for (const row of Array.from(rows.children) as HTMLElement[]) {
         const text = row.querySelector('input')?.value.trim();
@@ -355,39 +493,27 @@ export function openStepsDialog(initial: StepEdit[]): Promise<StepEdit[] | null>
         list.push(id ? { id, text } : { text });
       }
       close(list);
-    };
-    actions.append(add, cancel, save);
-    box.appendChild(actions);
-    overlay.appendChild(box);
-    overlay.addEventListener('mousedown', (ev) => {
-      if (ev.target === overlay) close(null);
     });
-    document.body.appendChild(overlay);
+    mask.addEventListener('mousedown', (ev) => { if (ev.target === mask) close(null); });
+    document.body.appendChild(mask);
   });
 }
 
-/**
- * 延期时间选择。给一组相对时长与几个固定档位；自定义交回调用方弹日期时间选择器。
- * 样式内联，桌面与移动端共用，不依赖各自的样式表。
- */
+/** 延期选择：快捷档位 + 自定义日期时间，统一 M3 Dialog / Bottom Sheet */
 export function openSnoozeDialog(opts: {
   title: string;
   now: number;
   onPick: (at: number) => void;
-  onCustom?: () => void;
+  onCustom?: (anchor: HTMLElement) => void;
 }): void {
   const { title, now, onPick, onCustom } = opts;
-  const overlay = document.createElement('div');
-  Object.assign(overlay.style, {
-    position: 'fixed', inset: '0', zIndex: '9998', background: 'rgba(0,0,0,.55)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
-  });
-  const box = document.createElement('div');
-  Object.assign(box.style, {
-    background: 'var(--card, #fff)', color: 'var(--foreground, inherit)',
-    borderRadius: '12px', padding: '18px', width: 'min(360px, 100%)',
-    maxHeight: '90vh', overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,.35)',
-  });
+  const mask = document.createElement('div');
+  mask.className = `md-mask${isCompactViewport() ? ' sheet-mode' : ''}`;
+  const dlg = document.createElement('div');
+  dlg.className = 'md-dialog sm';
+  dlg.setAttribute('role', 'dialog');
+  dlg.setAttribute('aria-modal', 'true');
+
   const fmt = (ts: number) => {
     const d = new Date(ts);
     const p = (n: number) => String(n).padStart(2, '0');
@@ -402,43 +528,90 @@ export function openSnoozeDialog(opts: {
   const choices: Array<[string, number]> = [
     ['30 分钟后', now + 30 * 60_000],
     ['1 小时后', now + 60 * 60_000],
-    ['3 小时后', now + 180 * 60_000],
+    ['2 小时后', now + 120 * 60_000],
     ['明天早上', dayAt(1)],
     ['3 天后', dayAt(3)],
     ['下周', dayAt(7)],
   ];
-  box.innerHTML = `<h3 style="margin:0 0 12px">${esc(title)}</h3>`;
-  const list = document.createElement('div');
-  list.style.cssText = 'display:grid;gap:6px';
+
+  dlg.innerHTML = `
+    <div class="md-drag-bar"></div>
+    <div class="md-dialog-head"><h3>${esc(title)}</h3></div>
+    <div class="md-dialog-body"><div class="wd-list" id="wd-snooze"></div></div>
+    <div class="md-dialog-foot"><button type="button" class="wd-btn" id="wd-cancel">取消</button></div>`;
+  mask.appendChild(dlg);
+
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    mask.remove();
+  };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+
+  const list = dlg.querySelector<HTMLElement>('#wd-snooze')!;
   for (const [label, at] of choices) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn';
-    b.style.cssText = 'display:flex;justify-content:space-between;width:100%';
-    b.innerHTML = `<span>${label}</span><span style="opacity:.6;font-size:11px">${fmt(at)}</span>`;
-    b.onclick = () => { overlay.remove(); onPick(at); };
+    b.className = 'wd-list-btn';
+    b.innerHTML = `<span>${label}</span><span class="sub">${fmt(at)}</span>`;
+    b.onclick = () => { close(); onPick(at); };
     list.appendChild(b);
   }
   if (onCustom) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'btn sm ghost';
-    b.style.cssText = 'width:100%;margin-top:4px';
-    b.textContent = '自定义日期时间…';
-    b.onclick = () => { overlay.remove(); onCustom(); };
+    b.className = 'wd-list-btn accent';
+    b.innerHTML = `<span>自定义日期时间…</span><span>${ICO.clock(16)}</span>`;
+    b.onclick = () => {
+      onCustom(b);
+      close();
+    };
     list.appendChild(b);
   }
-  box.appendChild(list);
-  const cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.className = 'btn sm ghost';
-  cancel.style.cssText = 'margin-top:14px';
-  cancel.textContent = '取消';
-  cancel.onclick = () => overlay.remove();
-  box.appendChild(cancel);
-  overlay.appendChild(box);
-  overlay.addEventListener('mousedown', (ev) => { if (ev.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
+  dlg.querySelector('#wd-cancel')!.addEventListener('click', close);
+  mask.addEventListener('mousedown', (ev) => { if (ev.target === mask) close(); });
+  document.body.appendChild(mask);
+}
+
+/** M3 确认弹窗（替代原生 window.confirm，默认焦点在取消避免回车误删） */
+export function openConfirmDialog(opts: {
+  title: string;
+  detail?: string;
+  confirmText?: string;
+  cancelText?: string;
+  danger?: boolean;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const mask = document.createElement('div');
+    mask.className = 'md-mask';
+    const dlg = document.createElement('div');
+    dlg.className = 'md-dialog sm';
+    dlg.setAttribute('role', 'alertdialog');
+    dlg.setAttribute('aria-modal', 'true');
+    dlg.innerHTML = `
+      <div class="md-dialog-head"><h3>${esc(opts.title)}</h3></div>
+      ${opts.detail ? `<p class="md-dialog-sub">${esc(opts.detail)}</p>` : ''}
+      <div class="md-dialog-foot">
+        <button type="button" class="wd-btn" id="cf-cancel">${esc(opts.cancelText ?? '取消')}</button>
+        <button type="button" class="wd-btn ${opts.danger ? 'danger' : 'filled'}" id="cf-ok">${esc(opts.confirmText ?? '确定')}</button>
+      </div>`;
+    mask.appendChild(dlg);
+
+    const close = (ok: boolean) => {
+      document.removeEventListener('keydown', onKey);
+      mask.remove();
+      resolve(ok);
+    };
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') close(false); };
+    document.addEventListener('keydown', onKey);
+
+    const cancelBtn = dlg.querySelector<HTMLButtonElement>('#cf-cancel')!;
+    cancelBtn.onclick = () => close(false);
+    dlg.querySelector<HTMLButtonElement>('#cf-ok')!.onclick = () => close(true);
+    mask.addEventListener('mousedown', (ev) => { if (ev.target === mask) close(false); });
+    document.body.appendChild(mask);
+    cancelBtn.focus();
+  });
 }
 
 function esc(s: string): string {

@@ -79,7 +79,7 @@ console.log('\n打扰账本 = 投递 outbox');
 ok('nudges 表是唯一 outbox', /CREATE TABLE IF NOT EXISTS nudges/.test(src.sql) && !/CREATE TABLE IF NOT EXISTS deliveries/.test(src.sql));
 ok('有 markDelivered', /markDelivered/.test(src.nudges));
 ok('轮转器独立于 tick', /rotate/.test(src.scheduler));
-ok('fire_key 去重', /fire_key/.test(src.sql) && /createNudge\(/.test(src.drive) && /-due-\$\{p\.dueAt\}/.test(src.drive));
+ok('fire_key 去重', /fire_key/.test(src.sql) && /createNudge\(/.test(src.drive) && /due-\$\{p\.dueAt\}/.test(src.drive));
 ok('无在线设备时保持 pending 等补发', /hasOnline/.test(src.scheduler) && /markFailed\(n\.id, '设备不在线'\)/.test(src.scheduler));
 ok('失败记 last_error 不抛异常', /last_error/.test(src.sql) && /markFailed/.test(src.scheduler));
 
@@ -113,7 +113,10 @@ ok('临近梯度四档可见', /u-soon/.test(src.styles) && /u-close/.test(src.s
 ok('看板带累计完成数', /completedTotal/.test(src.types) && /completedTotal/.test(src.stats));
 ok('跟进动作按钮', /完成|延期|拆小|归档/.test(src.main));
 ok('强弱驱动表现', /strengthOfLevel/.test(src.alarm) && /onNotify/.test(src.alarm) && /onTakeover/.test(src.alarm));
-ok('弱提醒重复 1/10/30/60 后每 120 分钟', /120 \* 60_000/.test(src.alarm));
+ok('强提醒逾期衰减复催（15m/1h/每2h）', /strongRenudgeSlot/.test(src.policy) && /strongRenudgeSlot/.test(src.drive));
+ok('弱提醒 +30m 单条与 3h 汇总', /weakSingleSlot/.test(src.policy) && /WEAK_DIGEST_INTERVAL_MS/.test(src.policy) && /pursuit\.overdue_digest/.test(src.drive));
+ok('上线 welcome.overdue 补弹', /overdue/.test(read('server/src/routes/stream.ts')) && /msg\.overdue/.test(src.main) && /msg\.overdue/.test(read('app/src/ui/mobile.ts')));
+ok('跟进后清理 pending nudge', /ackPendingForPursuit/.test(src.drive) && /pursuit\.status !== 'active'/.test(src.scheduler));
 ok('强提醒多条合并逐条处理', /takeoverQueue/.test(src.main) && /items: Pursuit\[\]/.test(src.takeover));
 ok('takeover 关不掉', /takeover:close-blocked/.test(src.takeover));
 ok('静音时段处理', /inQuietHours/.test(src.alarm));
@@ -166,10 +169,14 @@ ok('输入框显式声明 color', /\.input \{[\s\S]{0,200}?color: var\(--text\)/
 ok('placeholder 有专门样式', /::placeholder/.test(src.styles));
 
 console.log('\n主题');
+const tokensCss = read('app/src/tokens.css');
 const styleBody = src.styles.slice(src.styles.indexOf('\n* {'));
-const hardCoded = [...styleBody.matchAll(/#[0-9A-Fa-f]{3,8}\b|rgba?\(/g)];
+const mobileStyleBody = read('app/src/styles-mobile.css');
+const widgetsStyleBody = read('app/src/widgets.css');
+const hardCoded = [styleBody, mobileStyleBody, widgetsStyleBody]
+  .flatMap((css) => [...css.matchAll(/#[0-9A-Fa-f]{3,8}\b|rgba?\(/g)]);
 ok('规则区没有写死颜色', hardCoded.length === 0, `还有 ${hardCoded.length} 处`);
-ok('有莫兰迪主题', /:root\[data-theme="morandi"\]/.test(src.styles));
+ok('有莫兰迪主题', /:root\[data-theme="morandi"\]/.test(tokensCss));
 const themeSrc = read('app/src/theme.ts');
 ok('主题写在 html 的 data-theme 上', /dataset\.theme/.test(themeSrc));
 ok('主题选择会持久化', /localStorage\.setItem/.test(themeSrc));

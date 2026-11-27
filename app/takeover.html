@@ -7,38 +7,33 @@
 <body>
   <div class="tk" id="tk">
     <div class="tk-warn" aria-hidden="true">
-      <span class="tk-warn-label">⚠ WARNING</span>
+      <span class="tk-warn-label" id="tk-warn-label">WARNING</span>
       <div class="tk-warn-track"><span class="tk-warn-text">WARNING &nbsp;///&nbsp; WARNING &nbsp;///&nbsp; 强提醒到点，必须处理 &nbsp;///&nbsp; WARNING &nbsp;///&nbsp; WARNING &nbsp;///&nbsp; 强提醒到点，必须处理 &nbsp;///&nbsp;</span></div>
     </div>
 
     <div class="tk-main">
-      <div class="tk-clock" id="tk-clock">--:--</div>
+      <div class="tk-head-row">
+        <div class="tk-clock" id="tk-clock">--:--</div>
+        <div class="tk-queue-badge" id="tk-queue" hidden></div>
+      </div>
       <h2 class="tk-title" id="tk-title"></h2>
       <div class="tk-note" id="tk-note" hidden></div>
+      <div class="tk-step-card" id="tk-step-card" hidden></div>
       <div class="tk-target" id="tk-target"></div>
       <div class="tk-where" id="tk-where"></div>
 
       <div class="tk-prog">
         <div class="meta">
           <span id="tk-stage">强提醒 · 到点了，先给它一个去向</span>
-          <span id="tk-elapsed">已等待 0 秒</span>
+          <span class="mono" id="tk-elapsed">已等待 0 秒</span>
         </div>
         <div class="bar"><i id="tk-bar"></i></div>
       </div>
     </div>
 
-    <div class="tk-acts" id="tk-acts">
-      <button class="btn solid" data-act="done">完成</button>
-      <button class="btn ghost" data-act="open">打开链接</button>
-      <button class="btn tk-silence" data-act="silence">静音 10 分钟</button>
-    </div>
-
-    <div class="tk-snooze" id="tk-snooze">
-      <span class="lb">推迟到</span>
-      <button class="btn sm ghost" data-act="sn10">10 分钟后</button>
-      <button class="btn sm ghost" data-act="sn30">30 分钟后</button>
-      <button class="btn sm ghost" data-act="sn60">1 小时后</button>
-      <button class="btn sm ghost" data-act="sntom">明天同一时间</button>
+    <div class="tk-foot">
+      <div class="tk-acts" id="tk-acts"></div>
+      <div class="tk-snooze" id="tk-snooze"></div>
     </div>
   </div>
 

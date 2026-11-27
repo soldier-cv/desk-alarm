@@ -1,25 +1,25 @@
 /**
- * 主窗口：「今日推进」工作台。持有 HTTP/WS 连接、跟进控制器和本地读模型。
- * 服务端是唯一的计时与策略权威，这里只负责呈现和把意图送回去。
+ * 桌面端「今日推进」工作台（M3 Navigation Drawer/Rail + 自适应 List-Detail）。
+ * 服务端是唯一计时与策略权威，客户端负责低摩擦展示与跟进意图回传。
  */
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { autoUpdateEnabled, initUpdater, onUpdateChange, openAbout, setAutoUpdate, updateBadge } from '../about';
 import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
-  hhmm, hostOf, importanceForStrength, levelForStrength, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized,
+  hhmm, hostOf, importanceForStrength, lateBy, levelForStrength, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized,
   parseInput, probeServer, saveConfig, serverNow, staleLabel, switchServer,
   versionOf, warmthOf, FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, rowActions,
   type CountsResult, type Device, type Followup, type FollowupAction, type FocusResult,
-  type MyStats, type Overview, type Pursuit, type PursuitStatus, type PursuitView,
-  type ReminderStrength,
-  type RecurrenceRule, type ServerMessage, type Settings, type StepEdit, type StepState, type Urgency,
+  type MyStats, type Pursuit, type PursuitStatus, type PursuitView,
+  type ReminderStrength, type ServerMessage, type Settings, type StepEdit, type StepState,
 } from '../api';
-import { actionsFor, effectiveImportance } from '../../../shared/types';
-import { buildRecurrence, fieldsFor, ruleFields } from './recurrence-form';
+import { actionsFor } from '../../../shared/types';
+import { buildRecurrence, fieldsFor, ruleFields, type Freq } from './recurrence-form';
 import { FollowupController } from '../alarm';
+import { ICO } from '../icons';
 import { THEMES, applyTheme, loadTheme, saveTheme } from '../theme';
-import { openDropdown, openStepsDialog, openTimePicker } from '../widgets';
+import { openConfirmDialog, openDateTimePicker, openDropdown, openSnoozeDialog, openStepsDialog, openTimePicker } from '../widgets';
 import '../styles.css';
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -43,7 +43,6 @@ function native<T = void>(cmd: string, args?: Record<string, unknown>): Promise<
   });
 }
 
-/** 无返回值的命令：成功 resolve(true)，失败由调用方看到错误提示 */
 async function nativeOk(cmd: string, args?: Record<string, unknown>): Promise<boolean> {
   if (!hasTauri()) { flash('这个功能只在桌面客户端里可用'); return false; }
   try {
@@ -57,7 +56,7 @@ async function nativeOk(cmd: string, args?: Record<string, unknown>): Promise<bo
 
 function quiet<T = void>(cmd: string, args?: Record<string, unknown>): void {
   if (!hasTauri()) return;
-  void invoke<T>(cmd, args).catch(() => { /* 没有通知权限就算了，横幅还在 */ });
+  void invoke<T>(cmd, args).catch(() => {});
 }
 
 function ringPing(args: Record<string, unknown>) {
@@ -67,23 +66,24 @@ function ringPing(args: Record<string, unknown>) {
 
 function send(name: string, payload: unknown = {}) {
   if (!hasTauri()) return;
-  void emit(name, payload).catch(() => { /* 窗口已关 */ });
+  void emit(name, payload).catch(() => {});
 }
-
-/* ------------------------------------------------------------ 状态 */
 
 type View = PursuitView | 'mystats' | 'dashboard' | 'tokens' | 'settings';
 
 const VIEWS: Record<View, { title: string; sub: string }> = {
   today: { title: '今日待办', sub: '今天到期或已逾期，按截止时间从近到远' },
-  todo: { title: '待办', sub: '所有未完成的事' },
-  done: { title: '已完成', sub: '推进完成的事项' },
-  archived: { title: '已归档', sub: '不要了或长期停滞的事项' },
-  mystats: { title: '看板', sub: '只看你自己的推进情况' },
+  todo: { title: '全部待办', sub: '所有未完成的推进项' },
+  done: { title: '已完成', sub: '已推进收尾的事项' },
+  archived: { title: '已归档', sub: '主动结束或超期自动归档的事项' },
+  mystats: { title: '推进看板', sub: '连续推进节奏与近 7 天完成情况' },
   dashboard: { title: '系统看板', sub: '服务端总览，仅管理员可见，每 5 秒刷新' },
-  tokens: { title: 'Agent 令牌', sub: '给 MCP / Agent 用的访问令牌' },
-  settings: { title: '设置', sub: '推进节奏、设备安全、用户与日志' },
+  tokens: { title: 'Agent 令牌', sub: '签发和管理给 MCP / Agent 使用的访问令牌' },
+  settings: { title: '设置', sub: '推进节奏、外观主题、设备、用户与日志' },
 };
+
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+const RAIL_KEY = 'deskalarm.rail';
 
 const state = {
   view: 'today' as View,
@@ -93,10 +93,12 @@ const state = {
   devices: [] as Device[],
   counts: null as CountsResult | null,
   selected: null as string | null,
+  rail: localStorage.getItem(RAIL_KEY) === '1',
 };
 
 let rt: Realtime | null = null;
 let linkState: 'connecting' | 'open' | 'closed' = 'closed';
+
 interface TakeoverPayload {
   items: Pursuit[];
   index: number;
@@ -104,11 +106,35 @@ interface TakeoverPayload {
   serverTs: number;
   muted: boolean;
 }
-/** 同时到点的强提醒合并成一个队列，逐条处理；队列空了才允许关窗 */
 let takeoverQueue: Pursuit[] = [];
 let takeoverReason = '';
 let lastTakeover: TakeoverPayload | null = null;
 let takeoverTimer: number | null = null;
+let lastWeakDigestAt = 0;
+const lastStrongPingAt = new Map<string, number>();
+
+function scheduleTakeover() {
+  if (takeoverTimer !== null) clearTimeout(takeoverTimer);
+  takeoverTimer = window.setTimeout(() => {
+    takeoverTimer = null;
+    showTakeover();
+  }, 400);
+}
+
+function enqueueTakeover(p: Pursuit, reason: string, ring = true) {
+  const idx = takeoverQueue.findIndex((x) => x.id === p.id);
+  if (idx >= 0) takeoverQueue[idx] = p;
+  else takeoverQueue.push(p);
+  takeoverReason = reason;
+  if (ring) {
+    const prev = lastStrongPingAt.get(p.id) ?? 0;
+    if (Date.now() - prev > 5_000) {
+      lastStrongPingAt.set(p.id, Date.now());
+      ringPing({ title: `强提醒：${p.text}`, body: reason });
+    }
+  }
+  scheduleTakeover();
+}
 
 function showTakeover() {
   if (!takeoverQueue.length) {
@@ -123,7 +149,6 @@ function showTakeover() {
     serverTs: serverNow(),
     muted: false,
   };
-  // Rust 命令签名是 show_takeover(payload)，Tauri 按参数名取键，别把字段摊到顶层
   void invoke('show_takeover', { payload: lastTakeover }).catch((err: unknown) => {
     flash('接管窗口启动失败：' + (err instanceof Error ? err.message : String(err)));
   });
@@ -136,51 +161,60 @@ function dropTakeoverItem(id: string) {
   return true;
 }
 
-/** 接管窗口的 webview 未必在亮窗时已加载完；它加载完会说一声，这里补发一次 payload */
 listen('takeover:ready', () => {
   if (lastTakeover) void emit('takeover:show', lastTakeover);
 });
-/** 本机刚处理过的项，别把服务端广播误报成"别的设备处理了" */
+
 const localHandled = new Map<string, number>();
-let editingLocal = false;
 let platform: 'web' | 'windows' | 'macos' | 'linux' | 'android' = 'web';
 const isDesktop = () => platform === 'windows' || platform === 'macos' || platform === 'linux';
 let captureStrength: ReminderStrength = 'weak';
+
+function selectedWeekdays(raw: string): Set<number> {
+  const set = new Set<number>();
+  for (const part of raw.split(/[,，\s]+/)) {
+    if (!part) continue;
+    const n = Number(part);
+    if (Number.isInteger(n) && n >= 0 && n <= 6) set.add(n);
+  }
+  return set;
+}
 
 function ruleFieldsHtml(
   freq: string,
   rf: { byWeekday: string; byMonthday: string; byMonth: string },
 ): string {
-  const shown = fieldsFor(freq as Parameters<typeof fieldsFor>[0]);
+  const shown = fieldsFor(freq as Freq);
+  if (!shown.length) return '';
   const label = freq === 'yearly' ? '几号' : freq === 'quarterly' ? '每季度几号' : '每月几号';
+  const pickedDays = selectedWeekdays(rf.byWeekday);
   return `
-    <div class="rule-grid" style="margin-top:8px">
-      ${shown.includes('weekday')
-        ? `<label>周几（0=日，逗号分隔）<input class="input" id="f-byday" value="${esc(rf.byWeekday)}"></label>` : ''}
-      ${shown.includes('month')
-        ? `<label>月份（1-12）<input class="input" id="f-bymonth" type="number" min="1" max="12" value="${esc(rf.byMonth)}"></label>` : ''}
-      ${shown.includes('monthday')
-        ? `<label>${label}<input class="input" id="f-bymonthday" type="number" min="1" max="31" value="${esc(rf.byMonthday)}"></label>` : ''}
-    </div>
-    <div class="set-actions"><button class="btn sm" data-act="save-rule">保存重复</button></div>`;
+    ${shown.includes('weekday') ? `
+      <div class="wd-chips" id="f-wd-chips">
+        ${WEEKDAYS.map((w, i) => `<button type="button" class="wd-chip${pickedDays.has(i) ? ' on' : ''}" data-wd="${i}">周${w}</button>`).join('')}
+      </div>
+      <input type="hidden" id="f-byday" value="${esc(rf.byWeekday)}">` : ''}
+    ${shown.includes('month') || shown.includes('monthday') ? `
+      <div class="rule-grid">
+        ${shown.includes('month') ? `<label>月份（1-12）<input class="input" id="f-bymonth" type="number" min="1" max="12" value="${esc(rf.byMonth)}"></label>` : ''}
+        ${shown.includes('monthday') ? `<label>${label}<input class="input" id="f-bymonthday" type="number" min="1" max="31" value="${esc(rf.byMonthday)}"></label>` : ''}
+      </div>` : ''}
+    <div class="set-actions"><button type="button" class="btn sm tonal" data-act="save-rule">保存重复规则</button></div>`;
 }
 
 const control = new FollowupController({
   onNotify: (p, reason, attempt) => {
+    // 刚上线已汇总过的老逾期弱提醒，60 秒内不再重复刷单条通知
+    if (p.dueAt !== null && serverNow() - p.dueAt > 60_000 && Date.now() - lastWeakDigestAt < 60_000) {
+      return;
+    }
     ringPing({
       title: p.text,
       body: `${reason}${attempt > 1 ? ` · 第 ${attempt} 次` : ''}`,
     });
   },
   onTakeover: (p, reason) => {
-    if (!takeoverQueue.some((x) => x.id === p.id)) takeoverQueue.push(p);
-    takeoverReason = reason;
-    if (takeoverTimer !== null) clearTimeout(takeoverTimer);
-    // 同一 tick 多条强提醒合并成一次亮窗，避免排队连弹
-    takeoverTimer = window.setTimeout(() => {
-      takeoverTimer = null;
-      showTakeover();
-    }, 400);
+    enqueueTakeover(p, reason, true);
   },
   onStop: (p, reason) => {
     if (dropTakeoverItem(p.id)) showTakeover();
@@ -208,8 +242,8 @@ function renderLogin() {
           <label for="base">服务端地址</label>
           <input class="input" id="base" placeholder="http://192.168.1.10:8091" value="${esc(baseValue)}" spellcheck="false" autocomplete="off">
           <div class="login-row">
-            <span class="login-hint" id="probe">端口只填对外服务的那一个</span>
-            <button type="button" class="btn sm" id="test">测试连接</button>
+            <span class="login-hint" id="probe">填 host:port 会自动补 http://</span>
+            <button type="button" class="btn sm tonal" id="test">测试连接</button>
           </div>
         </div>
         <div class="row">
@@ -227,7 +261,7 @@ function renderLogin() {
       <div class="login-foot">
         DeskAlarm · 把想做却总被搁置的事推进下去
         <div class="login-row" style="margin-top:8px">
-          <button type="button" class="btn sm" id="about-link">关于 / 检查更新</button>
+          <button type="button" class="btn sm ghost" id="about-link">关于 / 检查更新</button>
         </div>
       </div>
     </div>
@@ -250,7 +284,7 @@ function renderLogin() {
     if (!username) { err.textContent = '请填用户名'; user.focus(); return; }
     if (!code.value) { err.textContent = '请填密码'; code.focus(); return; }
     go.disabled = true;
-    go.textContent = '登录中';
+    go.textContent = '登录中…';
     try {
       switchServer(norm);
       base.value = norm;
@@ -272,7 +306,7 @@ function renderLogin() {
     const norm = normalizeBaseUrl(base.value);
     if (!norm) { probe.textContent = '地址格式不对'; probe.className = 'login-hint bad'; return; }
     test.disabled = true;
-    probe.textContent = '测试中...';
+    probe.textContent = '测试中…';
     probe.className = 'login-hint';
     const r = await probeServer(norm);
     test.disabled = false;
@@ -299,7 +333,7 @@ function renderSetup() {
           <input class="input" id="base" placeholder="http://192.168.1.10:8091" value="${esc(baseValue)}" spellcheck="false" autocomplete="off">
           <div class="login-row">
             <span class="login-hint" id="probe">端口只填对外服务的那一个</span>
-            <button type="button" class="btn sm" id="test">测试连接</button>
+            <button type="button" class="btn sm tonal" id="test">测试连接</button>
           </div>
         </div>
         <div><label for="su-user">用户名</label><input class="input" id="su-user" autocomplete="username"></div>
@@ -313,8 +347,8 @@ function renderSetup() {
       <div class="login-foot">
         密码至少 8 位，两次输入必须一致。
         <div class="login-row" style="margin-top:8px">
-          <button type="button" class="btn sm" id="to-login">服务端已有管理员？去登录</button>
-          <button type="button" class="btn sm" id="about-link">关于 / 检查更新</button>
+          <button type="button" class="btn sm ghost" id="to-login">已有管理员？去登录</button>
+          <button type="button" class="btn sm ghost" id="about-link">关于 / 检查更新</button>
         </div>
       </div>
     </div>
@@ -357,7 +391,7 @@ function renderSetup() {
     const norm = normalizeBaseUrl(base.value);
     if (!norm) { probe.textContent = '地址格式不对'; probe.className = 'login-hint bad'; return; }
     test.disabled = true;
-    probe.textContent = '测试中...';
+    probe.textContent = '测试中…';
     const r = await probeServer(norm);
     test.disabled = false;
     probe.className = `login-hint ${r.ok ? 'ok' : 'bad'}`;
@@ -373,13 +407,14 @@ function renderSetup() {
 /* ------------------------------------------------------------ 主题 */
 
 function renderThemeButton() {
-  const btn = $<HTMLButtonElement>('#btn-theme');
+  const btn = document.getElementById('btn-theme');
   if (!btn) return;
   const cur = loadTheme();
-  const next = THEMES.find((t) => t.id !== cur)!;
   const now = THEMES.find((t) => t.id === cur)!;
-  btn.textContent = now.label;
-  btn.title = `当前：${now.label}（${now.hint}）。点击切到${next.label}`;
+  const next = THEMES.find((t) => t.id !== cur)!;
+  btn.innerHTML = cur === 'dark' ? ICO.sun(18) : ICO.moon(18);
+  btn.title = `当前：${now.label}（${now.hint}），点击切到${next.label}`;
+  btn.setAttribute('aria-label', btn.title);
 }
 
 function toggleTheme() {
@@ -388,64 +423,109 @@ function toggleTheme() {
   send('theme:changed', { theme: loadTheme() });
 }
 
-/* ------------------------------------------------------------ 主界面 */
+/* ------------------------------------------------------------ 主界面骨架 */
 
 function renderShell() {
+  const u = loadConfig().user;
   document.body.innerHTML = `
-  <div class="app">
-    <div class="topbar">
-      <span class="logo"><i></i></span>
-      <b>今日推进</b>
-      <div class="sp"></div>
-      <div class="conn no-drag" id="btn-server" title="点击切换服务端"><span class="sdot off" id="sdot"></span><span id="stxt">未连接</span></div>
-      <button class="btn sm no-drag" id="btn-theme" title="切换配色"></button>
-      ${isDesktop() ? `
-      <button class="btn sm no-drag" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> 快速记</button>` : ''}
-    </div>
-
-    <div class="capture-bar">
-      <div class="capture-in">
-        <span class="prompt">&gt;</span>
-        <input id="cap" placeholder="想到什么就记下来，回车进待办，带时间就设截止">
-        <button class="btn sm solid" id="cap-go">记一条</button>
+  <div class="app${state.rail ? ' rail' : ''}" id="app-shell">
+    <aside class="sidebar">
+      <div class="sb-brand">
+        <span class="sb-logo"></span>
+        <b>DeskAlarm</b>
+        <span class="sp"></span>
+        <button type="button" class="sb-tool-btn sb-collapse" id="btn-rail" title="折叠 / 展开导航栏" aria-label="折叠导航栏">${ICO.panelCollapse(18)}</button>
       </div>
-      <div class="parse" id="parse" hidden></div>
-    </div>
 
-    <div class="body">
-      <nav class="sidebar" id="sidebar"></nav>
-      <main class="list">
-        <div class="list-head">
-          <h1 id="vtitle"></h1>
-          <p id="vsub"></p>
+      <button type="button" class="conn-pill" id="btn-server" title="点击切换服务端">
+        <span class="sdot off" id="sdot"></span>
+        <span class="conn-label" id="stxt">未连接</span>
+      </button>
+
+      ${isDesktop() ? `
+      <button type="button" class="sb-fab" id="btn-hotkey" title="全局热键 Ctrl+Shift+Space">
+        ${ICO.add(18)}<span class="fab-txt">快速记</span><span class="fab-kbd">Ctrl+Shift+Space</span>
+      </button>` : ''}
+
+      <div class="sb-scroll" id="sidebar"></div>
+
+      <div class="sb-foot">
+        ${u?.role === 'admin' ? `
+        <button type="button" class="nav" data-view="dashboard" id="nav-dashboard">
+          <span class="nav-ico">${ICO.dashboard(19)}</span><span class="nav-txt">系统看板</span>
+        </button>` : ''}
+        <button type="button" class="nav" data-view="settings" id="nav-settings">
+          <span class="nav-ico">${ICO.settings(19)}</span><span class="nav-txt">设置</span>
+        </button>
+        <div class="sb-user-row">
+          <div class="sb-avatar" title="${esc(u?.username ?? '')}">${esc((u?.username ?? '?').slice(0, 1).toUpperCase())}</div>
+          <span class="sb-user-name">${esc(u?.username ?? '?')}</span>
+          <div class="sb-tools">
+            <button type="button" class="sb-tool-btn" id="btn-theme" title="切换配色"></button>
+            <button type="button" class="sb-tool-btn" id="btn-update" title="关于 / 检查更新" aria-label="检查更新">${ICO.update(18)}</button>
+            <button type="button" class="sb-tool-btn" id="btn-logout" title="退出登录" aria-label="退出登录">${ICO.logout(18)}</button>
+          </div>
         </div>
-        <div class="list-scroll" id="list"></div>
-      </main>
-      <aside class="editor" id="editor"></aside>
-    </div>
+      </div>
+    </aside>
 
-    <div class="statusbar">
-      <button class="icon-btn" id="btn-settings" title="设置" aria-label="设置">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.98 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.98a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.03Z"/></svg>
-      </button>
-      <button class="icon-btn" id="btn-update" title="检查更新" aria-label="检查更新">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v3h16v-3"/></svg>
-      </button>
-      <span id="s-server">服务端 -</span>
-      <span class="skew">时钟偏差 <span class="mono" id="s-skew">0 ms</span></span>
-      <div class="sp"></div>
-      <span>登录为 <b id="s-user">${esc(loadConfig().user?.username ?? '?')}</b></span>
-      <button class="btn sm" id="btn-logout">退出登录</button>
+    <div class="workspace">
+      <div class="skew-banner" id="skew-banner" hidden>
+        ${ICO.alert(16)}
+        <span id="skew-banner-txt"></span>
+      </div>
+
+      <div class="body wide" id="body-grid">
+        <main class="list">
+          <div class="list-inner">
+            <div class="list-head">
+              <div>
+                <h1 id="vtitle"></h1>
+                <p id="vsub"></p>
+              </div>
+            </div>
+
+            <div class="capture-bar" id="capture-bar">
+              <div class="capture-in">
+                <span class="prompt">${ICO.add(18)}</span>
+                <input id="cap" placeholder="想到什么就记下来，回车进待办，带时间自动设截止" autocomplete="off">
+                <div class="cap-str-seg" id="cap-str-seg">
+                  <button type="button" class="on" data-strength="weak" title="到点发通知，未填时间默认 1 天后">弱</button>
+                  <button type="button" data-strength="strong" title="到点弹接管窗，未填时间默认 2 小时后">强</button>
+                </div>
+                <button type="button" class="btn sm solid" id="cap-go">记一条</button>
+              </div>
+              <div class="parse" id="parse" hidden></div>
+            </div>
+
+            <div class="list-scroll" id="list"></div>
+          </div>
+        </main>
+        <aside class="editor" id="editor"></aside>
+      </div>
     </div>
   </div>`;
 
   if (isDesktop()) $<HTMLButtonElement>('#btn-hotkey')!.onclick = () => void native('show_capture');
+  $<HTMLButtonElement>('#btn-rail')!.onclick = () => {
+    state.rail = !state.rail;
+    localStorage.setItem(RAIL_KEY, state.rail ? '1' : '0');
+    const shell = $<HTMLElement>('#app-shell');
+    shell.classList.toggle('rail', state.rail);
+    shell.classList.toggle('drawer-open', !state.rail);
+  };
   $<HTMLButtonElement>('#btn-update')!.onclick = () => openAbout();
-  $<HTMLButtonElement>('#btn-settings')!.onclick = () => setView('settings');
   $<HTMLElement>('#btn-server')!.onclick = () => openServerPanel();
   renderThemeButton();
   $<HTMLButtonElement>('#btn-theme')!.onclick = () => toggleTheme();
-  $<HTMLButtonElement>('#btn-logout')!.onclick = () => {
+  $<HTMLButtonElement>('#btn-logout')!.onclick = async () => {
+    const ok = await openConfirmDialog({
+      title: '退出当前账号？',
+      detail: '退出后将停止本机实时提醒，下次启动需要重新登录。',
+      confirmText: '退出登录',
+      danger: true,
+    });
+    if (!ok) return;
     rt?.close();
     clearToken();
     location.reload();
@@ -453,7 +533,16 @@ function renderShell() {
 
   const cap = $<HTMLInputElement>('#cap');
   const parse = $<HTMLDivElement>('#parse');
+  const capSeg = $<HTMLDivElement>('#cap-str-seg');
+  const syncCapSeg = () => {
+    capSeg.querySelectorAll<HTMLButtonElement>('[data-strength]').forEach((b) => {
+      const on = b.dataset.strength === captureStrength;
+      b.classList.toggle('on', on);
+      b.classList.toggle('hot', on && captureStrength === 'strong');
+    });
+  };
   const preview = () => {
+    syncCapSeg();
     const v = cap.value;
     if (!v.trim()) { parse.hidden = true; return; }
     const p = parseInput(v);
@@ -461,21 +550,20 @@ function renderShell() {
     parse.innerHTML = `
       <span class="lb">已识别</span>
       <span class="chip ${p.kind === 'text' ? '' : 'hot'}">${esc(p.kindLabel)}</span>
-      <span class="chip ${p.remindAt ? 'hot' : ''}">${esc(p.remindAt ? `截止：${p.timeLabel}` : '进待办')}</span>
-      <button type="button" class="chip ${captureStrength === 'weak' ? 'hot' : ''}" data-strength="weak">弱提醒</button>
-      <button type="button" class="chip ${captureStrength === 'strong' ? 'hot' : ''}" data-strength="strong">强提醒</button>`;
+      <span class="chip ${p.remindAt ? 'hot' : ''}">${esc(p.remindAt ? `截止：${p.timeLabel}` : '未填时间 · 按强弱给默认截止')}</span>`;
   };
   cap.addEventListener('input', preview);
-  parse.addEventListener('click', (ev) => {
+  capSeg.addEventListener('click', (ev) => {
     const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-strength]');
     if (!b) return;
     captureStrength = b.dataset.strength as ReminderStrength;
     preview();
+    cap.focus();
   });
   cap.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') void submitCapture(cap.value); });
   $<HTMLButtonElement>('#cap-go')!.onclick = () => void submitCapture(cap.value);
 
-  $<HTMLElement>('#sidebar').addEventListener('click', (ev) => {
+  document.querySelector('.sidebar')!.addEventListener('click', (ev) => {
     const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-view]');
     if (b) setView(b.dataset.view as View);
   });
@@ -485,22 +573,43 @@ function renderShell() {
   $<HTMLElement>('#editor').addEventListener('change', onEditorChange);
   $<HTMLElement>('#editor').addEventListener('input', onEditorInput);
   $<HTMLElement>('#editor').addEventListener('keydown', onEditorKeydown);
+
+  document.addEventListener('keydown', onGlobalKeydown);
 }
 
-/* -------------------------------------------------- 更新状态（顶栏） */
+function onGlobalKeydown(ev: KeyboardEvent) {
+  if (document.querySelector('.md-mask, .dp-pop, .panel-mask, .abt-mask')) return;
+  const active = document.activeElement as HTMLElement | null;
+  const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT');
+  if (ev.key === 'Escape' && state.selected && !typing) {
+    state.selected = null;
+    renderAll();
+    return;
+  }
+  if (typing || !state.pursuits.length) return;
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    const ids = state.pursuits.map((p) => p.id);
+    const idx = state.selected ? ids.indexOf(state.selected) : -1;
+    const next = ev.key === 'ArrowDown'
+      ? ids[Math.min(idx + 1, ids.length - 1)]
+      : ids[Math.max(idx - 1, 0)];
+    if (next) selectPursuit(next);
+  }
+}
+
+/* -------------------------------------------------- 更新角标与提示 */
 
 function renderUpdateBadge() {
-  const btn = $<HTMLButtonElement>('#btn-update');
+  const btn = document.getElementById('btn-update');
   if (!btn) return;
   const s = updateBadge();
   btn.classList.toggle('has-update', s.available);
-  const title = !s.available ? '检查更新' : s.ready ? `安装 v${s.version}` : `下载更新 v${s.version}`;
+  const title = !s.available ? '关于 / 检查更新' : s.ready ? `安装更新 v${s.version}` : `发现新版本 v${s.version}`;
   btn.title = title;
   btn.setAttribute('aria-label', title);
 }
 onUpdateChange(renderUpdateBadge);
-
-/* ------------------------------------------------------------ 提示 */
 
 let flashTimer: number | null = null;
 function flash(text: string) {
@@ -514,7 +623,7 @@ function flash(text: string) {
   el.textContent = text;
   el.classList.add('on');
   if (flashTimer !== null) clearTimeout(flashTimer);
-  flashTimer = window.setTimeout(() => el?.classList.remove('on'), 6000);
+  flashTimer = window.setTimeout(() => el?.classList.remove('on'), 4500);
 }
 
 function msgOf(e: unknown): string {
@@ -537,7 +646,7 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/* ------------------------------------------------------------ 渲染 */
+/* ------------------------------------------------------------ 视图与渲染 */
 
 let dashboardTimer: number | null = null;
 
@@ -566,65 +675,117 @@ function countAll(): number {
 }
 
 function renderSidebar() {
-  const nav: Array<[View, string, number, string]> = [
-    ['mystats', '看板', 0, ''],
-    ['todo', '待办', state.counts?.todo ?? 0, ''],
-    ['today', '今日待办', state.counts?.today ?? 0, ''],
-    ['done', '已完成', countOf('done'), ''],
-    ['archived', '已归档', countOf('archived'), ''],
+  const overdueCount = state.pursuits.filter((p) => p.status !== 'done' && p.status !== 'archived' && p.dueAt !== null && p.dueAt <= serverNow()).length;
+  const nav: Array<[View, string, string, number, boolean]> = [
+    ['today', '今日待办', ICO.today(19), state.counts?.today ?? 0, overdueCount > 0],
+    ['todo', '全部待办', ICO.todo(19), state.counts?.todo ?? 0, false],
+    ['mystats', '推进看板', ICO.stats(19), 0, false],
+    ['done', '已完成', ICO.done(19), countOf('done'), false],
+    ['archived', '已归档', ICO.archive(19), countOf('archived'), false],
   ];
-  $<HTMLElement>('#sidebar').innerHTML = `
-    ${nav.map(([v, label, n, cls]) => `
-      <button class="nav ${state.view === v ? 'on' : ''} ${cls}" data-view="${v}">${label}
-        ${n ? `<span class="count">${n}</span>` : ''}
+  const host = document.getElementById('sidebar');
+  if (!host) return;
+  host.innerHTML = `
+    ${nav.map(([v, label, icon, n, alert]) => `
+      <button type="button" class="nav ${state.view === v ? 'on' : ''}" data-view="${v}" title="${label}">
+        <span class="nav-ico">${icon}</span>
+        <span class="nav-txt">${label}</span>
+        ${n ? `<span class="count${alert ? ' alert' : ''}">${n}</span>` : ''}
       </button>`).join('')}
     <div class="nav-sep"></div>
-    <div class="nav-head">我的</div>
-    <button class="nav ${state.view === 'tokens' ? 'on' : ''}" data-view="tokens">Agent 令牌</button>
-    <div class="nav-sep"></div>
-    <div class="nav-head">设备</div>
-    ${state.devices.map((d) => `
-      <div class="nav static" title="${esc(d.platform)} · ${esc(d.transport.toUpperCase())}">
-        <span class="sdot ${d.online ? '' : 'off'}"></span>${esc(d.name)}
-        <span class="count">${d.online ? '在线' : '离线'}</span>
-      </div>`).join('') || '<div class="nav-note">还没有推送设备。</div>'}
-    <div class="sp"></div>
-    ${loadConfig().user?.role === 'admin' ? `
-    <button class="nav ${state.view === 'dashboard' ? 'on' : ''}" data-view="dashboard">系统看板</button>` : ''}`;
-}
+    <div class="nav-head">协同与设备</div>
+    <button type="button" class="nav ${state.view === 'tokens' ? 'on' : ''}" data-view="tokens" title="Agent 令牌">
+      <span class="nav-ico">${ICO.token(19)}</span>
+      <span class="nav-txt">Agent 令牌</span>
+    </button>
+    <div class="dev-list">
+      ${state.devices.map((d) => `
+        <div class="dev-pill" title="${esc(d.platform)} · ${esc(d.lastIp ?? '无 IP')}">
+          <span class="sdot ${d.online ? '' : 'off'}"></span>
+          <span class="dev-name">${esc(d.name)}</span>
+          <span class="dev-st">${d.online ? '在线' : '离线'}</span>
+        </div>`).join('') || '<div class="nav-note">暂无在线设备</div>'}
+    </div>`;
 
-function natureIcon(n: Pursuit['nature']): string {
-  return n === 'project' ? '◫' : '·';
+  document.getElementById('nav-settings')?.classList.toggle('on', state.view === 'settings');
+  document.getElementById('nav-dashboard')?.classList.toggle('on', state.view === 'dashboard');
 }
 
 function progressHtml(p: Pursuit): string {
   const total = p.steps.length;
+  if (!total) return '';
   const done = p.steps.filter((s) => s.state === 'done').length;
-  const pct = total ? Math.round(done / total * 100) : 0;
-  return `<span class="prog" title="${done}/${total} 步"><i style="width:${pct}%"></i></span><span class="mono">${done}/${total}</span>`;
+  const pct = Math.round((done / total) * 100);
+  return `<span class="tag" title="步骤进度 ${done}/${total}">
+    <span class="prog"><i style="width:${pct}%"></i></span>
+    <span class="mono">${done}/${total}</span>
+  </span>`;
 }
 
 function rowHtml(p: Pursuit): string {
   const u = warmthOf(p);
+  const isDone = p.status === 'done';
+  const isArchived = p.status === 'archived';
+  const nextStep = p.steps.find((s) => s.state !== 'done');
+  const actions = rowActions(p.status);
+  const checkAttr = isDone || isArchived
+    ? 'class="it-check static"'
+    : `class="it-check${p.strength === 'strong' ? ' strong' : ''}" data-follow="done" data-id="${esc(p.id)}" data-step="${esc(nextStep?.id ?? '')}" title="${nextStep ? `完成步骤：${esc(nextStep.text)}` : '标记完成'}"`;
+
   return `
-  <div class="item u-${u}${state.selected === p.id ? ' on' : ''}" data-id="${esc(p.id)}">
-    <div class="p-imp" title="${p.strength === 'strong' ? '强提醒' : '弱提醒'}">${p.strength === 'strong' ? '强' : '弱'}</div>
-    <div>
-      <div class="it-time">${u === 'none' ? '' : `<i class="udot ${u}"></i>`}
-        <span>${esc(dueLabel(p))} · ${esc(staleLabel(p))}</span></div>
+  <div class="item u-${u}${isDone ? ' done' : ''}${state.selected === p.id ? ' on' : ''}" data-id="${esc(p.id)}" data-u="${u}">
+    <button type="button" ${checkAttr}>${ICO.check(13)}</button>
+    <div class="it-main">
+      <div class="it-time">
+        ${u === 'none' ? '' : `<i class="udot ${u}"></i>`}
+        <span>${esc(dueLabel(p))} · ${esc(staleLabel(p))}</span>
+        ${p.strength === 'strong' ? `<span class="str-badge">${ICO.bolt(11)}强提醒</span>` : ''}
+      </div>
       <div class="it-title">${esc(p.text)}</div>
       <div class="it-meta">
-        <span class="tag" title="${NATURE_LABEL[p.nature]}">${natureIcon(p.nature)} ${NATURE_LABEL[p.nature]}</span>
         ${progressHtml(p)}
-        ${p.url ? `<span class="tag host" title="${esc(p.url)}">${esc(hostOf(p.url))}</span>` : ''}
+        ${p.nature === 'project' ? `<span class="tag">${NATURE_LABEL[p.nature]}</span>` : ''}
+        ${p.url ? `<span class="tag" title="${esc(p.url)}">${ICO.link(12)}${esc(hostOf(p.url))}</span>` : ''}
         ${p.path ? `<span class="tag path" title="${esc(p.path)}">${esc(p.path)}</span>` : ''}
       </div>
     </div>
     <div class="it-act">
-      ${rowActions(p.status).map((a) => `<button class="btn sm" data-follow="${a}" data-id="${esc(p.id)}">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
-      ${p.status === 'archived' ? `<button class="btn sm danger" data-del="${esc(p.id)}" title="删除这条">删除</button>` : ''}
+      ${!isDone && !isArchived ? `
+        <button type="button" class="btn icon-only sm hover-act" data-follow="later" data-id="${esc(p.id)}" title="延期">${ICO.clock(15)}</button>
+        <button type="button" class="btn icon-only sm hover-act" data-follow="smaller" data-id="${esc(p.id)}" title="拆小步骤">${ICO.split(15)}</button>` : ''}
+      ${actions.map((a) => `<button type="button" class="btn sm ${a === 'done' ? 'tonal' : a === 'archive' ? 'danger' : 'ghost'}" data-follow="${a}" data-id="${esc(p.id)}" ${a === 'done' ? `data-step="${esc(nextStep?.id ?? '')}"` : ''}>${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
+      ${isArchived ? `<button type="button" class="btn sm danger" data-del="${esc(p.id)}" title="永久删除">删除</button>` : ''}
     </div>
   </div>`;
+}
+
+function groupPursuits(list: Pursuit[]): Array<{ title: string; hot?: boolean; items: Pursuit[] }> {
+  if (state.view === 'done' || state.view === 'archived') {
+    return [{ title: '', items: list }];
+  }
+  const now = serverNow();
+  const endToday = new Date(now);
+  endToday.setHours(23, 59, 59, 999);
+  const endTomorrow = new Date(endToday.getTime() + 86_400_000);
+
+  const over: Pursuit[] = [];
+  const today: Pursuit[] = [];
+  const tomorrow: Pursuit[] = [];
+  const later: Pursuit[] = [];
+
+  for (const p of list) {
+    if (p.dueAt !== null && p.dueAt <= now) over.push(p);
+    else if (p.dueAt !== null && p.dueAt <= endToday.getTime()) today.push(p);
+    else if (p.dueAt !== null && p.dueAt <= endTomorrow.getTime()) tomorrow.push(p);
+    else later.push(p);
+  }
+
+  const out: Array<{ title: string; hot?: boolean; items: Pursuit[] }> = [];
+  if (over.length) out.push({ title: '已逾期 · 待处理', hot: true, items: over });
+  if (today.length) out.push({ title: '今天到期', items: today });
+  if (tomorrow.length) out.push({ title: '明天', items: tomorrow });
+  if (later.length) out.push({ title: '更晚或未设截止', items: later });
+  return out;
 }
 
 function renderList() {
@@ -634,20 +795,25 @@ function renderList() {
   if (state.view === 'settings') { renderSettingsView(box); return; }
   if (state.view === 'mystats') { renderStatsView(box); return; }
 
-  const emptyCopy: Partial<Record<View, [string, string]>> = {
-    today: ['今天没有待办', '今天到期或已逾期的事会出现在这里。'],
-    todo: ['待办是空的', '在上面记一条就能开始。'],
-    done: ['还没有完成的推进项', '推完的事会出现在这里。'],
-    archived: ['归档是空的', '不要了或长期停滞的会放这里。'],
+  const emptyCopy: Partial<Record<View, [string, string, string]>> = {
+    today: [ICO.today(24), '今天很清静', '今天到期或已逾期的推进项会出现在这里。'],
+    todo: [ICO.todo(24), '待办是空的', '在上方输入框写一句话，回车立刻开始推进。'],
+    done: [ICO.done(24), '还没有已完成的事项', '推完的每一件事都会沉淀在这里。'],
+    archived: [ICO.archive(24), '归档是空的', '主动结束或超期自动归档的条目会放在这里。'],
   };
-  const [title, detail] = emptyCopy[state.view] ?? ['空的', ''];
-  const list = state.pursuits.length
-    ? state.pursuits.map(rowHtml).join('')
-    : `<div class="empty"><b>${title}</b><p>${detail}</p></div>`;
-  box.innerHTML = list;
+  if (!state.pursuits.length) {
+    const [ico, title, detail] = emptyCopy[state.view] ?? [ICO.todo(24), '空的', ''];
+    box.innerHTML = `<div class="empty"><div class="empty-ico">${ico}</div><b>${title}</b><p>${detail}</p></div>`;
+    return;
+  }
+
+  const groups = groupPursuits(state.pursuits);
+  box.innerHTML = groups.map((g) => `
+    ${g.title ? `<div class="group${g.hot ? ' hot' : ''}"><span>${g.title}</span><span class="g-cnt">${g.items.length}</span><span class="line"></span></div>` : ''}
+    ${g.items.map(rowHtml).join('')}`).join('');
 }
 
-/* ------------------------------------------------------------ 详情面板 */
+/* ------------------------------------------------------------ 动态详情面板 */
 
 function findPursuit(id: string | null): Pursuit | undefined {
   if (!id) return undefined;
@@ -663,61 +829,69 @@ function renderEditor() {
       (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')) return;
 
   if (!p) {
-    box.innerHTML = `<div class="ed-head">推进详情</div>
-      <div class="ed-empty"><b>没有选中的推进项</b>
-        <p>点左边任意一条来拆解步骤、改提醒类型和排期。</p></div>`;
+    box.innerHTML = '';
     return;
   }
 
   const freq = p.recurrence?.freq ?? 'none';
   const rf = ruleFields(p.recurrence);
   const ruleFieldsShown = fieldsFor(freq);
-  const due = p.dueAt === null ? '没有截止' : `${dayLabel(p.dueAt)} ${hhmm(p.dueAt)}`;
-  box.innerHTML = `
-    <div class="ed-head">推进详情</div>
-    <div class="ed-body">
-      <div class="fld"><label for="f-text">事项</label>
-        <textarea class="input ed-textarea" id="f-text" rows="2">${esc(p.text)}</textarea></div>
+  const due = p.dueAt === null ? '未设截止' : `${dayLabel(p.dueAt)} ${hhmm(p.dueAt)}`;
+  const nextStep = p.steps.find((s) => s.state !== 'done');
+  const footActions = (['later', 'smaller', 'reopen', 'archive'] as FollowupAction[])
+    .filter((a) => actionsFor(p.status).includes(a));
 
-      <div class="fld"><label>步骤清单</label>
+  box.innerHTML = `
+    <div class="ed-head">
+      <b>推进详情</b>
+      <span class="ed-saved" id="ed-saved"></span>
+      <button type="button" class="btn icon-only sm" data-act="close-editor" title="收起详情 (Esc)" aria-label="收起详情">${ICO.close(16)}</button>
+    </div>
+    <div class="ed-body">
+      <div class="fld"><label for="f-text">事项内容</label>
+        <textarea class="ed-title-input" id="f-text" rows="2">${esc(p.text)}</textarea></div>
+
+      <div class="fld"><label>提醒类型</label>
+        <div class="seg">
+          <button type="button" data-strength="weak" class="${p.strength === 'weak' ? 'on' : ''}" title="到点发通知，未填时间默认 1 天后">弱提醒</button>
+          <button type="button" data-strength="strong" class="${p.strength === 'strong' ? 'on hot' : ''}" title="到点弹接管窗，未填时间默认 2 小时后">${ICO.bolt(13)}强提醒</button>
+        </div></div>
+
+      <div class="fld"><label>截止时间</label>
+        <div class="when-wrap">
+          <button type="button" class="input when-btn" id="f-when">
+            <span class="mono">${esc(due)}</span><span class="when-edit">修改</span>
+          </button>
+          ${p.dueAt !== null ? `<button type="button" class="btn icon-only sm ghost" data-act="clear-due" title="清除截止">${ICO.close(14)}</button>` : ''}
+        </div></div>
+
+      <div class="fld"><label>步骤清单${p.steps.length ? `（${p.steps.filter((s) => s.state === 'done').length}/${p.steps.length}）` : ''}</label>
         <div class="steps">
           ${p.steps.length ? p.steps.map((s) => `
             <div class="step ${s.state === 'done' ? 'done' : ''}">
               <input type="checkbox" data-step="${esc(s.id)}" ${s.state === 'done' ? 'checked' : ''} title="标记完成">
               <input class="step-text" data-step-text="${esc(s.id)}" value="${esc(s.text)}" aria-label="步骤文字">
-              <button type="button" class="step-del" data-step-del="${esc(s.id)}" title="删除步骤" aria-label="删除步骤">×</button>
+              <button type="button" class="step-del" data-step-del="${esc(s.id)}" title="删除步骤" aria-label="删除步骤">${ICO.close(14)}</button>
             </div>`).join('')
-            : '<div class="hint">还没有步骤。拆小之后推进会更顺。</div>'}
+            : '<div class="hint">拆成 2–3 个可立刻动手的小步，推进阻力会小很多。</div>'}
         </div>
         <div class="add-step">
-          <input class="input" id="new-step" placeholder="加一个步骤，回车">
-          <button class="btn sm" data-act="add-step">添加</button>
-        </div>
-      </div>
-
-      <div class="fld"><label for="f-note">备注</label>
-        <textarea class="input ed-textarea" id="f-note" rows="3" placeholder="相关背景、上下文">${esc(p.note ?? '')}</textarea></div>
-
-      <div class="fld"><label>提醒类型</label>
-        <div class="seg">
-          <button data-strength="weak" class="${p.strength === 'weak' ? 'on' : ''}" title="到点发通知，没填时间默认 1 天后">弱提醒</button>
-          <button data-strength="strong" class="${p.strength === 'strong' ? 'on' : ''}" title="到点弹窗，没填时间默认 2 小时后">强提醒</button>
+          <input class="input" id="new-step" placeholder="加一个步骤，回车添加">
+          <button type="button" class="btn sm tonal" data-act="add-step">添加</button>
         </div></div>
+
+      <div class="fld"><label for="f-note">备注与上下文</label>
+        <textarea class="input ed-textarea" id="f-note" rows="3" placeholder="补充背景、链接或关键线索">${esc(p.note ?? '')}</textarea></div>
 
       <div class="fld"><label>性质</label>
         <div class="seg">${(['one_off', 'project'] as const).map((n) =>
-          `<button data-nature="${n}" class="${p.nature === n ? 'on' : ''}">${NATURE_LABEL[n]}</button>`,
+          `<button type="button" data-nature="${n}" class="${p.nature === n ? 'on' : ''}">${NATURE_LABEL[n]}</button>`,
         ).join('')}</div></div>
 
-      <div class="fld"><label>截止</label>
-        <button type="button" class="input when-btn" id="f-when">
-          <span class="mono">${esc(due)}</span><span class="when-edit">点击修改</span></button>
-        <button type="button" class="btn sm" data-act="clear-due" style="margin-top:6px">清除截止</button></div>
-
       <div class="fld"><label>重复规则</label>
-        <button type="button" class="input sm trigger" id="f-freq" data-v="${freq}">
+        <button type="button" class="input trigger" id="f-freq" data-v="${freq}">
           <span class="trigger-label">${FREQ_LABEL[freq]}</span>
-          <span class="trigger-arrow">⌄</span></button>
+          <span class="trigger-arrow">${ICO.chevronDown(15)}</span></button>
         <div id="f-rule-extra" ${ruleFieldsShown.length === 0 ? 'hidden' : ''}>${ruleFieldsHtml(freq, rf)}</div></div>
 
       <div class="fld"><label>跟进历史</label>
@@ -725,16 +899,15 @@ function renderEditor() {
           <div class="fu-row"><span class="mono">${esc(new Date(f.at).toLocaleString('zh-CN'))}</span>
             <span class="tag">${f.level === 4 ? '强提醒' : '弱提醒'}</span><b>${esc(FOLLOWUP_ACTION_LABEL[f.action] ?? f.action)}</b>
             ${f.note ? `<span>${esc(f.note)}</span>` : ''}</div>`).join('')}</div>`
-          : '<div class="hint">还没有跟进记录。</div>'}
-      </div>
+          : '<div class="hint">还没有跟进记录。</div>'}</div>
     </div>
+
     <div class="ed-foot">
-      ${(['later', 'smaller', 'archive', 'reopen'] as FollowupAction[])
-        .filter((a) => actionsFor(p.status).includes(a))
-        .map((a) => `<button class="btn ${a === 'archive' ? 'danger' : ''}" data-act="follow-${a}">${FOLLOWUP_ACTION_LABEL[a]}</button>`)
-        .join('')}
-      <button class="btn" data-act="clone">克隆</button>
-      ${p.status === 'archived' ? `<button class="btn danger" data-act="delete">删除</button>` : ''}
+      ${actionsFor(p.status).includes('done') ? `
+        <button type="button" class="btn solid" data-act="follow-done" data-step="${esc(nextStep?.id ?? '')}">${ICO.check(15)}${nextStep ? '完成一步' : '完成'}</button>` : ''}
+      ${footActions.map((a) => `<button type="button" class="btn ${a === 'archive' ? 'danger' : 'tonal'}" data-act="follow-${a}">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
+      <button type="button" class="btn ghost" data-act="clone">${ICO.clone(14)}克隆</button>
+      ${p.status === 'archived' ? `<button type="button" class="btn danger" data-act="delete">${ICO.trash(14)}删除</button>` : ''}
     </div>`;
 
   const when = $<HTMLButtonElement>('#f-when');
@@ -743,8 +916,8 @@ function renderEditor() {
   if (freqBtn) freqBtn.onclick = (ev) => {
     const items = (Object.keys(FREQ_LABEL) as Array<keyof typeof FREQ_LABEL>)
       .map((v) => ({ value: v, label: FREQ_LABEL[v] }));
-    openDropdown(ev.currentTarget as HTMLElement, items, freq, (v) => {
-      const key = v as keyof typeof FREQ_LABEL;
+    openDropdown(ev.currentTarget as HTMLElement, items, freqBtn.dataset.v ?? freq, (v) => {
+      const key = v as Freq;
       const current = {
         byWeekday: $<HTMLInputElement>('#f-byday')?.value ?? rf.byWeekday,
         byMonthday: $<HTMLInputElement>('#f-bymonthday')?.value ?? rf.byMonthday,
@@ -758,23 +931,34 @@ function renderEditor() {
         extra.innerHTML = ruleFieldsHtml(v, current);
         extra.hidden = fieldsFor(key).length === 0;
       }
+      if (key === 'none' || key === 'daily') {
+        void api.update(p.id, { recurrence: buildRecurrence(key, current), version: versionOf(p) })
+          .then(refresh).catch((err) => flashConflict(err, p.id));
+      }
     });
   };
 }
 
 function renderAll() {
-  if (!$('#list')) return;
-  const wide = state.view === 'settings' || state.view === 'mystats' ||
+  if (!document.getElementById('list')) return;
+  const isFullPage = state.view === 'settings' || state.view === 'mystats' ||
     state.view === 'dashboard' || state.view === 'tokens';
-  $<HTMLElement>('.body')!.classList.toggle('wide', wide);
+  const showCapture = state.view === 'today' || state.view === 'todo';
+  const capBar = document.getElementById('capture-bar');
+  if (capBar) capBar.hidden = !showCapture;
+
+  const hasDetail = !isFullPage && Boolean(findPursuit(state.selected));
+  $<HTMLElement>('#body-grid')!.classList.toggle('wide', !hasDetail);
+
   const v = VIEWS[state.view];
   $<HTMLElement>('#vtitle')!.textContent = v.title;
   $<HTMLElement>('#vsub')!.textContent = v.sub;
+
   const listTop = document.querySelector<HTMLElement>('.list-scroll')?.scrollTop ?? 0;
   const editorTop = document.querySelector<HTMLElement>('.ed-body')?.scrollTop ?? 0;
   renderSidebar();
   renderList();
-  if (wide) $<HTMLElement>('#editor')!.innerHTML = '';
+  if (!hasDetail) $<HTMLElement>('#editor')!.innerHTML = '';
   else renderEditor();
   const listBox = document.querySelector<HTMLElement>('.list-scroll');
   if (listBox) listBox.scrollTop = listTop;
@@ -784,7 +968,7 @@ function renderAll() {
 }
 
 function tickUrgency() {
-  const box = $<HTMLDivElement>('#list');
+  const box = document.getElementById('list');
   if (!box) return;
   for (const p of state.pursuits) {
     const row = box.querySelector<HTMLElement>(`.item[data-id="${CSS.escape(p.id)}"]`);
@@ -796,7 +980,7 @@ function tickUrgency() {
     row.classList.add(`u-${u}`);
     const t = row.querySelector<HTMLElement>('.it-time');
     if (t) {
-      t.innerHTML = `${u === 'none' ? '' : `<i class="udot ${u}"></i>`}<span>${esc(`${dueLabel(p)} · ${staleLabel(p)}`)}</span>`;
+      t.innerHTML = `${u === 'none' ? '' : `<i class="udot ${u}"></i>`}<span>${esc(`${dueLabel(p)} · ${staleLabel(p)}`)}</span>${p.strength === 'strong' ? `<span class="str-badge">${ICO.bolt(11)}强提醒</span>` : ''}`;
     }
   }
 }
@@ -813,12 +997,6 @@ function closeBehavior(): 'quit' | 'tray' {
   return localStorage.getItem(CLOSE_KEY) === 'quit' ? 'quit' : 'tray';
 }
 
-function localLogPolicy(): LogPolicy {
-  try {
-    return { ...DEFAULT_LOG_POLICY, ...(JSON.parse(localStorage.getItem(LOG_KEY) ?? '{}') as Partial<LogPolicy>) };
-  } catch { return { ...DEFAULT_LOG_POLICY }; }
-}
-
 const hhmmOfMin = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const minOfHhmm = (v: string) => {
   const [h, m] = v.split(':').map(Number);
@@ -830,49 +1008,47 @@ function renderSettingsView(box: HTMLElement) {
   if (existing && existing.childElementCount) return;
   const admin = loadConfig().user?.role === 'admin';
   const s = loadConfig().settings;
+  const cb = closeBehavior();
   box.innerHTML = `
   <div class="settings">
     <section class="set-card">
-      <h2>常规</h2>
-      <div class="set-row"><div><b>主题</b><small>当前 <span id="set-theme"></span></small></div>
-        <button class="btn sm" id="set-theme-btn"></button></div>
-      <div class="set-row"><div><b>服务端地址</b><small>切换连接的服务器，换地址会清掉当前登录</small></div>
-        <button type="button" class="btn sm" id="set-server">切换服务端</button></div>
-      <div class="set-row"><div><b>关闭主窗口</b><small>点标题栏 X 时做什么</small></div>
-        <button type="button" class="input sm trigger" id="set-close" data-v="tray"><span class="trigger-label">隐藏到托盘</span><span class="trigger-arrow">⌄</span></button></div>
-      ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随系统登录，静默进托盘</small></div>
+      <h2>常规与外观</h2>
+      <div class="set-row"><div><b>配色主题</b><small>当前：<span id="set-theme"></span></small></div>
+        <button type="button" class="btn sm tonal" id="set-theme-btn"></button></div>
+      <div class="set-row"><div><b>服务端地址</b><small>${esc(loadConfig().baseUrl || '未配置')} · 换地址会清掉当前登录</small></div>
+        <button type="button" class="btn sm tonal" id="set-server">切换服务端</button></div>
+      <div class="set-row"><div><b>关闭主窗口</b><small>点击标题栏关闭按钮时的行为</small></div>
+        <button type="button" class="input trigger" style="width:168px" id="set-close" data-v="${cb}"><span class="trigger-label">${cb === 'quit' ? '退出程序' : '隐藏到托盘'}</span><span class="trigger-arrow">${ICO.chevronDown(15)}</span></button></div>
+      ${isDesktop() ? `<div class="set-row"><div><b>开机自启</b><small>随系统登录静默进托盘</small></div>
         <input type="checkbox" class="switch" id="set-auto"></div>` : ''}
-      <div class="set-row"><div><b>自动检查更新</b><small>可选。开启后启动时和每 30 分钟检查一次，只提示不安装</small></div>
+      <div class="set-row"><div><b>自动检查更新</b><small>开启后启动时和每 30 分钟检查一次，只提示不自动安装</small></div>
         <input type="checkbox" class="switch" id="set-auto-update"></div>
-      <div class="set-row"><div><b>关于 / 更新</b><small>项目简介、版本信息，检查与安装最新版</small></div>
-        <button class="btn sm" id="set-about">打开</button></div>
+      <div class="set-row"><div><b>关于 / 更新</b><small>版本信息、发行版地址与在线升级</small></div>
+        <button type="button" class="btn sm ghost" id="set-about">打开关于</button></div>
     </section>
 
     <section class="set-card" id="set-pace">
-      <h2>推进节奏</h2>
+      <h2>推进节奏（所有设备同步生效）</h2>
       <div class="set-grid">
         <label>逾期多少天自动归档<input class="input" id="set-archive-days" type="number" min="1" value="${s.archiveAfterDays}"></label>
-        <label>每日聚焦时刻<button type="button" class="input sm trigger" id="set-focus-at" data-v="${hhmmOfMin(s.focusAtMin)}"><span class="trigger-label">${hhmmOfMin(s.focusAtMin)}</span><span class="trigger-arrow">◷</span></button></label>
-        <label>静音开始<button type="button" class="input sm trigger" id="set-quiet-start" data-v="${hhmmOfMin(s.quietStartMin)}"><span class="trigger-label">${hhmmOfMin(s.quietStartMin)}</span><span class="trigger-arrow">◷</span></button></label>
-        <label>静音结束<button type="button" class="input sm trigger" id="set-quiet-end" data-v="${hhmmOfMin(s.quietEndMin)}"><span class="trigger-label">${hhmmOfMin(s.quietEndMin)}</span><span class="trigger-arrow">◷</span></button></label>
-        <label>声音<button type="button" class="input sm trigger" id="set-sound" data-v="${s.sound}"><span class="trigger-label">${s.sound === 'none' ? '静音' : s.sound === 'custom' ? '自定义' : '系统提示音'}</span><span class="trigger-arrow">⌄</span></button></label>
+        <label>每日聚焦时刻<button type="button" class="input trigger" id="set-focus-at" data-v="${hhmmOfMin(s.focusAtMin)}"><span class="trigger-label mono">${hhmmOfMin(s.focusAtMin)}</span><span class="trigger-arrow">${ICO.clock(15)}</span></button></label>
+        <label>静音开始<button type="button" class="input trigger" id="set-quiet-start" data-v="${hhmmOfMin(s.quietStartMin)}"><span class="trigger-label mono">${hhmmOfMin(s.quietStartMin)}</span><span class="trigger-arrow">${ICO.clock(15)}</span></button></label>
+        <label>静音结束<button type="button" class="input trigger" id="set-quiet-end" data-v="${hhmmOfMin(s.quietEndMin)}"><span class="trigger-label mono">${hhmmOfMin(s.quietEndMin)}</span><span class="trigger-arrow">${ICO.clock(15)}</span></button></label>
+        <label>提示音<button type="button" class="input trigger" id="set-sound" data-v="${s.sound}"><span class="trigger-label">${s.sound === 'none' ? '静音' : s.sound === 'custom' ? '自定义' : '系统提示音'}</span><span class="trigger-arrow">${ICO.chevronDown(15)}</span></button></label>
       </div>
-      <div class="set-actions"><button class="btn solid sm" id="set-save">保存推进设置</button><span id="set-msg" class="hint"></span></div>
+      <div class="set-actions"><button type="button" class="btn solid sm" id="set-save">保存推进设置</button><span id="set-msg" class="hint"></span></div>
     </section>
 
     <section class="set-card">
-      <h2>测试跟进表现</h2>
-      <div class="hint" style="margin-bottom:10px">强提醒弹接管窗，弱提醒发通知；逾期归档由服务端按截止时间处理。</div>
-      <div class="set-actions">
-        <button class="btn sm" data-test-strength="weak">测试弱提醒</button>
-        <button class="btn sm" data-test-strength="strong">测试强提醒</button>
+      <h2>提醒与设备自检</h2>
+      <div class="set-row">
+        <div><b>测试强 / 弱提醒表现</b><small>强提醒弹出不可关闭接管窗，弱提醒发送系统通知（不改真实数据）</small></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn sm tonal" data-test-strength="weak">测试弱提醒</button>
+          <button type="button" class="btn sm tonal-hot" data-test-strength="strong">${ICO.bolt(13)}测试强提醒</button>
+          <button type="button" class="btn sm ghost" id="set-ping">试响</button>
+        </div>
       </div>
-    </section>
-
-    <section class="set-card">
-      <h2>设备</h2>
-      <div class="set-row"><div><b>试响</b><small>确认这台设备能出声</small></div>
-        <button class="btn sm" id="set-ping">试响</button></div>
       <div id="set-devices" class="dev-table"></div>
     </section>
 
@@ -883,39 +1059,38 @@ function renderSettingsView(box: HTMLElement) {
         <label>密码（至少 8 位）<input class="input" id="usr-pass" type="password" autocomplete="new-password"></label>
         <label>确认密码<input class="input" id="usr-pass2" type="password" autocomplete="new-password"></label>
       </div>
-      <div class="set-actions"><button class="btn solid sm" id="usr-add">创建用户</button><span id="usr-msg" class="hint"></span></div>
-      <div id="set-users" class="user-table"></div>
+      <div class="set-actions"><button type="button" class="btn solid sm" id="usr-add">创建用户</button><span id="usr-msg" class="hint"></span></div>
+      <div id="set-users" class="dev-table"></div>
     </section>` : ''}
 
     <section class="set-card">
       <h2>本地日志</h2>
       <div class="set-grid">
-        <label>级别<button type="button" class="input sm trigger" id="log-level" data-v="info"><span class="trigger-label">info</span><span class="trigger-arrow">⌄</span></button></label>
-        <label>保留天数<input class="input" id="log-days" type="number" min="1" max="90"></label>
+        <label>级别<button type="button" class="input trigger" id="log-level" data-v="info"><span class="trigger-label">info</span><span class="trigger-arrow">${ICO.chevronDown(15)}</span></button></label>
+        <label>保留天数<input class="input" id="log-days" type="number" min="1" max="90" value="7"></label>
       </div>
-      <div class="set-row"><div><b>写入本地文件</b><small>应用数据目录下的 logs 文件夹</small></div>
+      <div class="set-row"><div><b>写入本地文件</b><small>按天写入应用数据目录下的 logs 文件夹</small></div>
         <input type="checkbox" class="switch" id="log-enabled"></div>
       <div class="set-actions">
-        <button class="btn sm" id="log-save">保存日志设置</button>
-        <button class="btn sm ghost" id="log-open">打开日志目录</button>
+        <button type="button" class="btn sm tonal" id="log-save">保存日志设置</button>
+        <button type="button" class="btn sm ghost" id="log-open">打开日志目录</button>
         <span id="log-msg" class="hint"></span>
       </div>
     </section>
   </div>`;
 
-  const now = THEMES.find((t) => t.id === loadTheme())!;
-  $<HTMLElement>('#set-theme').textContent = now.label;
-  $<HTMLButtonElement>('#set-theme-btn').textContent = `切换到${THEMES.find((t) => t.id !== loadTheme())!.label}`;
-  $<HTMLButtonElement>('#set-theme-btn').onclick = () => {
-    toggleTheme();
+  const paintThemeRow = () => {
     const t = THEMES.find((x) => x.id === loadTheme())!;
-    $<HTMLElement>('#set-theme').textContent = t.label;
-    $<HTMLButtonElement>('#set-theme-btn').textContent = `切换到${THEMES.find((x) => x.id !== loadTheme())!.label}`;
+    const other = THEMES.find((x) => x.id !== loadTheme())!;
+    $<HTMLElement>('#set-theme').textContent = `${t.label}（${t.hint}）`;
+    $<HTMLButtonElement>('#set-theme-btn').textContent = `切换到${other.label}`;
   };
+  paintThemeRow();
+  $<HTMLButtonElement>('#set-theme-btn').onclick = () => { toggleTheme(); paintThemeRow(); };
   $<HTMLButtonElement>('#set-server').onclick = () => openServerPanel();
   $<HTMLButtonElement>('#set-close').onclick = (ev) => {
     openDropdown(ev.currentTarget as HTMLElement, [
-      { value: 'quit', label: '退出程序' }, { value: 'tray', label: '隐藏到托盘' },
+      { value: 'tray', label: '隐藏到托盘' }, { value: 'quit', label: '退出程序' },
     ], closeBehavior(), (v) => {
       const b = $<HTMLButtonElement>('#set-close');
       b.dataset.v = v;
@@ -957,13 +1132,13 @@ function renderSettingsView(box: HTMLElement) {
     });
   };
   renderUpdateBadge();
-  const auto = $<HTMLInputElement>('#set-auto');
+  const auto = document.getElementById('set-auto') as HTMLInputElement | null;
   if (auto) {
     void native<boolean>('is_autostart_enabled').then((on) => { if (on !== null) auto.checked = on; });
     auto.onchange = () => void native('set_autostart', { enable: auto.checked });
   }
   $<HTMLButtonElement>('#set-about').onclick = () => openAbout();
-  $<HTMLButtonElement>('#set-ping').onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备没问题' });
+  $<HTMLButtonElement>('#set-ping').onclick = () => void native('ping', { title: '试响', body: '能听到声音就说明这台设备通知正常' });
   $<HTMLButtonElement>('#set-save').onclick = () => void saveSettingsForm();
   $<HTMLButtonElement>('#log-save').onclick = () => void saveLogPolicy();
   $<HTMLButtonElement>('#log-open').onclick = () => void nativeOk('open_logs_dir');
@@ -972,12 +1147,20 @@ function renderSettingsView(box: HTMLElement) {
   });
   if (admin) {
     $<HTMLButtonElement>('#usr-add').onclick = () => void addUser();
-    $<HTMLElement>('#set-users').addEventListener('click', (ev) => {
+    $<HTMLElement>('#set-users').addEventListener('click', async (ev) => {
       const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-user]');
       if (!b) return;
       const id = b.dataset.user!;
       const act = b.dataset.act;
-      if (act === 'del' && !window.confirm('确定删除这个用户？他的数据会一起删掉。')) return;
+      if (act === 'del') {
+        const ok = await openConfirmDialog({
+          title: '删除这个用户？',
+          detail: '该用户的全部推进项、设备和会话都会被一并删除且无法恢复。',
+          confirmText: '永久删除',
+          danger: true,
+        });
+        if (!ok) return;
+      }
       const req = act === 'del' ? api.deleteUser(id)
         : api.updateUser(id, { disabled: act === 'disable' });
       void req.then(reloadUsers).catch((e) => {
@@ -1003,7 +1186,7 @@ async function saveSettingsForm() {
   try {
     const r = await api.patchSettings(patch);
     saveConfig({ settings: r.settings });
-    msg.textContent = '已保存';
+    msg.textContent = '已保存，所有设备同步生效';
   } catch (e) { msg.textContent = msgOf(e); }
 }
 
@@ -1011,14 +1194,17 @@ function testFollowup(strength: 'strong' | 'weak') {
   const now = serverNow();
   const id = `test-${strength}-${now}`;
   const fake: Pursuit = {
-    id, userId: '', text: `${strength === 'strong' ? '强' : '弱'}提醒测试：到点了`,
-    note: null, kind: 'text', url: null, path: null,
+    id, userId: '', text: `${strength === 'strong' ? '强' : '弱'}提醒测试：核对今日核心交付物`,
+    note: '这是本地模拟测试，不会修改服务端任何记录。', kind: 'text', url: null, path: null,
     nature: 'project', strength, importance: importanceForStrength(strength), dueAt: now,
     recurrence: null, context: null, commitment: null,
     status: 'active', importanceSort: 0, version: 1, createdAt: now, updatedAt: now,
     completedAt: null, lastActivityAt: now,
     progress: 0.3, stalenessMs: 0, weight: 0,
-    steps: [{ id: 't1', pursuitId: id, text: '先把第一步做了', position: 0, state: 'todo', doneAt: null, createdAt: now }],
+    steps: [
+      { id: 't0', pursuitId: id, text: '已完成的准备步骤', position: 0, state: 'done', doneAt: now, createdAt: now },
+      { id: 't1', pursuitId: id, text: '先完成当前最关键的第一步', position: 1, state: 'todo', doneAt: null, createdAt: now },
+    ],
     deviceIds: [], source: 'app',
   };
   control.fire(fake, levelForStrength(strength), '这是测试，不会改你的数据', 'in_app');
@@ -1029,21 +1215,22 @@ async function loadSettingsForm() {
   try {
     const { settings } = await api.settings();
     saveConfig({ settings });
-  } catch { /* 读不到就保留本地缓存 */ }
+  } catch { /* 保留本地缓存 */ }
 }
 
 function renderDeviceRows() {
-  const box = $<HTMLElement>('#set-devices');
+  const box = document.getElementById('set-devices');
   if (!box) return;
   box.innerHTML = state.devices.map((d) => `
     <div class="dev-row">
+      <span class="sdot ${d.online ? '' : 'off'}"></span>
       <b>${esc(d.name)}</b><span class="mono">${esc(d.lastIp ?? '—')}</span>
       <span>${d.online ? '在线' : '离线'}</span><span class="hint">${esc(d.platform)}</span>
-    </div>`).join('');
+    </div>`).join('') || '<div class="hint" style="padding:10px 0">暂无设备记录</div>';
 }
 
 async function reloadUsers() {
-  const box = $<HTMLElement>('#set-users');
+  const box = document.getElementById('set-users');
   if (!box) return;
   try {
     const { users } = await api.users();
@@ -1052,9 +1239,9 @@ async function reloadUsers() {
       <div class="dev-row">
         <b>${esc(u.username)}</b><span>${u.role === 'admin' ? '管理员' : '普通用户'}</span>
         <span>${u.disabled ? '已禁用' : '正常'}</span>
-        ${u.id === me ? '<span class="hint">自己</span>' : `
-          <button class="btn sm" data-user="${esc(u.id)}" data-act="${u.disabled ? 'disable' : 'enable'}">${u.disabled ? '启用' : '禁用'}</button>
-          <button class="btn sm danger" data-user="${esc(u.id)}" data-act="del">删除</button>`}
+        ${u.id === me ? '<span class="hint">当前账号</span>' : `
+          <button type="button" class="btn sm tonal" data-user="${esc(u.id)}" data-act="${u.disabled ? 'enable' : 'disable'}">${u.disabled ? '启用' : '禁用'}</button>
+          <button type="button" class="btn sm danger" data-user="${esc(u.id)}" data-act="del">删除</button>`}
       </div>`).join('');
   } catch (e) { $<HTMLElement>('#usr-msg').textContent = msgOf(e); }
 }
@@ -1079,14 +1266,14 @@ async function addUser() {
 async function loadLogPolicy() {
   const p = await native<LogPolicy>('get_log_policy');
   if (!p) return;
-  const b = $<HTMLButtonElement>('#log-level');
+  const b = document.getElementById('log-level') as HTMLButtonElement | null;
   if (b) {
     b.dataset.v = p.level;
     b.querySelector<HTMLElement>('.trigger-label')!.textContent = p.level;
   }
-  const days = $<HTMLInputElement>('#log-days');
+  const days = document.getElementById('log-days') as HTMLInputElement | null;
   if (days) days.value = String(p.retentionDays);
-  const enabled = $<HTMLInputElement>('#log-enabled');
+  const enabled = document.getElementById('log-enabled') as HTMLInputElement | null;
   if (enabled) enabled.checked = p.enabled;
   localStorage.setItem(LOG_KEY, JSON.stringify(p));
 }
@@ -1094,8 +1281,8 @@ async function loadLogPolicy() {
 async function saveLogPolicy() {
   const msg = $<HTMLElement>('#log-msg');
   const p: LogPolicy = {
-    level: ($<HTMLButtonElement>('#log-level').dataset.v ?? 'info') as LogPolicy['level'],
-    retentionDays: Number($<HTMLInputElement>('#log-days').value),
+    level: ($<HTMLButtonElement>('#log-level').dataset.v ?? DEFAULT_LOG_POLICY.level) as LogPolicy['level'],
+    retentionDays: Number($<HTMLInputElement>('#log-days').value) || DEFAULT_LOG_POLICY.retentionDays,
     enabled: $<HTMLInputElement>('#log-enabled').checked,
   };
   const ok = await nativeOk('set_log_policy', {
@@ -1117,7 +1304,7 @@ function renderStatsView(box: HTMLElement) {
       <div class="stats">
         <div class="stat-hero" id="stat-hero">读取中…</div>
         <div class="stat-grid" id="stat-grid"></div>
-        <h2 class="stat-title">最近 7 天</h2>
+        <h2 class="stat-title">最近 7 天推进走势</h2>
         <div class="bars" id="stat-days"></div>
       </div>`;
   }
@@ -1143,8 +1330,8 @@ async function loadStats() {
     $<HTMLElement>('#stat-days').innerHTML = s.days.map((d) => `
       <div class="bar-col" title="${esc(d.day)}：聚焦 ${d.focus}，完成 ${d.done}，待跟进 ${d.pending}">
         <div class="bar-track">
-          <i class="bar-done" style="height:${Math.round(d.done / max * 100)}%"></i>
-          <i class="bar-miss" style="height:${Math.round(d.pending / max * 100)}%"></i>
+          <i class="bar-done" style="height:${Math.round((d.done / max) * 100)}%"></i>
+          <i class="bar-miss" style="height:${Math.round((d.pending / max) * 100)}%"></i>
         </div>
         <span>${esc(d.day.slice(5))}</span>
       </div>`).join('');
@@ -1163,7 +1350,7 @@ function renderDashboard(box: HTMLElement) {
         <h2 class="dash-section">推进概况</h2>
         <div class="dash-grid">
           <section class="dash-card"><h3>推进项状态</h3><div id="dash-entries" class="dash-body">读取中…</div></section>
-          <section class="dash-card"><h3>打扰分布</h3><div id="dash-deliveries" class="dash-body">读取中…</div></section>
+          <section class="dash-card"><h3>今日提醒分布</h3><div id="dash-deliveries" class="dash-body">读取中…</div></section>
         </div>
         <h2 class="dash-section">运行环境</h2>
         <div class="dash-grid">
@@ -1203,17 +1390,16 @@ async function loadOverview() {
       <div>上次 ${o.engine.lastTickAt ? new Date(o.engine.lastTickAt).toLocaleTimeString('zh-CN') : '-'}</div>`);
     put('dash-entries', `
       <div>进行中 ${o.pursuits.active ?? 0} · 收件箱 ${o.pursuits.inbox ?? 0}</div>
-      <div>已完成 ${o.pursuits.done ?? 0} · 归档 ${o.pursuits.archived ?? 0}</div>
-      <div>暂停 ${o.pursuits.paused ?? 0}</div>`);
+      <div>已完成 ${o.pursuits.done ?? 0} · 归档 ${o.pursuits.archived ?? 0} · 暂停 ${o.pursuits.paused ?? 0}</div>`);
     const counts = `弱提醒 ${o.nudgesToday[2] ?? 0} · 强提醒 ${o.nudgesToday[4] ?? 0}`;
-    put('dash-deliveries', `<div>今日提醒次数</div><div>${esc(counts)}</div>`);
+    put('dash-deliveries', `<div>今日提醒次数</div><div><b>${esc(counts)}</b></div>`);
     const plats = Object.entries(o.devices.byPlatform).map(([k, v]) => `${k} ${v}`).join(' · ') || '无';
     put('dash-devices', `<div>总数 <b>${o.devices.total}</b> · 在线 ${o.devices.online}</div><div>${esc(plats)}</div>`);
     put('dash-users', `<div>总数 <b>${o.users.total}</b></div>`);
     put('dash-at', new Date(o.serverTs).toLocaleTimeString('zh-CN'));
     put('dash-err', '');
   } catch (e) {
-    put('dash-err', `<div class="dash-err-line">${esc(msgOf(e))}</div>`);
+    put('dash-err', `<div>${esc(msgOf(e))}</div>`);
   }
 }
 
@@ -1236,9 +1422,9 @@ function renderTokens(box: HTMLElement) {
             <div class="login-row">
               <span class="login-hint" id="tk-hint">令牌只显示一次，复制后妥善保存</span>
               <button type="button" class="btn sm solid" id="tk-issue">签发</button></div>
-            <div class="mid-row" style="margin-top:8px">
+            <div class="mid-row" style="margin-top:10px">
               <input class="input mono mid-val" id="tk-plain" readonly placeholder="新令牌（仅显示一次）">
-              <button type="button" class="btn sm" id="tk-copy">复制</button></div>
+              <button type="button" class="btn sm tonal" id="tk-copy">复制</button></div>
           </section>
         </div>
       </div>`;
@@ -1283,8 +1469,10 @@ async function loadAgentTokens(box: HTMLElement) {
     const { tokens } = await api.agentTokens();
     list.innerHTML = tokens.length
       ? tokens.map((t) => `
-          <div class="agent-item"><span>${esc(t.name)} <span class="oc-muted">${esc(t.prefix)}… · ${t.scope}</span></span>
-            <button type="button" class="btn sm" data-revoke="${esc(t.id)}">撤销</button></div>`).join('')
+          <div class="agent-item">
+            <span><b>${esc(t.name)}</b> <span class="oc-muted mono">${esc(t.prefix)}… · ${t.scope}</span></span>
+            <button type="button" class="btn sm danger" data-revoke="${esc(t.id)}">撤销</button>
+          </div>`).join('')
       : '<div class="login-hint">还没有 Agent 令牌</div>';
     list.querySelectorAll<HTMLButtonElement>('[data-revoke]').forEach((b) => {
       b.onclick = async () => {
@@ -1302,7 +1490,7 @@ async function loadAgentTokens(box: HTMLElement) {
   }
 }
 
-/* ------------------------------------------------------------ 选择 / 日期 */
+/* ------------------------------------------------------------ 选中与排期 */
 
 function selectPursuit(id: string) {
   const p = findPursuit(id);
@@ -1314,141 +1502,20 @@ function selectPursuit(id: string) {
     if (state.selected !== id) return;
     state.followups = r.followups;
     renderEditor();
-  }).catch(() => { /* 历史读不到不影响其它操作 */ });
-}
-
-let whenPop: HTMLElement | null = null;
-let whenOut: ((ev: MouseEvent) => void) | null = null;
-
-function closeWhenPicker() {
-  if (whenOut) document.removeEventListener('mousedown', whenOut);
-  whenOut = null;
-  whenPop?.remove();
-  whenPop = null;
-}
-
-/** 日期时间选择器：带快捷档位，选完回调。编辑截止与延期共用 */
-function pickWhen(initial: number | null, anchor: HTMLElement, onPick: (at: number) => void) {
-  closeWhenPicker();
-  const now = serverNow();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const dateKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const selected = new Date(initial ?? now + 3600_000);
-  let hh = selected.getHours(), mm = selected.getMinutes();
-  let viewY = selected.getFullYear(), viewM = selected.getMonth();
-
-  const pop = document.createElement('div');
-  pop.className = 'dp-pop';
-  document.body.appendChild(pop);
-  whenPop = pop;
-
-  const commit = (at: number) => {
-    onPick(at);
-    closeWhenPicker();
-  };
-  const atTime = (d: Date, h: number, m: number) => {
-    const x = new Date(d);
-    x.setHours(h, m, 0, 0);
-    return x;
-  };
-
-  const render = () => {
-    const lead = new Date(viewY, viewM, 1).getDay();
-    const total = new Date(viewY, viewM + 1, 0).getDate();
-    const cells: string[] = [];
-    for (let i = 0; i < lead; i++) cells.push('<span></span>');
-    for (let d = 1; d <= total; d++) {
-      const key = `${viewY}-${pad(viewM + 1)}-${pad(d)}`;
-      const on = key === dateKey(selected);
-      const isToday = key === dateKey(new Date(now));
-      cells.push(`<button class="dp-day${on ? ' on' : ''}${isToday ? ' today' : ''}" data-day="${key}">${d}</button>`);
-    }
-    pop.innerHTML = `
-      <div class="dp-quick">
-        <button data-dp="today9">今天 9:00</button><button data-dp="today18">今晚 18:00</button>
-        <button data-dp="tomorrow9">明早 9:00</button><button data-dp="tomorrow18">明晚 18:00</button>
-        <button data-dp="week">下周一 9:00</button><button data-dp="hour">1 小时后</button>
-      </div>
-      <div class="dp-month">
-        <button class="btn sm" data-dp="prev" aria-label="上个月">‹</button>
-        <b>${viewY} 年 ${viewM + 1} 月</b>
-        <button class="btn sm" data-dp="next" aria-label="下个月">›</button>
-      </div>
-      <div class="dp-grid">
-        ${['日', '一', '二', '三', '四', '五', '六'].map((w) => `<span class="dp-w">${w}</span>`).join('')}
-        ${cells.join('')}
-      </div>
-      <div class="dp-time">
-        <button type="button" class="input dp-time-btn" id="dp-time-btn" data-v="${pad(hh)}:${pad(mm)}">
-          <span class="trigger-label">${pad(hh)}:${pad(mm)}</span><span class="trigger-arrow">◷</span></button>
-      </div>
-      <div class="dp-foot">
-        <button class="btn sm" data-dp="cancel">取消</button>
-        <button class="btn solid sm" data-dp="ok">确定</button></div>`;
-  };
-
-  pop.addEventListener('click', (ev) => {
-    const tb = (ev.target as HTMLElement).closest<HTMLElement>('#dp-time-btn');
-    if (tb) {
-      openTimePicker(tb, tb.dataset.v ?? '09:00', (v) => {
-        tb.dataset.v = v;
-        tb.querySelector<HTMLElement>('.trigger-label')!.textContent = v;
-        const [h, m] = v.split(':').map(Number);
-        hh = h; mm = m;
-      });
-      return;
-    }
-  });
-
-  pop.addEventListener('click', (ev) => {
-    const t = ev.target as HTMLElement;
-    const day = t.closest<HTMLElement>('[data-day]');
-    if (day) {
-      const [y, m, d] = day.dataset.day!.split('-').map(Number);
-      selected.setFullYear(y, m - 1, d);
-      render();
-      return;
-    }
-    const b = t.closest<HTMLElement>('[data-dp]');
-    if (!b) return;
-    const act = b.dataset.dp;
-    if (!act) return;
-    if (act === 'prev' || act === 'next') {
-      viewM += act === 'next' ? 1 : -1;
-      if (viewM < 0) { viewM = 11; viewY--; }
-      if (viewM > 11) { viewM = 0; viewY++; }
-      render();
-      return;
-    }
-    if (act === 'cancel') { closeWhenPicker(); return; }
-    if (act === 'ok') { commit(atTime(selected, hh, mm).getTime()); return; }
-    const base = new Date(now);
-    if (act === 'tomorrow9' || act === 'tomorrow18') base.setDate(base.getDate() + 1);
-    if (act === 'week') {
-      let delta = (8 - base.getDay()) % 7 || 7;
-      base.setDate(base.getDate() + delta);
-    }
-    if (act === 'hour') commit(now + 3600_000);
-    else {
-      const hour = act.endsWith('18') ? 18 : 9;
-      const at = atTime(base, hour, 0);
-      commit(at.getTime() <= now ? at.getTime() + 86400_000 : at.getTime());
-    }
-  });
-
-  render();
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 288))}px`;
-  pop.style.top = `${Math.max(8, Math.min(r.bottom + 6, window.innerHeight - 370))}px`;
-  whenOut = (ev) => { if (!pop.contains(ev.target as Node) && ev.target !== anchor) closeWhenPicker(); };
-  setTimeout(() => document.addEventListener('mousedown', whenOut!), 0);
+  }).catch(() => {});
 }
 
 function openWhenPicker(p: Pursuit, anchor: HTMLElement) {
-  pickWhen(p.dueAt, anchor, (at) => {
-    const cur = findPursuit(p.id) ?? p;
-    void api.update(cur.id, { dueAt: at, version: versionOf(cur) })
-      .then(refresh).catch((err) => flashConflict(err, p.id));
+  openDateTimePicker({
+    initial: p.dueAt,
+    now: serverNow(),
+    anchor,
+    title: '修改截止时间',
+    onPick: (at) => {
+      const cur = findPursuit(p.id) ?? p;
+      void api.update(cur.id, { dueAt: at, version: versionOf(cur) })
+        .then(refresh).catch((err) => flashConflict(err, p.id));
+    },
   });
 }
 
@@ -1465,7 +1532,6 @@ async function refresh() {
   ]);
   if (gen !== refreshGen) return;
   if (counts) state.counts = counts;
-  // focus 只用于跨窗口详情兜底，今日列表不再依赖它
   if (focus) state.focus = focus;
 
   if (view === 'settings' || view === 'mystats' || view === 'dashboard' || view === 'tokens') {
@@ -1501,64 +1567,40 @@ async function submitCapture(raw: string) {
       strength: captureStrength,
       nature: 'one_off',
     });
-    const cap = $<HTMLInputElement>('#cap');
+    const cap = document.getElementById('cap') as HTMLInputElement | null;
     if (cap) { cap.value = ''; $<HTMLElement>('#parse').hidden = true; }
     captureStrength = 'weak';
-    flash('已记下');
+    document.querySelectorAll<HTMLButtonElement>('#cap-str-seg [data-strength]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.strength === 'weak');
+      b.classList.remove('hot');
+    });
+    flash(p.remindAt ? '已记下并设好截止' : '已记入待办');
     void refresh();
   } catch (e) {
     flash('保存失败：' + msgOf(e));
   }
 }
 
-async function askLater(id: string) {
+function askLater(id: string) {
   const p = findPursuit(id);
   const now = serverNow();
-  const inMins = (m: number) => now + m * 60_000;
-  const at = (days: number) => {
-    const d = new Date(now);
-    d.setDate(d.getDate() + days);
-    d.setHours(9, 0, 0, 0);
-    return d.getTime();
-  };
-  const label = (ts: number) => dayLabel(ts) + ' ' + hhmm(ts);
-  const host = document.createElement('div');
-  host.className = 'panel-mask';
-  host.innerHTML = `
-    <div class="panel panel-sm" role="dialog" aria-modal="true">
-      <div class="panel-head"><b>延期「${esc((p?.text ?? '').slice(0, 24))}」</b></div>
-      <div class="panel-body">
-        <div class="snooze-opts">
-          <button class="nav" data-to="${inMins(30)}">30 分钟后<span class="mono">${label(inMins(30))}</span></button>
-          <button class="nav" data-to="${inMins(60)}">1 小时后<span class="mono">${label(inMins(60))}</span></button>
-          <button class="nav" data-to="${inMins(120)}">2 小时后<span class="mono">${label(inMins(120))}</span></button>
-          <button class="nav" data-to="${at(1)}">明天早上<span class="mono">${label(at(1))}</span></button>
-          <button class="nav" data-to="${at(3)}">3 天后<span class="mono">${label(at(3))}</span></button>
-          <button class="nav" data-to="${at(7)}">下周<span class="mono">${label(at(7))}</span></button>
-          <button class="nav" id="later-custom">自定义时间<span class="mono">选日期和时刻</span></button>
-        </div>
-      </div>
-    </div>`;
-  document.body.appendChild(host);
-  const done = (to?: number) => {
-    host.remove();
-    if (to) void runFollowup(id, 'later', { to });
-  };
-  host.addEventListener('click', (ev) => {
-    if (ev.target === host) { done(); return; }
-    const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-to]');
-    if (b) { done(Number(b.dataset.to)); return; }
-    const custom = (ev.target as HTMLElement).closest<HTMLElement>('#later-custom');
-    if (custom) {
-      // 选择器按锚点坐标定位，必须在 host 还在 DOM 时建好，再移除遮罩
-      pickWhen(p?.dueAt ?? now + 3600_000, custom, (to) => void runFollowup(id, 'later', { to }));
-      host.remove();
-    }
+  openSnoozeDialog({
+    title: `延期「${(p?.text ?? '').slice(0, 20)}」`,
+    now,
+    onPick: (to) => void runFollowup(id, 'later', { to }),
+    onCustom: () => {
+      openDateTimePicker({
+        initial: p?.dueAt ?? now + 3600_000,
+        now,
+        modal: true,
+        title: '选择延期后的截止时间',
+        onPick: (to) => void runFollowup(id, 'later', { to }),
+      });
+    },
   });
 }
 
 async function runFollowup(id: string, action: FollowupAction, extra: Record<string, unknown> = {}) {
-  // 测试提醒是本地假条目，服务端没有。只走本地确认并关窗，不落库
   if (id.startsWith('test-')) {
     control.acknowledge(action);
     if (dropTakeoverItem(id)) showTakeover();
@@ -1581,16 +1623,18 @@ async function runFollowup(id: string, action: FollowupAction, extra: Record<str
     if (!edits) return;
     extra.stepEdits = edits;
   }
-  if (action === 'later' && !extra.to) { await askLater(id); return; }
+  if (action === 'later' && !extra.to) { askLater(id); return; }
 
-  const body = { action, version, ...(extra.note ? { note: String(extra.note) } : {}),
+  const body = {
+    action, version,
+    ...(extra.note ? { note: String(extra.note) } : {}),
     ...(extra.to ? { to: Number(extra.to) } : {}),
     ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),
     ...(Array.isArray(extra.stepEdits) ? { stepEdits: extra.stepEdits as StepEdit[] } : {}),
-    ...(extra.stepId ? { stepId: String(extra.stepId) } : {}) };
+    ...(extra.stepId ? { stepId: String(extra.stepId) } : {}),
+  };
   try {
     localHandled.set(id, Date.now());
-    // 跟进只有 HTTP 一条写入路径；WS 再发一次会用同一个 version 触发乐观锁冲突
     await api.followup(id, body);
     noteFollowup(id, action);
     control.acknowledge(action);
@@ -1609,7 +1653,7 @@ async function runFollowup(id: string, action: FollowupAction, extra: Record<str
 async function runClone(id: string) {
   try {
     const r = await api.clone(id);
-    flash('已克隆，步骤状态已重置、截止已清空');
+    flash('已克隆，步骤已重置、截止已清空');
     state.selected = r.pursuit.id;
     void refresh();
   } catch (e) {
@@ -1617,22 +1661,31 @@ async function runClone(id: string) {
   }
 }
 
+async function confirmAndDelete(id: string) {
+  const ok = await openConfirmDialog({
+    title: '永久删除这条归档记录？',
+    detail: '删除后将无法恢复。',
+    confirmText: '删除',
+    danger: true,
+  });
+  if (!ok) return;
+  void api.deletePursuit(id)
+    .then(() => {
+      if (state.selected === id) state.selected = null;
+      flash('已删除');
+      void refresh();
+    })
+    .catch((e) => flash(msgOf(e)));
+}
+
 function onListClick(ev: Event) {
   const t = ev.target as HTMLElement;
   const del = t.closest<HTMLElement>('[data-del]');
-  if (del) {
-    if (!window.confirm('确定删除这条归档记录？删除后不可恢复。')) return;
-    void api.deletePursuit(del.dataset.del!)
-      .then(() => { if (state.selected === del.dataset.del) state.selected = null; void refresh(); })
-      .catch((e) => flash(msgOf(e)));
-    return;
-  }
+  if (del) { void confirmAndDelete(del.dataset.del!); return; }
   const fa = t.closest<HTMLElement>('[data-follow]');
-  if (fa) { void runFollowup(fa.dataset.id!, fa.dataset.follow as FollowupAction); return; }
-  const f = t.closest<HTMLElement>('[data-focus-act]');
-  if (f) {
-    void runFollowup(f.dataset.id!, f.dataset.focusAct as FollowupAction,
-      f.dataset.step ? { stepId: f.dataset.step } : {});
+  if (fa) {
+    void runFollowup(fa.dataset.id!, fa.dataset.follow as FollowupAction,
+      fa.dataset.step ? { stepId: fa.dataset.step } : {});
     return;
   }
   const row = t.closest<HTMLElement>('[data-id]');
@@ -1641,18 +1694,38 @@ function onListClick(ev: Event) {
 
 function onEditorClick(ev: Event) {
   const t = (ev.target as HTMLElement).closest<HTMLElement>(
-    '[data-act],[data-strength],[data-nature],[data-step-del]',
+    '[data-act],[data-strength],[data-nature],[data-step-del],[data-wd]',
   );
   const p = findPursuit(state.selected);
-  if (!t || !p) return;
+  if (!t) return;
+  if (t.dataset.act === 'close-editor') {
+    state.selected = null;
+    renderAll();
+    return;
+  }
+  if (!p) return;
+
   const savePatch = (patch: Record<string, unknown>) => {
     const cur = findPursuit(p.id) ?? p;
     void api.update(cur.id, { ...patch, version: versionOf(cur) })
-      .then(refresh).catch((err) => flashConflict(err, p.id));
+      .then(() => {
+        const badge = document.getElementById('ed-saved');
+        if (badge) badge.textContent = '已保存';
+        void refresh();
+      }).catch((err) => flashConflict(err, p.id));
   };
 
   if (t.dataset.strength) { savePatch({ strength: t.dataset.strength }); return; }
   if (t.dataset.nature) { savePatch({ nature: t.dataset.nature }); return; }
+  if (t.dataset.wd !== undefined) {
+    t.classList.toggle('on');
+    const days = [...document.querySelectorAll<HTMLElement>('#f-wd-chips .wd-chip.on')]
+      .map((c) => c.dataset.wd!)
+      .join(',');
+    const hidden = document.getElementById('f-byday') as HTMLInputElement | null;
+    if (hidden) hidden.value = days;
+    return;
+  }
   if (t.dataset.stepDel) {
     void api.deleteStep(t.dataset.stepDel).then(refresh).catch((e) => flash(msgOf(e)));
     return;
@@ -1670,24 +1743,21 @@ function onEditorClick(ev: Event) {
     }
     case 'clear-due': savePatch({ dueAt: null }); return;
     case 'clone': void runClone(p.id); return;
-    case 'delete':
-      if (!window.confirm('确定删除这条归档记录？删除后不可恢复。')) return;
-      void api.deletePursuit(p.id).then(() => {
-        state.selected = null;
-        void refresh();
-      }).catch((e) => flash(msgOf(e)));
-      return;
+    case 'delete': void confirmAndDelete(p.id); return;
     case 'save-rule': {
-      const freq = $<HTMLButtonElement>('#f-freq').dataset.v ?? 'none';
+      const freq = ($<HTMLButtonElement>('#f-freq').dataset.v ?? 'none') as Freq;
       const fields = {
-        byWeekday: $<HTMLInputElement>('#f-byday')?.value?.trim() ?? '',
-        byMonthday: $<HTMLInputElement>('#f-bymonthday')?.value?.trim() ?? '',
-        byMonth: $<HTMLInputElement>('#f-bymonth')?.value?.trim() ?? '',
+        byWeekday: ($<HTMLInputElement>('#f-byday')?.value ?? '').trim(),
+        byMonthday: ($<HTMLInputElement>('#f-bymonthday')?.value ?? '').trim(),
+        byMonth: ($<HTMLInputElement>('#f-bymonth')?.value ?? '').trim(),
       };
-      savePatch({ recurrence: buildRecurrence(freq as Parameters<typeof buildRecurrence>[0], fields) });
+      savePatch({ recurrence: buildRecurrence(freq, fields) });
       return;
     }
-    case 'follow-later': void askLater(p.id); return;
+    case 'follow-done':
+      void runFollowup(p.id, 'done', t.dataset.step ? { stepId: t.dataset.step } : {});
+      return;
+    case 'follow-later': askLater(p.id); return;
     case 'follow-smaller':
     case 'follow-archive':
     case 'follow-reopen':
@@ -1733,15 +1803,19 @@ function onEditorInput(ev: Event) {
   const id = p.id;
   const value = t.value;
   const key = t.id === 'f-text' ? 'text' : 'note';
+  const badge = document.getElementById('ed-saved');
+  if (badge) badge.textContent = '保存中…';
   const w = window as unknown as Record<string, number>;
   clearTimeout(w.__pursuitDeb);
   w.__pursuitDeb = window.setTimeout(() => {
     const cur = findPursuit(id);
     if (!cur) return;
-    editingLocal = true;
     void api.update(id, { [key]: key === 'note' ? (value || null) : value, version: versionOf(cur) })
-      .then(refresh).catch((err) => flashConflict(err, id))
-      .finally(() => { editingLocal = false; });
+      .then(() => {
+        const b = document.getElementById('ed-saved');
+        if (b) b.textContent = '已保存';
+        void refresh();
+      }).catch((err) => flashConflict(err, id));
   }, 500);
 }
 
@@ -1749,24 +1823,22 @@ function flashConflict(err: unknown, pursuitId: string) {
   if (err instanceof ApiError && err.status === 409) {
     flash('这条刚在别的设备上改过，已刷新为最新内容');
   } else {
-    flash('保存失败，检查服务端连接');
+    flash('保存失败，请检查服务端连接');
   }
   void refresh().then(() => { state.selected = pursuitId; });
 }
 
 function setLink(s: 'connecting' | 'open' | 'closed') {
-  const dot = $<HTMLElement>('#sdot');
-  const txt = $<HTMLElement>('#stxt');
-  const srv = $<HTMLElement>('#s-server');
-  const conn = $<HTMLElement>('#btn-server');
-  if (!dot || !txt) return;
+  const dot = document.getElementById('sdot');
+  const txt = document.getElementById('stxt');
+  const conn = document.getElementById('btn-server');
+  if (!dot || !txt || !conn) return;
   linkState = s;
   dot.className = `sdot ${s === 'open' ? '' : s === 'connecting' ? 'warn' : 'alert'}`;
-  txt.textContent = s === 'open' ? '已连接' : s === 'connecting' ? '连接中' : '已断开';
+  txt.textContent = s === 'open' ? '已连接' : s === 'connecting' ? '连接中…' : '已断开';
   conn.title = s === 'closed'
-    ? `已断开，正在自动重连。点击切换服务端（${loadConfig().baseUrl}）`
-    : `点击切换服务端（${loadConfig().baseUrl}）`;
-  if (srv) srv.textContent = `服务端 ${loadConfig().baseUrl}`;
+    ? `已断开，正在自动重连 · ${loadConfig().baseUrl}（点击切换）`
+    : `已连至 ${loadConfig().baseUrl}（点击切换服务端）`;
   const mine = loadConfig().device?.id;
   const self = state.devices.find((d) => d.id === mine);
   if (self) self.online = s === 'open';
@@ -1776,40 +1848,49 @@ function setLink(s: 'connecting' | 'open' | 'closed') {
 const SKEW_MAX_AUTO = 10_000;
 
 function renderSkew() {
-  const skew = $<HTMLElement>('#s-skew');
-  if (!skew) return;
+  const banner = document.getElementById('skew-banner');
+  const txt = document.getElementById('skew-banner-txt');
+  if (!banner || !txt) return;
   const ms = loadConfig().serverSkewMs;
-  skew.textContent = Math.abs(ms) < 1000 ? `${ms} ms` : `${ms > 0 ? '+' : ''}${Math.round(ms / 1000)} s`;
-  const box = skew.parentElement;
-  if (box) box.classList.toggle('warn', Math.abs(ms) > SKEW_MAX_AUTO);
-  skew.title = Math.abs(ms) > SKEW_MAX_AUTO
-    ? '本机时钟和服务端差得比较多，倒计时可能有偏差。建议开启系统自动校时'
-    : '本机时钟与服务端的偏差，由 welcome 消息算出';
+  if (Math.abs(ms) > SKEW_MAX_AUTO) {
+    banner.hidden = false;
+    txt.textContent = `本机时钟与服务端偏差 ${ms > 0 ? '+' : ''}${Math.round(ms / 1000)} 秒，倒计时可能有误差，建议开启系统自动校时。`;
+  } else {
+    banner.hidden = true;
+  }
 }
 
 function openServerPanel() {
-  if (document.querySelector('.panel-mask')) { document.querySelector('.panel-mask')!.remove(); return; }
+  const existing = document.querySelector('.panel-mask');
+  if (existing) { existing.remove(); return; }
+  const cfg = loadConfig();
+  const skewStr = Math.abs(cfg.serverSkewMs) < 1000
+    ? `${cfg.serverSkewMs} ms`
+    : `${cfg.serverSkewMs > 0 ? '+' : ''}${Math.round(cfg.serverSkewMs / 1000)} s`;
+
   const host = document.createElement('div');
   host.className = 'panel-mask';
   host.innerHTML = `
-    <div class="panel">
+    <div class="panel" role="dialog" aria-modal="true">
       <div class="panel-head"><b>服务端与本机设备</b><div class="sp"></div>
-        <button class="btn sm" id="sp-close">关闭</button></div>
-      <div class="panel-body">
-        <label class="fld"><span>地址</span>
-          <input class="input" id="sp-url" spellcheck="false" autocomplete="off" value="${esc(loadConfig().baseUrl)}"></label>
+        <button type="button" class="btn icon-only sm" id="sp-close" aria-label="关闭">${ICO.close(16)}</button></div>
+      <form class="panel-body">
+        <label class="fld"><span>服务端地址</span>
+          <input class="input" id="sp-url" spellcheck="false" autocomplete="off" value="${esc(cfg.baseUrl)}"></label>
         <div class="login-row">
           <span class="login-hint" id="sp-hint">同一账号的设备填同一个地址，就看同一份推进项</span>
-          <button type="button" class="btn sm" id="sp-test">测试连接</button></div>
+          <button type="button" class="btn sm tonal" id="sp-test">测试连接</button></div>
+        <div class="srv-meta"><span>当前时钟偏差</span><span class="mono">${esc(skewStr)}</span></div>
         <div class="panel-err" id="sp-err"></div>
+        <button class="btn solid panel-submit" type="submit">切换到此服务端</button>
         <div class="mid-block">
           <span class="mid-title">本机 machine-id</span>
           <div class="mid-row">
             <input class="input mono mid-val" id="sp-mid" readonly value="读取中…">
-            <button type="button" class="btn sm" id="sp-copy">复制</button></div>
+            <button type="button" class="btn sm tonal" id="sp-copy">复制</button></div>
           <div class="login-hint">签发 Agent 令牌时可选绑定这个 id。</div>
         </div>
-      </div>
+      </form>
     </div>`;
   document.body.appendChild(host);
 
@@ -1818,14 +1899,14 @@ function openServerPanel() {
   const hint = q<HTMLSpanElement>('#sp-hint');
   const err = q<HTMLDivElement>('#sp-err');
   const url = q<HTMLInputElement>('#sp-url');
-  const form = q<HTMLFormElement>('.panel-body');
+  const form = q<HTMLFormElement>('form.panel-body');
   const setHint = (text: string, kind: '' | 'ok' | 'bad' = '') => {
     hint.textContent = text;
     hint.className = `login-hint ${kind}`;
   };
   q<HTMLButtonElement>('#sp-close').onclick = close;
   host.addEventListener('click', (ev) => { if (ev.target === host) close(); });
-  void getMachineId().then((id) => { q<HTMLInputElement>('#sp-mid').value = id || '不是桌面客户端，没有 machine-id'; });
+  void getMachineId().then((id) => { q<HTMLInputElement>('#sp-mid').value = id || '非桌面客户端，无 machine-id'; });
   q<HTMLButtonElement>('#sp-copy').onclick = async () => {
     const id = await getMachineId();
     if (!id) { setHint('拿不到 machine-id', 'bad'); return; }
@@ -1837,23 +1918,18 @@ function openServerPanel() {
     if (!norm) { setHint('地址格式不对，需要 http:// 或 https:// 开头', 'bad'); return; }
     const btn = ev.currentTarget as HTMLButtonElement;
     btn.disabled = true;
-    setHint('测试中...');
+    setHint('测试中…');
     const r = await probeServer(norm);
     btn.disabled = false;
     setHint(r.ok ? '连上了' : r.reason, r.ok ? 'ok' : 'bad');
   };
-  const submitBtn = document.createElement('button');
-  submitBtn.className = 'btn solid panel-submit';
-  submitBtn.type = 'submit';
-  submitBtn.textContent = '切换到此服务端';
-  form.appendChild(submitBtn);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const norm = normalizeBaseUrl(url.value);
     if (!norm) { setHint('地址格式不对，需要 http:// 或 https:// 开头', 'bad'); return; }
     if (norm === loadConfig().baseUrl) { close(); return; }
     switchServer(norm);
-    err.textContent = '已切换，正在重新登录...';
+    err.textContent = '已切换，正在重新登录…';
     rt?.close();
     location.reload();
   });
@@ -1935,22 +2011,45 @@ function applyDevices(devices: Device[]) {
   const self = state.devices.find((d) => d.id === mine);
   if (self) self.online = linkState === 'open';
   renderSidebar();
-  if ($('#set-devices')) renderDeviceRows();
+  if (document.getElementById('set-devices')) renderDeviceRows();
 }
 
 function loadDevices() {
   return api.devices()
     .then((r) => applyDevices(r.devices))
-    .catch(() => { /* 连不上就维持现状，重连后 welcome 会再试 */ });
+    .catch(() => {});
+}
+
+function notifyWeakDigest(count: number, oldestDueAt: number, sample: string) {
+  if (count <= 0) return;
+  lastWeakDigestAt = Date.now();
+  const late = lateBy(oldestDueAt);
+  const body = `最早一条已逾期 ${late || '片刻'} · ${sample.slice(0, 36)}`;
+  ringPing({ title: `有 ${count} 条提醒已逾期未处理`, body });
+  flash(`有 ${count} 条提醒已逾期未处理（${body}）`);
 }
 
 function onRealtime(msg: ServerMessage) {
   switch (msg.t) {
-    case 'welcome':
-      if (msg.missed.length) flash(`上线补发 ${msg.missed.length} 条跟进，已同步到列表`);
-      // 旧服务端 welcome 不带 devices，直接查一次兜底
+    case 'welcome': {
+      const overdue = msg.overdue ?? [];
+      const strongOver = overdue.filter((p) => p.strength === 'strong');
+      const weakOver = overdue.filter((p) => p.strength === 'weak');
+      if (strongOver.length > 0) {
+        strongOver.forEach((p, i) => enqueueTakeover(p, '上线补发：有逾期未处理的强提醒', i === 0));
+      }
+      if (weakOver.length > 0) {
+        notifyWeakDigest(weakOver.length, weakOver[0].dueAt ?? serverNow(), weakOver[0].text);
+      } else if (msg.missed.length && strongOver.length === 0) {
+        flash(`上线补发 ${msg.missed.length} 条跟进，已同步到列表`);
+      }
       if (msg.devices) applyDevices(msg.devices);
       else void loadDevices();
+      void refresh();
+      break;
+    }
+    case 'pursuit.overdue_digest':
+      notifyWeakDigest(msg.count, msg.oldestDueAt, msg.sample);
       void refresh();
       break;
     case 'devices.changed':
@@ -1988,6 +2087,7 @@ function onRealtime(msg: ServerMessage) {
   }
 }
 
+void countAll;
 applyTheme(loadTheme());
 onUnauthorized(() => { rt?.close(); location.reload(); });
 
@@ -1998,7 +2098,7 @@ onUnauthorized(() => { rt?.close(); location.reload(); });
   if (!cfg.token && !cfg.baseUrl) { renderSetup(); return; }
   try {
     if ((await api.setupStatus()).needed) { renderSetup(); return; }
-  } catch { /* 连不上就走原来的登录/启动流程 */ }
+  } catch { /* 连不上走登录/启动 */ }
   if (cfg.token) boot();
   else renderLogin();
 })();

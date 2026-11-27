@@ -5,11 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
-## [Unreleased]
+## [v2.1.0] - 2026-11-27
 
 ### Added
+- **逾期未跟进由服务端统一复催与上线补弹**：
+  - 设备上线时 `welcome.overdue` 携带所有逾期未处理项（非静音时段），桌面端与 Android 端直接合并拉起强提醒接管窗，弱提醒合成 1 条汇总通知，解决关机/重启/多设备漏弹问题。
+  - 强提醒逾期未处理按 `0 / 15m / 1h / 每 2h` 衰减复催；弱提醒到点单条 + `30m` 补发一次，逾期 3 小时后每 3 小时广播一条 `pursuit.overdue_digest` 汇总通知。
+  - 接管窗明确显示「已逾期时长」与「当前待推进步骤」高亮卡片；跟进完成/归档后同步清理残留 `pending` nudge，杜绝幽灵提醒。
 - 归档条目可直接删除（桌面与移动端，带确认）。
 - 设置页「本地日志」加「打开日志目录」，可直接查看按天写下的日志文件。
+
+### Changed
+- 桌面端与 Android 端整体 UI 依据 Google Material Design 3 规范重构：抽离共享 `tokens.css`（5 级 Tonal Surface 容器阶梯、五级按钮语义、双主题与静态 RGBA 临近梯度）、统一 `icons.ts` SVG 图标集与 `widgets.ts` M3 Dialog / Modal Bottom Sheet。
+- 桌面端改为贯通式 Navigation Drawer（`<1120px` 自动折叠为 Navigation Rail，可手动切换）+ 自适应 List-Detail 布局：移除底部细状态栏、捕获栏内嵌到待办类视图顶部、未选中条目时自动收起空右栏、列表按时间分组、仅强提醒显示闪电徽标、重复规则改为可视化星期 Filter Chips；接管窗口新增「当前待推进步骤」高亮卡片与自定义延期入口。
+- Android 端默认首屏改为「今日待办」，底部升级为 4 Tab M3 Navigation Bar（今日 / 待办 / 看板 / 设置）+ 全局右下角 FAB 随手记 Bottom Sheet；补齐移动端推进看板、详情页标题/截止时间编辑与 44–48dp 触控热区，强提醒升级为底部拇指区操作的全屏模态；原生保活服务同步支持 `welcome.overdue` 与 `pursuit.overdue_digest`，移除本地重复定时器。
 
 ### Fixed
 - 列表行和详情底部动作按状态派生：已完成显示归档/撤回、归档无跟进动作且提供删除，不再出现点了被拒的「完成」。

@@ -1,11 +1,11 @@
 /**
- * 快速捕获窗口。全局热键唤起，Enter 存完立刻接着记下一条。
- * 时间解析只做提示，落库以服务端存下来的为准。
+ * 快速捕获窗口。全局热键唤起，Enter 存完立刻接着记下一条，Alt+S 快捷切强/弱提醒。
  */
 import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { parseInput, type Parsed, type ReminderStrength } from '../api';
+import { ICO } from '../icons';
 import { applyTheme, loadTheme } from '../theme';
 
 applyTheme(loadTheme());
@@ -15,6 +15,9 @@ const input = document.querySelector<HTMLInputElement>('#q')!;
 const parse = document.querySelector<HTMLDivElement>('#parse')!;
 const hint = document.querySelector<HTMLDivElement>('#hint')!;
 const bar = document.querySelector<HTMLDivElement>('#bar')!;
+const strSeg = document.querySelector<HTMLDivElement>('#str-seg')!;
+const capIco = document.querySelector<HTMLElement>('#cap-ico');
+if (capIco) capIco.innerHTML = ICO.add(18);
 
 let picked: Parsed = parseInput('');
 let strength: ReminderStrength = 'weak';
@@ -23,22 +26,28 @@ function esc(s: string): string {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 }
 
+function syncStrengthUI() {
+  strSeg.querySelectorAll<HTMLButtonElement>('[data-strength]').forEach((b) => {
+    const on = b.dataset.strength === strength;
+    b.classList.toggle('on', on);
+    b.classList.toggle('hot', on && strength === 'strong');
+  });
+}
+
 function renderParse(raw: string) {
   picked = parseInput(raw);
+  syncStrengthUI();
   if (!raw.trim()) {
-    parse.hidden = true;
+    parse.innerHTML = `<span class="hint">例：明天 15:00 交周报 · 半小时后喝水 · https://...</span>`;
     return;
   }
-  parse.hidden = false;
   parse.innerHTML = `
     <span class="chip ${picked.kind === 'text' ? '' : 'hot'}">${esc(picked.kindLabel)}</span>
     <span class="chip ${picked.remindAt ? 'hot' : ''}">${esc(
       picked.remindAt
         ? `截止：${picked.timeLabel}`
-        : `没填时间：${strength === 'strong' ? '强提醒默认 2 小时后' : '弱提醒默认 1 天后'}`,
-    )}</span>
-    <button type="button" class="chip ${strength === 'weak' ? 'hot' : ''}" data-strength="weak" title="到点发通知，没填时间默认 1 天后">弱提醒</button>
-    <button type="button" class="chip ${strength === 'strong' ? 'hot' : ''}" data-strength="strong" title="到点弹窗，没填时间默认 2 小时后">强提醒</button>`;
+        : `未填时间：${strength === 'strong' ? '强提醒默认 2 小时后' : '弱提醒默认 1 天后'}`,
+    )}</span>`;
 }
 
 input.addEventListener('input', () => {
@@ -46,26 +55,36 @@ input.addEventListener('input', () => {
   bar.classList.toggle('ready', input.value.trim().length > 0);
 });
 
-parse.addEventListener('click', (ev) => {
+strSeg.addEventListener('click', (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-strength]');
   if (!b) return;
   strength = b.dataset.strength as ReminderStrength;
   renderParse(input.value);
+  input.focus();
+});
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.altKey && ev.key.toLowerCase() === 's') {
+    ev.preventDefault();
+    strength = strength === 'strong' ? 'weak' : 'strong';
+    renderParse(input.value);
+  }
 });
 
 input.addEventListener('keydown', async (ev) => {
   if (ev.key === 'Escape') {
     input.value = '';
     strength = 'weak';
-    parse.hidden = true;
+    bar.classList.remove('ready');
+    renderParse('');
     await invoke('hide_capture');
+    return;
   }
   if (ev.key !== 'Enter') return;
 
   const text = input.value.trim();
   if (!text) return;
 
-  // 交给主窗口落库；这个窗口不碰 API，失败也不影响主界面
   await emit('capture:submit', {
     text,
     dueAt: picked.remindAt,
@@ -73,29 +92,29 @@ input.addEventListener('keydown', async (ev) => {
     strength,
   });
 
-  // 连记：只清空不清屏，连续按 Enter 能一条接一条地记
   input.value = '';
   strength = 'weak';
-  parse.hidden = true;
   bar.classList.remove('ready');
+  renderParse('');
   input.focus();
 });
 
 listen<{ ok: boolean; message?: string }>('capture:result', (ev) => {
   if (ev.payload.ok) {
-    hint.textContent = '已保存，接着记下一条';
-    hint.className = 'ok';
+    hint.textContent = '已保存，可接着记下一条';
+    hint.className = 'hint ok';
   } else {
     hint.textContent = ev.payload.message ?? '保存失败';
-    hint.className = 'err';
+    hint.className = 'hint err';
   }
   window.setTimeout(() => {
-    hint.textContent = 'Enter 保存，Esc 取消';
-    hint.className = '';
+    hint.textContent = 'Enter 保存 · Alt+S 切强弱 · Esc 关闭';
+    hint.className = 'hint';
   }, 2200);
 });
 
 listen('capture:focus', () => {
+  renderParse(input.value);
   input.focus();
   input.select();
 });
@@ -104,4 +123,5 @@ getCurrentWindow().onFocusChanged(({ payload }) => {
   if (!payload) void invoke('hide_capture');
 });
 
+renderParse('');
 input.focus();

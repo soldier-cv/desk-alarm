@@ -1,0 +1,205 @@
+/* ============================================================
+   DeskAlarm Design Tokens (Material Design 3 + 双主题唯一真相)
+   规则区禁止写死色值，改色后运行 node scripts/contrast.mjs 验算。
+   ============================================================ */
+:root {
+  color-scheme: dark;
+
+  /* M3 Surface Hierarchy */
+  --md-surface: #0E1012;
+  --md-surface-dim: #0A0B0D;
+  --md-surface-container-lowest: #090A0C;
+  --md-surface-container-low: #141619;
+  --md-surface-container: #1A1D21;
+  --md-surface-container-high: #22262B;
+  --md-surface-container-highest: #2C3138;
+
+  /* M3 On-Surface & Outline */
+  --md-on-surface: #ECEDF0;
+  --md-on-surface-variant: #9EA4AE;
+  --md-on-surface-muted: #8E949E;
+  --md-outline: #7A808B;
+  --md-outline-variant: #262A31;
+
+  /* M3 Semantic Roles: Primary / Secondary / Tertiary / Error */
+  --md-primary: #FF6333;
+  --md-primary-hover: #FF7B52;
+  --md-on-primary: #180904;
+  --md-primary-container: #4A1C0E;
+  --md-on-primary-container: #FFD7C9;
+
+  --md-secondary-container: #272D36;
+  --md-on-secondary-container: #E3E7EE;
+
+  --md-tertiary: #6FA895;
+  --md-on-tertiary: #071D16;
+  --md-tertiary-container: #17352C;
+  --md-on-tertiary-container: #BDE5D6;
+
+  --md-error: #FF8A7E;
+  --md-on-error: #3B0907;
+  --md-error-container: #4E1815;
+  --md-on-error-container: #FFDAD6;
+
+  /* M3 State Layers & Shadows (静态 RGBA，兼容旧 Android WebView) */
+  --state-hover: rgba(236, 237, 240, .07);
+  --state-focus: rgba(236, 237, 240, .10);
+  --state-press: rgba(236, 237, 240, .13);
+  --state-primary-tint: rgba(255, 99, 51, .14);
+  --state-primary-line: rgba(255, 99, 51, .42);
+  --state-error-tint: rgba(255, 138, 126, .12);
+  --state-error-line: rgba(255, 138, 126, .34);
+
+  --scrim: rgba(0, 0, 0, .60);
+  --elev-1: 0 1px 3px rgba(0, 0, 0, .32), 0 1px 2px rgba(0, 0, 0, .24);
+  --elev-2: 0 4px 14px rgba(0, 0, 0, .42);
+  --elev-3: 0 16px 44px rgba(0, 0, 0, .56);
+  --shadow: var(--elev-3);
+
+  /* 临近四档梯度：静态 RGBA，桌面与旧版 Android WebView 共用 */
+  --u-bg-soon: rgba(255, 99, 51, .11);
+  --u-bg-close: rgba(255, 99, 51, .19);
+  --u-bg-due: rgba(255, 99, 51, .28);
+  --u-bg-over: rgba(255, 99, 51, .38);
+  --u-bar-soon: rgba(255, 99, 51, .40);
+  --u-bar-close: rgba(255, 99, 51, .64);
+  --u-bar-due: #FF6333;
+  --u-bar-over: #FF6333;
+
+  --warn-bg: #C9451D;
+  --warn-bg-deep: #8C2C10;
+  --warn-on: #FFF6F2;
+  --warn-stripe: rgba(0, 0, 0, .32);
+  --warn-shadow: rgba(0, 0, 0, .38);
+
+  --update: #5CA8FF;
+  --update-hover: #82BEFF;
+  --offline-dot: #9AA0A6;
+  --warn-text: #D7A887;
+  --dot-soon: #8A6F5E;
+  --dot-close: #C48758;
+  --bar-track: #252930;
+  --strike: #4A4F57;
+  --scroll-thumb: #2D323A;
+  --scroll-thumb-hover: #424954;
+  --chip-hot-text: #FFB699;
+
+  /* 语义别名（与历史命名及通用组件对齐） */
+  --bg: var(--md-surface);
+  --surface: var(--md-surface-container-low);
+  --raised: var(--md-surface-container-high);
+  --hover: var(--md-surface-container-high);
+  --raised-strong: var(--md-surface-container-highest);
+  --field: var(--md-surface-container);
+  --line: var(--md-outline-variant);
+  --line-input: var(--md-outline);
+  --line-ctrl: var(--md-outline);
+  --line-soft: var(--md-outline-variant);
+  --text: var(--md-on-surface);
+  --muted: var(--md-on-surface-variant);
+  --dim: var(--md-on-surface-muted);
+  --flare: var(--md-primary);
+  --flare-text: var(--md-primary);
+  --on-flare: var(--md-on-primary);
+  --flare-hover: var(--md-primary-hover);
+  --flare-tint: var(--state-primary-tint);
+  --flare-line: var(--state-primary-line);
+  --ok: var(--md-tertiary);
+  --danger-text: var(--md-error);
+  --danger-soft: var(--state-error-tint);
+  --danger-line: var(--state-error-line);
+
+  /* M3 Shape & Motion Scales */
+  --shape-xs: 4px;
+  --shape-sm: 8px;
+  --shape-md: 12px;
+  --shape-lg: 16px;
+  --shape-xl: 28px;
+  --shape-full: 9999px;
+  --r-sm: var(--shape-sm);
+  --r: var(--shape-md);
+  --r-lg: var(--shape-lg);
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, "Microsoft YaHei", sans-serif;
+  --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SFMono-Regular", monospace;
+}
+
+/* ---- 莫兰迪：暖灰纸感浅色主题 ---- */
+:root[data-theme="morandi"] {
+  color-scheme: light;
+
+  --md-surface: #EFECE6;
+  --md-surface-dim: #E3DED5;
+  --md-surface-container-lowest: #FAF8F4;
+  --md-surface-container-low: #F5F2EC;
+  --md-surface-container: #E9E4DB;
+  --md-surface-container-high: #E0D9CE;
+  --md-surface-container-highest: #D5CEC2;
+
+  --md-on-surface: #2F2B27;
+  --md-on-surface-variant: #575047;
+  --md-on-surface-muted: #5F584F;
+  --md-outline: #797165;
+  --md-outline-variant: #D5CEC2;
+
+  --md-primary: #8C4A3F;
+  --md-primary-hover: #7B3F35;
+  --md-on-primary: #FDFBF8;
+  --md-primary-container: #F2DBD6;
+  --md-on-primary-container: #4C211A;
+
+  --md-secondary-container: #DFD8CB;
+  --md-on-secondary-container: #332E29;
+
+  --md-tertiary: #46685B;
+  --md-on-tertiary: #FBF9F5;
+  --md-tertiary-container: #D5E5DE;
+  --md-on-tertiary-container: #1D352C;
+
+  --md-error: #9B362B;
+  --md-on-error: #FDFBF8;
+  --md-error-container: #F5D9D5;
+  --md-on-error-container: #4E1610;
+
+  --state-hover: rgba(47, 43, 39, .06);
+  --state-focus: rgba(47, 43, 39, .09);
+  --state-press: rgba(47, 43, 39, .12);
+  --state-primary-tint: rgba(140, 74, 63, .11);
+  --state-primary-line: rgba(140, 74, 63, .38);
+  --state-error-tint: rgba(155, 54, 43, .10);
+  --state-error-line: rgba(155, 54, 43, .32);
+
+  --scrim: rgba(47, 43, 39, .36);
+  --elev-1: 0 1px 2px rgba(47, 43, 39, .10), 0 1px 3px rgba(47, 43, 39, .08);
+  --elev-2: 0 4px 14px rgba(47, 43, 39, .14);
+  --elev-3: 0 16px 40px rgba(47, 43, 39, .20);
+  --shadow: var(--elev-3);
+
+  --u-bg-soon: rgba(140, 74, 63, .10);
+  --u-bg-close: rgba(140, 74, 63, .18);
+  --u-bg-due: rgba(140, 74, 63, .27);
+  --u-bg-over: rgba(140, 74, 63, .36);
+  --u-bar-soon: rgba(140, 74, 63, .38);
+  --u-bar-close: rgba(140, 74, 63, .62);
+  --u-bar-due: #8C4A3F;
+  --u-bar-over: #8C4A3F;
+
+  --warn-bg: #8C4A3F;
+  --warn-bg-deep: #68332B;
+  --warn-on: #FDFBF8;
+  --warn-stripe: rgba(47, 43, 39, .22);
+  --warn-shadow: rgba(47, 43, 39, .28);
+
+  --update: #2A67B3;
+  --update-hover: #3F7CC7;
+  --offline-dot: #867E72;
+  --warn-text: #81502B;
+  --dot-soon: #8C7F70;
+  --dot-close: #9C6B44;
+  --bar-track: #D6CFC3;
+  --strike: #A79E90;
+  --scroll-thumb: #C6BEB0;
+  --scroll-thumb-hover: #AEA596;
+  --chip-hot-text: #7A3D33;
+}

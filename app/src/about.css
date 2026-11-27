@@ -1,46 +1,49 @@
-/* 关于 / 更新弹层。两端共用，颜色只引用各自主题里都有的变量。 */
+/* 关于 / 更新弹层（M3 Dialog 风格，两端共用） */
+@import './tokens.css';
+
 [hidden] { display: none !important; }
 .abt-mask {
-  position: fixed; inset: 0; z-index: 60;
+  position: fixed; inset: 0; z-index: 960;
   background: var(--scrim);
   display: grid; place-items: center; padding: 20px;
 }
 .abt-card {
-  width: min(420px, 100%);
+  width: min(440px, 100%);
   max-height: 85dvh; overflow-y: auto;
-  background: var(--surface); color: var(--text);
-  border: 1px solid var(--line-input);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+  background: var(--md-surface-container-high); color: var(--md-on-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--shape-xl);
+  box-shadow: var(--elev-3);
 }
 .abt-head {
-  display: flex; align-items: center; gap: 11px;
-  padding: 15px 16px; border-bottom: 1px solid var(--line-soft);
+  display: flex; align-items: center; gap: 12px;
+  padding: 20px 22px 14px; border-bottom: 1px solid var(--md-outline-variant);
 }
 .abt-mark {
-  width: 28px; height: 28px; flex: none;
+  width: 32px; height: 32px; flex: none;
   background: url('../src-tauri/icons/32x32.png') center/contain no-repeat;
 }
 .abt-mark i { display: none; }
-.abt-head b { display: block; font-size: 14px; font-weight: 600; }
-.abt-head small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.abt-head b { display: block; font-size: 16px; font-weight: 600; }
+.abt-head small { display: block; font-size: 12px; color: var(--md-on-surface-variant); margin-top: 2px; }
 .abt-x {
-  margin-left: auto; width: 28px; height: 28px; flex: none;
-  display: grid; place-items: center; font-size: 19px; line-height: 1;
-  background: none; border: none;
-  color: var(--muted); border-radius: var(--r-sm);
+  margin-left: auto; width: 36px; height: 36px; flex: none;
+  display: grid; place-items: center; font-size: 20px; line-height: 1;
+  background: none; border: none; cursor: pointer;
+  color: var(--md-on-surface-variant); border-radius: var(--shape-full);
 }
-.abt-x:hover { background: var(--hover); color: var(--text); }
-.abt-body { padding: 16px; }
-.abt-desc { font-size: 12.5px; line-height: 1.75; color: var(--muted); }
+.abt-x:hover { background: var(--state-hover); color: var(--md-on-surface); }
+.abt-body { padding: 18px 22px 22px; }
+.abt-desc { font-size: 13px; line-height: 1.7; color: var(--md-on-surface-variant); }
 .abt-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .abt-links a {
-  font-size: 12px; color: var(--text); text-decoration: none;
-  border: 1px solid var(--line-input); border-radius: var(--r-sm);
-  padding: 5px 9px; background: var(--raised);
+  font-size: 12.5px; color: var(--md-on-surface); text-decoration: none;
+  border: 1px solid var(--md-outline); border-radius: var(--shape-full);
+  padding: 6px 14px; background: var(--md-surface-container);
+  transition: background .14s var(--ease);
 }
-.abt-links a:hover { background: var(--hover); }
-.abt-update { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line-soft); }
-.abt-sec-title { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
-.abt-status { font-size: 12px; color: var(--muted); line-height: 1.6; min-height: 20px; }
-.abt-acts { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.abt-links a:hover { background: var(--state-hover); }
+.abt-update { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--md-outline-variant); }
+.abt-sec-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.abt-status { font-size: 12.5px; color: var(--md-on-surface-variant); line-height: 1.6; min-height: 20px; }
+.abt-acts { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }

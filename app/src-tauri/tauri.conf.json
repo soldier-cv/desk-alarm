@@ -23,14 +23,14 @@
         "visible": false,
         "decorations": true,
         "theme": "Dark",
-        "backgroundColor": "#0B0C0D"
+        "backgroundColor": "#0E1012"
       },
       {
         "label": "takeover",
         "url": "takeover.html",
         "title": "DeskAlarm 正在呼叫你",
         "width": 940,
-        "height": 660,
+        "height": 700,
         "resizable": false,
         "decorations": false,
         "alwaysOnTop": true,
@@ -39,14 +39,14 @@
         "visible": false,
         "shadow": true,
         "theme": "Dark",
-        "backgroundColor": "#07080A"
+        "backgroundColor": "#0E1012"
       },
       {
         "label": "capture",
         "url": "capture.html",
         "title": "快速记一条",
-        "width": 560,
-        "height": 132,
+        "width": 580,
+        "height": 172,
         "resizable": false,
         "decorations": false,
         "alwaysOnTop": true,
@@ -55,7 +55,7 @@
         "visible": false,
         "shadow": true,
         "theme": "Dark",
-        "backgroundColor": "#0B0C0D"
+        "backgroundColor": "#141619"
       }
     ],
     "security": {

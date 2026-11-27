@@ -1,21 +1,14 @@
 /**
- * 对比度检查。暗色主题最容易翻车的地方就是「深字配深底」，
- * 浅色主题反过来是「浅字配浅底」。靠眼睛看不出 3:1 和 4.5:1 的差别，得算。
- *
- * WCAG 2.1：
- *   正文 < 18.66px 粗体 / < 24px 常规  → 4.5:1
- *   更大的字，以及 UI 控件边界         → 3:1
- *
- * 两套主题都检查：:root 是暗色，:root[data-theme="morandi"] 是莫兰迪。
- *
- * 用法：node scripts/contrast.mjs
+ * M3 双主题对比度检查（WCAG 2.1 AA）。
+ * 正文 ≥ 4.5:1，大字与 UI 控件边界 ≥ 3:1。
  */
+import { readFile } from 'node:fs/promises';
+
 const hex = (h) => {
   const s = h.replace('#', '');
   return [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16));
 };
 
-/** sRGB → 相对亮度 */
 const lum = (h) => {
   const [r, g, b] = hex(h).map((v) => {
     const c = v / 255;
@@ -29,8 +22,7 @@ const ratio = (a, b) => {
   return (x + 0.05) / (y + 0.05);
 };
 
-// 从 styles.css 里读两套色板。一个是 :root，一个是 :root[data-theme="morandi"]
-const css = await (await import('node:fs/promises')).readFile('src/styles.css', 'utf8');
+const css = await readFile('src/tokens.css', 'utf8');
 
 function readPalette(selector) {
   const re = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([\\s\\S]*?)\\n\\}`);
@@ -48,58 +40,58 @@ const palettes = [
 
 let bad = 0;
 
-for (const [name, token] of palettes) {
-  const BG = token.bg;
+for (const [name, t] of palettes) {
+  const BG = t['md-surface'];
+  const LOW = t['md-surface-container-low'];
+  const MID = t['md-surface-container'];
+  const HIGH = t['md-surface-container-high'];
+  const HIGHEST = t['md-surface-container-highest'];
+
   console.log(`\n=============== ${name}  底色 ${BG} ===============`);
 
-  /** 正文类：字号小，必须 4.5:1 */
   const text = (label, fg, min = 4.5, bg = BG) => {
     const r = ratio(fg, bg);
     const ok = r >= min;
     if (!ok) bad++;
-    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(24)} ${fg} on ${bg}  ${r.toFixed(2)}:1  (需 ${min})`);
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(28)} ${fg} on ${bg}  ${r.toFixed(2)}:1  (需 ${min})`);
   };
 
-  /** UI 边界类：输入框、复选框这类轮廓，3:1 就够 */
   const ui = (label, fg, bg = BG, min = 3) => {
     const r = ratio(fg, bg);
     const ok = r >= min;
     if (!ok) bad++;
-    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(24)} ${fg} on ${bg}  ${r.toFixed(2)}:1  (需 ${min})`);
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(28)} ${fg} on ${bg}  ${r.toFixed(2)}:1  (需 ${min})`);
   };
 
-  console.log('  文字');
-  text('主文字 text', token.text);
-  text('次要 muted', token.muted);
-  text('弱化 dim', token.dim);
-  text('强调文字 flare-text', token['flare-text']);
-  text('完成 ok', token.ok);
-  text('危险文字 danger-text', token['danger-text']);
-  text('警告文字 warn-text', token['warn-text']);
-  text('热 chip 文字', token['chip-hot-text'], 4.5, token.field);
+  console.log('  Surface 正文');
+  text('主文字 on-surface', t['md-on-surface'], 4.5, BG);
+  text('次要 on-surface-variant', t['md-on-surface-variant'], 4.5, BG);
+  text('弱化 on-surface-muted', t['md-on-surface-muted'], 4.5, BG);
+  text('弱化 on container', t['md-on-surface-muted'], 4.5, MID);
+  text('弱化 on container-high', t['md-on-surface-muted'], 4.5, HIGH);
+  text('主色文字 primary on surface', t['md-primary'], 4.5, BG);
+  text('主色文字 primary on low', t['md-primary'], 4.5, LOW);
+  text('完成文字 tertiary', t['md-tertiary'], 4.5, BG);
+  text('错误文字 error', t['md-error'], 4.5, BG);
+  text('警告文字 warn-text', t['warn-text'], 4.5, BG);
+  text('热 chip 文字 on container', t['chip-hot-text'], 4.5, MID);
 
-  console.log('  UI 边界');
-  ui('输入框边框 line-input', token['line-input']);
-  ui('控件边框 line-ctrl', token['line-ctrl']);
-  // 分隔线不是文字也不是控件，1.2:1 够用，只要不是完全看不见
-  ui('分隔线 line（宽松）', token.line, BG, 1.2);
+  console.log('  M3 容器与实心块上的文字');
+  text('on-primary on primary', t['md-on-primary'], 4.5, t['md-primary']);
+  text('on-primary-container', t['md-on-primary-container'], 4.5, t['md-primary-container']);
+  text('on-secondary-container', t['md-on-secondary-container'], 4.5, t['md-secondary-container']);
+  text('on-tertiary on tertiary', t['md-on-tertiary'], 4.5, t['md-tertiary']);
+  text('on-tertiary-container', t['md-on-tertiary-container'], 4.5, t['md-tertiary-container']);
+  text('on-error on error', t['md-on-error'], 4.5, t['md-error']);
+  text('on-error-container', t['md-on-error-container'], 4.5, t['md-error-container']);
+  text('警示条文字 on warn-bg', t['warn-on'], 4.5, t['warn-bg']);
+  text('主文字 on container-highest', t['md-on-surface'], 4.5, HIGHEST);
 
-  console.log('  输入框内部（文字压在 raised 上，不是 bg）');
-  text('输入框内正文', token.text, 4.5, token.raised);
-  text('placeholder', token.muted, 4.5, token.raised);
-  ui('输入框边框 vs 框内底', token['line-input'], token.raised, 1.5);
-
-  // 实心按钮：文字压在整个块上，白字配亮色最容易低对比
-  console.log('  实心块上的字');
-  text('按钮字 on accent', token['on-flare'], 4.5, token.flare);
-  text('按钮字 on ok', token['on-flare'], 4.5, token.ok);
-
-  // 选中 / hover 是换了底色，文字色不变，要重新算
-  console.log('  状态底色上的文字');
-  text('选中行文字 on raised', token.text, 4.5, token.raised);
-  text('hover 文字 on hover', token.muted, 4.5, token.hover);
-  text('强调 on surface', token['flare-text'], 4.5, token.surface);
-  text('分段选中文字 on raised-strong', token.text, 4.5, token['raised-strong']);
+  console.log('  UI 控件边界');
+  ui('控件边框 outline on surface', t['md-outline'], BG, 3);
+  ui('控件边框 outline on low', t['md-outline'], LOW, 3);
+  ui('输入框边框 vs container', t['md-outline'], MID, 2.5);
+  ui('分隔线 outline-variant', t['md-outline-variant'], BG, 1.15);
 }
 
 console.log(`\n${'--------------------------------------------'}`);

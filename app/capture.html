@@ -4,45 +4,45 @@
   <meta charset="UTF-8">
   <title>快速记一条</title>
   <style>
-    /* 这个窗口只有 560x132。颜色跟主窗口共用同一套变量，
-       否则切到莫兰迪主题后这里还是一片近黑，两个窗口像两个程序 */
     @import url("/src/styles.css");
     html, body { height: 100%; }
     body {
-      background: var(--bg); color: var(--text); overflow: hidden;
+      background: var(--md-surface-container-low);
+      color: var(--md-on-surface);
+      overflow: hidden;
       font-family: var(--sans);
-      font-size: 13.5px; -webkit-app-region: drag;
+      font-size: 14px;
+      border: 1px solid var(--md-outline-variant);
+      border-radius: var(--shape-lg);
+      -webkit-app-region: drag;
     }
-    .wrap { padding: 14px 16px 10px; display: flex; flex-direction: column; height: 100%; }
-    /* 输入框整体复用主窗口的 .capture-in，避免聚焦时冒出全局 focus-visible 的粗描边。
-       窗口本身可拖拽，只有输入框要能点进去 */
-    .capture-in input { -webkit-app-region: no-drag; }
-    #parse { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
-    .foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 9px; }
-    .hint { font-size: 11px; color: var(--dim); }
-    .hint.ok { color: var(--ok); }
-    .hint.err { color: var(--danger-text); }
-    #bar { height: 2px; border-radius: 99px; background: var(--line-soft); margin-top: 9px; overflow: hidden; }
-    #bar.ready { background: linear-gradient(90deg, var(--flare) 40%, var(--line-soft) 40%); }
-    .chip {
-      display: inline-flex; align-items: center; height: 21px; padding: 0 8px;
-      border-radius: var(--r-sm); font-size: 11px; border: 1px solid var(--line-input);
-      background: var(--field); color: var(--muted);
-    }
-    .chip.hot { border-color: var(--flare-line); background: var(--flare-tint); color: var(--chip-hot-text); }
+    .wrap { padding: 14px 16px 12px; display: flex; flex-direction: column; height: 100%; }
+    .capture-in { height: 46px; -webkit-app-region: no-drag; }
+    .cap-str-seg { -webkit-app-region: no-drag; }
+    #parse { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; min-height: 26px; align-items: center; -webkit-app-region: no-drag; }
+    .foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 10px; }
+    .hint { font-size: 11.5px; color: var(--md-on-surface-muted); }
+    .hint.ok { color: var(--md-tertiary); font-weight: 600; }
+    .hint.err { color: var(--md-error); font-weight: 600; }
+    #bar { height: 2px; border-radius: var(--shape-full); background: var(--md-outline-variant); margin-top: 10px; overflow: hidden; }
+    #bar.ready { background: linear-gradient(90deg, var(--md-primary) 45%, var(--md-outline-variant) 45%); }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="capture-in">
-      <span class="prompt">&gt;</span>
-      <input id="q" placeholder="一句话、链接、目录，或带时间" autocomplete="off" spellcheck="false">
+      <span class="prompt" id="cap-ico"></span>
+      <input id="q" placeholder="写一句话、链接或路径，带时间自动设截止" autocomplete="off" spellcheck="false">
+      <div class="cap-str-seg" id="str-seg">
+        <button type="button" class="on" data-strength="weak" title="到点发通知，未填时间默认 1 天后">弱提醒</button>
+        <button type="button" data-strength="strong" title="到点弹接管窗，未填时间默认 2 小时后（Alt+S 切换）">强提醒</button>
+      </div>
     </div>
-    <div id="parse" hidden></div>
+    <div id="parse"></div>
     <div id="bar"></div>
     <div class="foot">
-      <span class="hint" id="hint">Enter 保存，Esc 取消</span>
-      <span class="hint">Ctrl+Shift+Space 随时唤起</span>
+      <span class="hint" id="hint">Enter 保存 · Alt+S 切强弱 · Esc 关闭</span>
+      <span class="hint mono">Ctrl+Shift+Space</span>
     </div>
   </div>
   <script type="module" src="/src/ui/capture.ts"></script>

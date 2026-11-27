@@ -6,8 +6,11 @@ import {
 import { now, toDt, tx } from './db.js';
 import { hub } from './hub.js';
 import { log } from './log.js';
-import { focusReason, inQuietHours, nextOccurrence, suggestNextStep } from './policy.js';
-import { createNudge } from './repo/nudges.js';
+import {
+  focusReason, inQuietHours, nextOccurrence, overdueDurationText,
+  strongRenudgeSlot, suggestNextStep, WEAK_DIGEST_INTERVAL_MS, weakSingleSlot,
+} from './policy.js';
+import { ackPendingForPursuit, createNudge } from './repo/nudges.js';
 import { insertFollowup } from './repo/followups.js';
 import {
   getPursuit, listActiveUserIds, listPursuits, setDueAt, setImportance, setStatus,
@@ -18,6 +21,7 @@ import { insertSteps, markStepDone, replaceSteps } from './repo/steps.js';
 const DAY = 24 * 60 * 60 * 1000;
 
 export const engineStats = { active: 0, stalled: 0 };
+const lastWeakDigestBucket = new Map<string, number>();
 
 function byDue(a: Pursuit, b: Pursuit): number {
   if (a.dueAt === null) return b.dueAt === null ? 0 : 1;
@@ -69,6 +73,7 @@ async function driveUser(userId: string, nowMs: number): Promise<{ active: numbe
   const pursuits = (await listPursuits(userId, { status: 'active' })).sort(byDue);
   let stalled = 0;
   const quiet = inQuietHours(settings, nowMs);
+  const digestCandidates: Pursuit[] = [];
 
   for (const p of pursuits) {
     if (p.dueAt !== null && p.dueAt < nowMs) stalled++;
@@ -88,29 +93,57 @@ async function driveUser(userId: string, nowMs: number): Promise<{ active: numbe
 
     const strength = p.strength;
     const level = levelForStrength(strength);
+    const overdueMs = nowMs - p.dueAt;
 
-    if (nowMs - p.dueAt >= settings.archiveAfterDays * DAY) {
+    if (overdueMs >= settings.archiveAfterDays * DAY) {
       await tx(async (q) => {
         await insertFollowup(q, p.id, userId, level, 'archive', `截止已过 ${settings.archiveAfterDays} 天，自动归档`);
+        await ackPendingForPursuit(q, p.id, 'archive');
       });
       await setStatus(p.id, userId, 'archived');
       continue;
     }
 
-    // 静音时段不投递也不推进周期，下一 tick（静音结束）按原截止时间补发
+    // 静音时段不投递也不推进周期，静音结束后按当前逾期状态补发
     if (quiet) continue;
 
     const deviceId = p.deviceIds.find((id) => hub.isOnline(id)) ?? null;
-    const reason = strength === 'strong' ? '到点了，先处理这条' : '到点了，看一下';
-    await createNudge(
-      userId, p.id, deviceId, level, channelFor(strength), reason, `${strength}-due-${p.dueAt}`,
-    );
+    if (strength === 'strong') {
+      const slot = strongRenudgeSlot(overdueMs);
+      const fireKey = slot === 0 ? `strong-due-${p.dueAt}` : `strong-due-${p.dueAt}-r${slot}`;
+      const reason = slot === 0
+        ? '到点了，先处理这条'
+        : `已逾期 ${overdueDurationText(overdueMs)}，仍待处理`;
+      await createNudge(userId, p.id, deviceId, level, channelFor(strength), reason, fireKey);
+    } else {
+      const slot = weakSingleSlot(overdueMs);
+      const fireKey = slot === 0 ? `weak-due-${p.dueAt}` : `weak-due-${p.dueAt}-r${slot}`;
+      const reason = slot === 0
+        ? '到点了，看一下'
+        : `已逾期 ${overdueDurationText(overdueMs)}，别忘了处理`;
+      await createNudge(userId, p.id, deviceId, level, channelFor(strength), reason, fireKey);
+      if (overdueMs >= WEAK_DIGEST_INTERVAL_MS) digestCandidates.push(p);
+    }
 
     if (p.recurrence) {
       const next = nextOccurrence(Math.max(p.dueAt, nowMs), p.recurrence);
       if (next !== null) await setDueAt(p.id, userId, next);
     }
+  }
 
+  if (!quiet && digestCandidates.length > 0 && hub.hasOnline(userId)) {
+    const bucket = Math.floor(nowMs / WEAK_DIGEST_INTERVAL_MS);
+    if (lastWeakDigestBucket.get(userId) !== bucket) {
+      lastWeakDigestBucket.set(userId, bucket);
+      const oldest = digestCandidates[0];
+      hub.broadcastToUser(userId, {
+        t: 'pursuit.overdue_digest',
+        count: digestCandidates.length,
+        oldestDueAt: oldest.dueAt ?? nowMs,
+        sample: oldest.text,
+        serverTs: nowMs,
+      });
+    }
   }
 
   return { active: pursuits.length, stalled };
@@ -188,6 +221,7 @@ export async function followUp(
       await markStepDone(q, req.stepId, userId);
     }
     await insertFollowup(q, pursuitId, userId, level, req.action, req.note ?? null);
+    await ackPendingForPursuit(q, pursuitId, req.action);
     const n = await q.run(
       `UPDATE pursuits
           SET status = $2, due_at = $3, completed_at = $4,
