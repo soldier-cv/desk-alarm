@@ -43,7 +43,6 @@ export function inQuietHours(s: Settings, atMs = Date.now()): boolean {
 export function suggestNextStep(p: Pursuit): string | null {
   const next = p.steps.find((s) => s.state !== 'done');
   if (next) return next.text;
-  if (p.nature === 'project') return '把这件事拆成 2-3 个能立刻动手的小步骤';
   return `今天花 5 分钟做第一步：${p.text}`;
 }
 

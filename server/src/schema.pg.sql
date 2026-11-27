@@ -79,7 +79,6 @@ CREATE TABLE IF NOT EXISTS pursuits (
   url             text,
   path            text,
 
-  nature          text NOT NULL DEFAULT 'one_off',   -- one_off | project
   importance      integer NOT NULL DEFAULT 1,        -- 1=P2 默认, 2=P1, 3=P0
   due_at          timestamptz,
   recurrence      jsonb,
@@ -179,3 +178,6 @@ CREATE TABLE IF NOT EXISTS settings (
   value   text NOT NULL,
   PRIMARY KEY (user_id, key)
 );
+
+-- 幂等升级：旧库移除已废弃的 pursuits.nature 列
+ALTER TABLE pursuits DROP COLUMN IF EXISTS nature;

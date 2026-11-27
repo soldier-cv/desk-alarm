@@ -207,7 +207,7 @@ try {
   ok('建推进项成功', link.status === 201 && !!link.json.pursuit?.id);
   ok('kind 由客户端传入并保存', link.json.pursuit?.kind === 'link');
   ok('默认 importance=1（P2）', link.json.pursuit?.importance === 1);
-  ok('默认 nature=one_off', link.json.pursuit?.nature === 'one_off');
+  ok('响应不含已废弃的 nature 字段', link.json.pursuit?.nature === undefined);
   ok('带 version 供乐观锁', typeof link.json.pursuit?.version === 'number');
   ok('带 progress/staleness/weight 派生量',
     ['progress', 'stalenessMs', 'weight'].every((k) => typeof link.json.pursuit?.[k] === 'number'));
@@ -221,6 +221,7 @@ try {
     text: '写季度报告', nature: 'project', importance: 3, steps: ['列提纲', '写初稿', '校对'],
   } });
   const projId = project.json.pursuit.id;
+  ok('兼容旧客户端附带 nature 写入', project.status === 201 && project.json.pursuit?.nature === undefined);
   ok('建项目带 3 个步骤', project.json.pursuit.steps?.length === 3);
   ok('步骤默认 todo', project.json.pursuit.steps?.every((s) => s.state === 'todo'));
   ok('进度初始为 0', project.json.pursuit.progress === 0);
@@ -451,7 +452,7 @@ try {
   /* ---------------------------------------------------------- 重复 */
   console.log('\n重复规则');
   const rep = await api('/pursuits', { method: 'POST', token: ta, body: {
-    text: '每天吃药', nature: 'one_off', recurrence: { freq: 'daily' }, dueAt: Date.now() - 1000,
+    text: '每天吃药', recurrence: { freq: 'daily' }, dueAt: Date.now() - 1000,
   } });
   const repId = rep.json.pursuit.id;
   await waitUntil(async () => {

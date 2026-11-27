@@ -7,7 +7,7 @@ import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   hhmm, lateBy, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized, parseInput, probeServer, saveConfig,
   serverNow, staleLabel, switchServer, versionOf, warmthOf,
-  FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, levelForStrength, rowActions,
+  FREQ_LABEL, FOLLOWUP_ACTION_LABEL, levelForStrength, rowActions,
   type ClientPlatform, type Followup, type FollowupAction, type MyStats,
   type Pursuit, type PursuitStatus, type ReminderStrength,
   type ServerMessage, type Settings, type StepEdit, type StepState,
@@ -266,7 +266,6 @@ function openCaptureSheet() {
         path: p.kind === 'path' ? text : null,
         dueAt: p.remindAt,
         strength,
-        nature: 'one_off',
       });
       close();
       toast(p.remindAt !== null ? '已记下并设好截止' : '已存进待办');
@@ -311,7 +310,6 @@ function entryHtml(p: Pursuit): string {
   const u = warmthOf(p);
   const total = p.steps.length;
   const done = p.steps.filter((s) => s.state === 'done').length;
-  const nextStep = p.steps.find((s) => s.state !== 'done');
   const isDone = p.status === 'done';
   const isArchived = p.status === 'archived';
   const actions = rowActions(p.status);
@@ -327,7 +325,7 @@ function entryHtml(p: Pursuit): string {
     <div class="txt">${esc(p.text)}</div>
     ${total ? `<div class="prog"><i style="width:${Math.round((done / total) * 100)}%"></i></div>` : ''}
     <div class="acts">
-      ${actions.map((a) => `<button type="button" class="btn ${a === 'done' ? 'tonal' : a === 'archive' ? 'danger' : 'ghost'}" data-follow="${a}" data-id="${esc(p.id)}" ${a === 'done' ? `data-step="${esc(nextStep?.id ?? '')}"` : ''}>${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
+      ${actions.map((a) => `<button type="button" class="btn ${a === 'done' ? 'tonal' : a === 'archive' ? 'danger' : 'ghost'}" data-follow="${a}" data-id="${esc(p.id)}">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
       ${!isDone && !isArchived ? `
         <button type="button" class="btn ghost" data-follow="later" data-id="${esc(p.id)}">延期</button>
         <button type="button" class="btn ghost" data-follow="smaller" data-id="${esc(p.id)}">拆小</button>` : ''}
@@ -380,8 +378,7 @@ function bindFollowButtons(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('[data-follow]').forEach((b) => {
     b.onclick = (ev) => {
       ev.stopPropagation();
-      void mobileFollowup(b.dataset.id!, b.dataset.follow as FollowupAction,
-        b.dataset.step ? { stepId: b.dataset.step } : {});
+      void mobileFollowup(b.dataset.id!, b.dataset.follow as FollowupAction);
     };
   });
   root.querySelectorAll<HTMLElement>('[data-del]').forEach((b) => {
@@ -497,7 +494,6 @@ function renderDetail() {
   const rf = ruleFields(p.recurrence);
   const pickedDays = selectedWeekdays(rf.byWeekday);
   const dueText = p.dueAt === null ? '未设截止' : `${dayLabel(p.dueAt)} ${hhmm(p.dueAt)}`;
-  const nextStep = p.steps.find((s) => s.state !== 'done');
 
   host.innerHTML = `
   <div class="detail-wrap">
@@ -550,11 +546,7 @@ function renderDetail() {
       </div>
 
       <div class="set-group">
-        <h3>性质与重复</h3>
-        <div class="seg" style="margin-bottom:12px">
-          ${(['one_off', 'project'] as const).map((n) =>
-            `<button type="button" class="${p.nature === n ? 'on' : ''}" data-nature="${n}">${NATURE_LABEL[n]}</button>`).join('')}
-        </div>
+        <h3>重复规则</h3>
         <select id="rule-freq" class="m-select">
           ${(Object.keys(FREQ_LABEL) as Array<keyof typeof FREQ_LABEL>).map((f) =>
             `<option value="${f}" ${freq === f ? 'selected' : ''}>${FREQ_LABEL[f]}</option>`).join('')}
@@ -578,11 +570,16 @@ function renderDetail() {
           : '<div class="set-val">还没有跟进记录。</div>'}
       </div>
 
-      <div class="set-group">
-        ${(['done', 'later', 'smaller', 'reopen', 'archive'] as FollowupAction[])
-          .filter((a) => actionsFor(p.status).includes(a))
-          .map((a, i) => `<button type="button" class="btn block ${a === 'done' ? 'solid' : a === 'archive' ? 'danger' : 'tonal'}" data-follow="${a}" data-id="${esc(p.id)}" ${a === 'done' ? `data-step="${esc(nextStep?.id ?? '')}"` : ''} style="margin-top:${i ? 8 : 0}px">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
-        ${p.status === 'archived' ? `<button type="button" class="btn block danger" data-del="${esc(p.id)}" style="margin-top:8px">永久删除</button>` : ''}
+      <div class="set-group detail-acts">
+        ${actionsFor(p.status).includes('done')
+          ? `<button type="button" class="btn solid block" data-follow="done" data-id="${esc(p.id)}">${ICO.check(17)}完成</button>`
+          : ''}
+        <div class="detail-acts-grid">
+          ${(['later', 'smaller', 'reopen', 'archive'] as FollowupAction[])
+            .filter((a) => actionsFor(p.status).includes(a))
+            .map((a) => `<button type="button" class="btn ${a === 'archive' ? 'danger' : 'tonal'}" data-follow="${a}" data-id="${esc(p.id)}">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
+          ${p.status === 'archived' ? `<button type="button" class="btn danger" data-del="${esc(p.id)}">永久删除</button>` : ''}
+        </div>
       </div>
     </div>
   </div>`;
@@ -651,9 +648,6 @@ function renderDetail() {
   host.querySelectorAll<HTMLElement>('[data-strength]').forEach((b) => {
     b.onclick = () => void patchPursuit(p, { strength: b.dataset.strength });
   });
-  host.querySelectorAll<HTMLElement>('[data-nature]').forEach((b) => {
-    b.onclick = () => void patchPursuit(p, { nature: b.dataset.nature });
-  });
 
   const bindWeekdayChips = () => {
     host.querySelector('#m-wd-chips')?.addEventListener('click', (ev) => {
@@ -712,12 +706,15 @@ async function addMobileStep(p: Pursuit) {
 }
 
 async function patchPursuit(p: Pursuit, patch: Record<string, unknown>) {
+  const scrollTop = document.querySelector<HTMLElement>('.detail-scroll')?.scrollTop ?? 0;
   try {
     const r = await api.update(p.id, { ...patch, version: versionOf(p) });
     const i = pursuits.findIndex((x) => x.id === p.id);
     if (i >= 0) pursuits[i] = r.pursuit;
     toast('已保存');
     renderDetail();
+    const scroller = document.querySelector<HTMLElement>('.detail-scroll');
+    if (scroller) scroller.scrollTop = scrollTop;
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) toast('刚在别的设备上改过，已刷新');
     else toast(msgOf(e));
@@ -768,7 +765,6 @@ async function mobileFollowup(id: string, action: FollowupAction, extra: Record<
       ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),
       ...(Array.isArray(extra.stepEdits) ? { stepEdits: extra.stepEdits as StepEdit[] } : {}),
       ...(extra.to ? { to: Number(extra.to) } : {}),
-      ...(extra.stepId ? { stepId: String(extra.stepId) } : {}),
     });
     noteFollowup(id, action, levelForStrength(p.strength));
     control.acknowledge(action);
@@ -808,10 +804,10 @@ function showMobileTakeover(p: Pursuit, total: number) {
       <div class="mt-clock">${hhmm(at)}</div>
       <h2>${esc(p.text)}</h2>
       <div class="mt-reason">${esc(overdueHint + (p.note || '到点了，先给这件事一个明确去向'))}</div>
-      ${next ? `<div class="mt-step"><small>当前待推进步骤</small><b>${esc(next.text)}</b></div>` : ''}
+      ${next ? `<div class="mt-step"><small>未完成步骤</small><b>${esc(next.text)}</b></div>` : ''}
     </div>
     <div class="mt-foot">
-      <button type="button" class="btn solid block" data-follow="done" data-id="${esc(p.id)}" data-step="${esc(next?.id ?? '')}">${ICO.check(18)}${next ? '完成这一步' : '标记完成'}</button>
+      <button type="button" class="btn solid block" data-follow="done" data-id="${esc(p.id)}">${ICO.check(18)}完成</button>
       <div class="mt-foot-row">
         <button type="button" class="btn tonal" data-follow="smaller" data-id="${esc(p.id)}">${ICO.split(16)}拆小</button>
         <button type="button" class="btn tonal" data-follow="later" data-id="${esc(p.id)}">${ICO.clock(16)}延期</button>

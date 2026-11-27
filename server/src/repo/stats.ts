@@ -1,11 +1,10 @@
-import type { MyStats, NudgeLevel, Overview, PursuitNature, PursuitStatus } from '../../../shared/types.js';
+import type { MyStats, NudgeLevel, Overview, PursuitStatus } from '../../../shared/types.js';
 import { one, rows } from '../db.js';
 import { buildFocus } from '../drive.js';
 import { schedulerStats } from '../scheduler.js';
 
 const STATUSES: PursuitStatus[] = ['inbox', 'active', 'paused', 'done', 'archived'];
 const LEVELS: NudgeLevel[] = [2, 4];
-const NATURES: PursuitNature[] = ['one_off', 'project'];
 
 export async function getOverview(): Promise<Overview> {
   const statusRows = await rows<{ status: string; n: number }>(
@@ -106,12 +105,6 @@ export async function getMyStats(userId: string): Promise<MyStats> {
     [userId],
   );
 
-  const byNature: Record<PursuitNature, number> = { one_off: 0, project: 0 };
-  for (const r of await rows<{ nature: string; n: number }>(
-    'SELECT nature, count(*)::int AS n FROM pursuits WHERE user_id = $1 GROUP BY nature',
-    [userId],
-  )) if (NATURES.includes(r.nature as PursuitNature)) byNature[r.nature as PursuitNature] = r.n;
-
   return {
     serverTs: Date.now(),
     completedThisWeek: weekRow?.n ?? 0,
@@ -119,6 +112,5 @@ export async function getMyStats(userId: string): Promise<MyStats> {
     streakDays,
     today: { focus: focusCount, done: today.done, pendingFollowup: today.pending },
     days,
-    byNature,
   };
 }

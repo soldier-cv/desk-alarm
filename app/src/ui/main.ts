@@ -9,7 +9,7 @@ import {
   ApiError, Realtime, api, clearToken, dayLabel, dueLabel, getMachineId, getPlatform,
   hhmm, hostOf, importanceForStrength, lateBy, levelForStrength, loadConfig, normalizeBaseUrl, noteFollowup, onUnauthorized,
   parseInput, probeServer, saveConfig, serverNow, staleLabel, switchServer,
-  versionOf, warmthOf, FREQ_LABEL, FOLLOWUP_ACTION_LABEL, NATURE_LABEL, rowActions,
+  versionOf, warmthOf, FREQ_LABEL, FOLLOWUP_ACTION_LABEL, rowActions,
   type CountsResult, type Device, type Followup, type FollowupAction, type FocusResult,
   type MyStats, type Pursuit, type PursuitStatus, type PursuitView,
   type ReminderStrength, type ServerMessage, type Settings, type StepEdit, type StepState,
@@ -726,11 +726,10 @@ function rowHtml(p: Pursuit): string {
   const u = warmthOf(p);
   const isDone = p.status === 'done';
   const isArchived = p.status === 'archived';
-  const nextStep = p.steps.find((s) => s.state !== 'done');
   const actions = rowActions(p.status);
   const checkAttr = isDone || isArchived
     ? 'class="it-check static"'
-    : `class="it-check${p.strength === 'strong' ? ' strong' : ''}" data-follow="done" data-id="${esc(p.id)}" data-step="${esc(nextStep?.id ?? '')}" title="${nextStep ? `完成步骤：${esc(nextStep.text)}` : '标记完成'}"`;
+    : `class="it-check${p.strength === 'strong' ? ' strong' : ''}" data-follow="done" data-id="${esc(p.id)}" title="完成"`;
 
   return `
   <div class="item u-${u}${isDone ? ' done' : ''}${state.selected === p.id ? ' on' : ''}" data-id="${esc(p.id)}" data-u="${u}">
@@ -744,7 +743,6 @@ function rowHtml(p: Pursuit): string {
       <div class="it-title">${esc(p.text)}</div>
       <div class="it-meta">
         ${progressHtml(p)}
-        ${p.nature === 'project' ? `<span class="tag">${NATURE_LABEL[p.nature]}</span>` : ''}
         ${p.url ? `<span class="tag" title="${esc(p.url)}">${ICO.link(12)}${esc(hostOf(p.url))}</span>` : ''}
         ${p.path ? `<span class="tag path" title="${esc(p.path)}">${esc(p.path)}</span>` : ''}
       </div>
@@ -753,7 +751,7 @@ function rowHtml(p: Pursuit): string {
       ${!isDone && !isArchived ? `
         <button type="button" class="btn icon-only sm hover-act" data-follow="later" data-id="${esc(p.id)}" title="延期">${ICO.clock(15)}</button>
         <button type="button" class="btn icon-only sm hover-act" data-follow="smaller" data-id="${esc(p.id)}" title="拆小步骤">${ICO.split(15)}</button>` : ''}
-      ${actions.map((a) => `<button type="button" class="btn sm ${a === 'done' ? 'tonal' : a === 'archive' ? 'danger' : 'ghost'}" data-follow="${a}" data-id="${esc(p.id)}" ${a === 'done' ? `data-step="${esc(nextStep?.id ?? '')}"` : ''}>${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
+      ${actions.map((a) => `<button type="button" class="btn sm ${a === 'done' ? 'tonal' : a === 'archive' ? 'danger' : 'ghost'}" data-follow="${a}" data-id="${esc(p.id)}">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
       ${isArchived ? `<button type="button" class="btn sm danger" data-del="${esc(p.id)}" title="永久删除">删除</button>` : ''}
     </div>
   </div>`;
@@ -837,9 +835,20 @@ function renderEditor() {
   const rf = ruleFields(p.recurrence);
   const ruleFieldsShown = fieldsFor(freq);
   const due = p.dueAt === null ? '未设截止' : `${dayLabel(p.dueAt)} ${hhmm(p.dueAt)}`;
-  const nextStep = p.steps.find((s) => s.state !== 'done');
-  const footActions = (['later', 'smaller', 'reopen', 'archive'] as FollowupAction[])
-    .filter((a) => actionsFor(p.status).includes(a));
+  const canDone = actionsFor(p.status).includes('done');
+  const secBtns: string[] = [];
+  for (const a of (['later', 'smaller', 'reopen'] as FollowupAction[])) {
+    if (actionsFor(p.status).includes(a)) {
+      secBtns.push(`<button type="button" class="btn tonal" data-act="follow-${a}">${FOLLOWUP_ACTION_LABEL[a]}</button>`);
+    }
+  }
+  secBtns.push(`<button type="button" class="btn ghost" data-act="clone">${ICO.clone(14)}克隆</button>`);
+  if (actionsFor(p.status).includes('archive')) {
+    secBtns.push(`<button type="button" class="btn danger" data-act="follow-archive">${FOLLOWUP_ACTION_LABEL.archive}</button>`);
+  }
+  if (p.status === 'archived') {
+    secBtns.push(`<button type="button" class="btn danger" data-act="delete">${ICO.trash(14)}删除</button>`);
+  }
 
   box.innerHTML = `
     <div class="ed-head">
@@ -883,11 +892,6 @@ function renderEditor() {
       <div class="fld"><label for="f-note">备注与上下文</label>
         <textarea class="input ed-textarea" id="f-note" rows="3" placeholder="补充背景、链接或关键线索">${esc(p.note ?? '')}</textarea></div>
 
-      <div class="fld"><label>性质</label>
-        <div class="seg">${(['one_off', 'project'] as const).map((n) =>
-          `<button type="button" data-nature="${n}" class="${p.nature === n ? 'on' : ''}">${NATURE_LABEL[n]}</button>`,
-        ).join('')}</div></div>
-
       <div class="fld"><label>重复规则</label>
         <button type="button" class="input trigger" id="f-freq" data-v="${freq}">
           <span class="trigger-label">${FREQ_LABEL[freq]}</span>
@@ -903,11 +907,9 @@ function renderEditor() {
     </div>
 
     <div class="ed-foot">
-      ${actionsFor(p.status).includes('done') ? `
-        <button type="button" class="btn solid" data-act="follow-done" data-step="${esc(nextStep?.id ?? '')}">${ICO.check(15)}${nextStep ? '完成一步' : '完成'}</button>` : ''}
-      ${footActions.map((a) => `<button type="button" class="btn ${a === 'archive' ? 'danger' : 'tonal'}" data-act="follow-${a}">${FOLLOWUP_ACTION_LABEL[a]}</button>`).join('')}
-      <button type="button" class="btn ghost" data-act="clone">${ICO.clone(14)}克隆</button>
-      ${p.status === 'archived' ? `<button type="button" class="btn danger" data-act="delete">${ICO.trash(14)}删除</button>` : ''}
+      ${canDone ? `
+        <button type="button" class="btn solid ed-foot-main" data-act="follow-done">${ICO.check(15)}完成</button>` : ''}
+      <div class="ed-foot-grid">${secBtns.join('')}</div>
     </div>`;
 
   const when = $<HTMLButtonElement>('#f-when');
@@ -1196,7 +1198,7 @@ function testFollowup(strength: 'strong' | 'weak') {
   const fake: Pursuit = {
     id, userId: '', text: `${strength === 'strong' ? '强' : '弱'}提醒测试：核对今日核心交付物`,
     note: '这是本地模拟测试，不会修改服务端任何记录。', kind: 'text', url: null, path: null,
-    nature: 'project', strength, importance: importanceForStrength(strength), dueAt: now,
+    strength, importance: importanceForStrength(strength), dueAt: now,
     recurrence: null, context: null, commitment: null,
     status: 'active', importanceSort: 0, version: 1, createdAt: now, updatedAt: now,
     completedAt: null, lastActivityAt: now,
@@ -1565,7 +1567,6 @@ async function submitCapture(raw: string) {
       path: p.kind === 'path' ? text : null,
       dueAt: p.remindAt,
       strength: captureStrength,
-      nature: 'one_off',
     });
     const cap = document.getElementById('cap') as HTMLInputElement | null;
     if (cap) { cap.value = ''; $<HTMLElement>('#parse').hidden = true; }
@@ -1631,7 +1632,6 @@ async function runFollowup(id: string, action: FollowupAction, extra: Record<str
     ...(extra.to ? { to: Number(extra.to) } : {}),
     ...(Array.isArray(extra.steps) ? { steps: extra.steps as string[] } : {}),
     ...(Array.isArray(extra.stepEdits) ? { stepEdits: extra.stepEdits as StepEdit[] } : {}),
-    ...(extra.stepId ? { stepId: String(extra.stepId) } : {}),
   };
   try {
     localHandled.set(id, Date.now());
@@ -1684,8 +1684,7 @@ function onListClick(ev: Event) {
   if (del) { void confirmAndDelete(del.dataset.del!); return; }
   const fa = t.closest<HTMLElement>('[data-follow]');
   if (fa) {
-    void runFollowup(fa.dataset.id!, fa.dataset.follow as FollowupAction,
-      fa.dataset.step ? { stepId: fa.dataset.step } : {});
+    void runFollowup(fa.dataset.id!, fa.dataset.follow as FollowupAction);
     return;
   }
   const row = t.closest<HTMLElement>('[data-id]');
@@ -1694,7 +1693,7 @@ function onListClick(ev: Event) {
 
 function onEditorClick(ev: Event) {
   const t = (ev.target as HTMLElement).closest<HTMLElement>(
-    '[data-act],[data-strength],[data-nature],[data-step-del],[data-wd]',
+    '[data-act],[data-strength],[data-step-del],[data-wd]',
   );
   const p = findPursuit(state.selected);
   if (!t) return;
@@ -1716,7 +1715,6 @@ function onEditorClick(ev: Event) {
   };
 
   if (t.dataset.strength) { savePatch({ strength: t.dataset.strength }); return; }
-  if (t.dataset.nature) { savePatch({ nature: t.dataset.nature }); return; }
   if (t.dataset.wd !== undefined) {
     t.classList.toggle('on');
     const days = [...document.querySelectorAll<HTMLElement>('#f-wd-chips .wd-chip.on')]
@@ -1755,7 +1753,7 @@ function onEditorClick(ev: Event) {
       return;
     }
     case 'follow-done':
-      void runFollowup(p.id, 'done', t.dataset.step ? { stepId: t.dataset.step } : {});
+      void runFollowup(p.id, 'done');
       return;
     case 'follow-later': askLater(p.id); return;
     case 'follow-smaller':
@@ -1941,13 +1939,12 @@ function openServerPanel() {
 
 function wireEvents() {
   if (!hasTauri()) return;
-  listen<{ pursuitId: string; action: FollowupAction; note?: string; to?: number; steps?: string[]; stepEdits?: StepEdit[]; stepId?: string }>(
+  listen<{ pursuitId: string; action: FollowupAction; note?: string; to?: number; steps?: string[]; stepEdits?: StepEdit[] }>(
     'takeover:action', async (ev) => {
-      const { pursuitId, action, note, to, steps, stepEdits, stepId } = ev.payload;
+      const { pursuitId, action, note, to, steps, stepEdits } = ev.payload;
       await runFollowup(pursuitId, action, {
         ...(note ? { note } : {}), ...(to ? { to } : {}),
         ...(steps ? { steps } : {}), ...(stepEdits ? { stepEdits } : {}),
-        ...(stepId ? { stepId } : {}),
       });
     },
   );

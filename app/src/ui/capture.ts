@@ -7,6 +7,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { parseInput, type Parsed, type ReminderStrength } from '../api';
 import { ICO } from '../icons';
 import { applyTheme, loadTheme } from '../theme';
+import '../styles.css';
 
 applyTheme(loadTheme());
 listen<{ theme: 'dark' | 'morandi' }>('theme:changed', (ev) => applyTheme(ev.payload.theme));

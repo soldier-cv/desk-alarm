@@ -67,7 +67,7 @@ const t = login.json.token;
 console.log('\n推进项 + 拆解 + 跟进');
 const made = await api('/pursuits', {
   method: 'POST', token: t,
-  body: { text: `联调-${Date.now()}`, nature: 'project', importance: 2, steps: ['第一步', '第二步'] },
+  body: { text: `联调-${Date.now()}`, importance: 2, steps: ['第一步', '第二步'] },
 });
 const pid = made.json.pursuit?.id;
 ok('建推进项含步骤', made.status === 201 && made.json.pursuit?.steps?.length === 2);
@@ -115,7 +115,7 @@ ok('apply 后落库', applied.status === 200);
 console.log('\n重复规则');
 const rep = await api('/pursuits', {
   method: 'POST', token: t,
-  body: { text: `联调重复-${Date.now()}`, nature: 'recurring', recurrence: { freq: 'daily' }, dueAt: Date.now() - 1000 },
+  body: { text: `联调重复-${Date.now()}`, recurrence: { freq: 'daily' }, dueAt: Date.now() - 1000 },
 });
 ok('重复项到期后自动排下一次', await waitUntil(async () => {
   const r = await api(`/pursuits/${rep.json.pursuit.id}`, { token: t });

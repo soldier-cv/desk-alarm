@@ -44,11 +44,6 @@ export interface Device {
 
 /* ============================================================ 推进项领域模型 */
 
-/**
- * 推进项的性质。是否重复完全由 recurrence 决定，不再用 nature 表达。
- */
-export type PursuitNature = 'one_off' | 'project';
-
 /** 重要性：3=P0 最高，2=P1，1=P2 默认 */
 export type Importance = 1 | 2 | 3;
 
@@ -128,7 +123,6 @@ export interface Pursuit {
   url: string | null;
   path: string | null;
 
-  nature: PursuitNature;
   /** 提醒强弱；内部仍沿用 importance 列存储（0/1 弱、2/3 强），前端不再暴露重要性概念 */
   strength: ReminderStrength;
   importance: Importance;
@@ -234,8 +228,6 @@ export interface MyStats {
   /** 今日：聚焦数、完成数、待跟进数 */
   today: { focus: number; done: number; pendingFollowup: number };
   days: Array<{ day: string; focus: number; done: number; pending: number }>;
-  /** 各性质推进项数量 */
-  byNature: Record<PursuitNature, number>;
 }
 
 /* ============================================================ HTTP */
@@ -246,7 +238,6 @@ export interface CreatePursuitRequest {
   url?: string | null;
   path?: string | null;
   note?: string | null;
-  nature?: PursuitNature;
   strength?: ReminderStrength;
   importance?: Importance;
   dueAt?: number | string | null;
@@ -263,7 +254,6 @@ export interface UpdatePursuitRequest {
   note?: string | null;
   strength?: ReminderStrength;
   importance?: Importance;
-  nature?: PursuitNature;
   dueAt?: number | string | null;
   recurrence?: RecurrenceRule | null;
   context?: PursuitContext | null;
@@ -288,8 +278,6 @@ export interface FollowupRequest {
   steps?: string[];
   /** 拆小 UI 提交的全量步骤：带 id 更新、不带新增、未出现的旧步骤删除，一次保存生效 */
   stepEdits?: StepEdit[];
-  /** done 时只完成这一条步骤，还有未完成步骤则整条保持 active 并重排截止时间 */
-  stepId?: string;
   version: number;
 }
 

@@ -14,7 +14,7 @@ export type {
   AddStepRequest, AgentScope, AgentToken, ClientMessage, Commitment, CreatePursuitRequest,
   Device, EntryKind, Followup, FollowupAction, FollowupPrompt, FollowupRequest,
   FocusItem, FocusResult, Importance, LoginResponse, MyStats, Nudge, NudgeChannel,
-  NudgeLevel, Overview, Platform, Pursuit, PursuitContext, PursuitNature, PursuitStatus,
+  NudgeLevel, Overview, Platform, Pursuit, PursuitContext, PursuitStatus,
   ReminderStrength,
   RecurrenceRule, Role, ServerMessage, Settings, Step, StepEdit, StepState, TransportName,
   UpdatePursuitRequest, UpdateStepRequest, User,
@@ -615,10 +615,6 @@ export function inQuietHours(s: Settings, at = serverNow()): boolean {
   if (a === b) return false;
   return a < b ? m >= a && m < b : m >= a || m < b;
 }
-
-export const NATURE_LABEL: Record<Pursuit['nature'], string> = {
-  one_off: '一次性', project: '项目',
-};
 
 export const IMPORTANCE_LABEL: Record<Importance, string> = {
   3: 'P0', 2: 'P1', 1: 'P2',

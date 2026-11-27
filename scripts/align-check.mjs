@@ -147,9 +147,10 @@ ok('提醒只有强/弱，用户直接选',
   /data-strength=.strong./.test(src.main) && !/data-imp=/.test(src.main));
 ok('启动精力已删除',
   !/energy/.test(src.types) && !/Energy/.test(src.api) && !/energy/.test(read('server/src/schema.pg.sql')));
-ok('性质不再有 recurring',
-  /PursuitNature = 'one_off' \| 'project'/.test(src.types) &&
-  !/'recurring'/.test(read('server/src/repo/stats.ts')));
+ok('无用性质字段 nature 已移除且老库幂等迁移',
+  !/PursuitNature/.test(src.types) &&
+  !/byNature/.test(src.stats) &&
+  /DROP COLUMN IF EXISTS nature/i.test(src.sql));
 ok('图标复用应用图标', /src-tauri\/icons\/32x32\.png/.test(src.styles) &&
   /src-tauri\/icons\/32x32\.png/.test(read('app/src/about.css')));
 

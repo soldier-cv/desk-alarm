@@ -46,7 +46,7 @@ devices           id, machine_id(唯一), user_id, name, platform, transport,
                   push_enabled, online, last_seen_at, created_at
 sessions          token, user_id, device_id(可空), kind(user|dashboard|agent), created_at, expires_at
 agent_tokens      id, user_id, machine_id, token_hash(唯一), prefix, scope(read|write), ...
-pursuits          id, user_id, text, note, nature, importance, due_at, recurrence,
+pursuits          id, user_id, text, note, importance, due_at, recurrence,
                   context, commitment, status, last_activity_at, completed_at, version, ...
 steps             id, pursuit_id, user_id, text, position, state, done_at, created_at
 followups         id, user_id, pursuit_id, at, level, action, note

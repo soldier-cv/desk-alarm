@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [v2.1.1] - 2026-11-27
+
+### Changed
+- 移除无实际调度作用的「性质（一次性/项目）」字段（含共享契约、前后端、MCP 与统计接口），`schema.pg.sql` 增加幂等 `ALTER TABLE pursuits DROP COLUMN IF EXISTS nature` 保证旧库启动自动升级，且服务端静默忽略旧客户端可能附带的 `nature` 参数。
+- 统一所有入口（桌面列表/详情/接管窗、Android 列表/详情/强提醒模态）的「完成」文案与行为：不再出现「完成一步 / 完成这一步」，点击「完成」直接完成整条事项，单个步骤在步骤清单里独立勾选。
+
+### Fixed
+- 桌面端详情底栏（`.ed-foot`）与 Android 端详情/卡片底部动作按钮改为清晰的分层网格排布，避免 3+1 孤儿按钮或拉长畸形；跨端 `.btn.danger` 补齐 M3 淡红底与描边边界，不再表现为裸红字。
+- 修复桌面端侧栏折叠为 Rail 时 `.nav-note` 未隐藏、Android 端原生 `<select>` 在深色 WebView 下箭头/底色异常、列表底部最后一项可能被 FAB 遮挡、详情保存后滚回顶部以及 `capture.html` 样式引入方式问题。
+
 ## [v2.1.0] - 2026-11-27
 
 ### Added

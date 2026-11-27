@@ -62,14 +62,12 @@ function item(): Pursuit | null {
   return current?.items[current.index] ?? null;
 }
 
-function renderActions(p: Payload, it: Pursuit) {
-  const next = it.steps.find((s) => s.state !== 'done');
+function renderActions(p: Payload) {
   const more = p.index < p.items.length - 1;
-  const doneLabel = next ? '完成这一步' : '标记完成';
 
   el.acts.innerHTML = `
-    <button type="button" class="btn solid" data-act="done" data-step="${esc(next?.id ?? '')}">
-      ${ICO.check(17)}<span>${doneLabel}</span><span class="tk-kbd">Enter</span>
+    <button type="button" class="btn solid" data-act="done">
+      ${ICO.check(17)}<span>完成</span><span class="tk-kbd">Enter</span>
     </button>
     <button type="button" class="btn tonal" data-act="smaller">${ICO.split(16)}<span>拆小步骤</span></button>
     ${more ? `<button type="button" class="btn ghost" data-act="next">下一条（剩余 ${p.items.length - p.index - 1}）</button>` : ''}
@@ -119,7 +117,7 @@ function render(p: Payload) {
     el.stepCard.hidden = false;
     el.stepCard.innerHTML = `
       <div class="tk-step-meta">
-        <span>当前待推进步骤</span>
+        <span>未完成步骤</span>
         <span class="mono">进度 ${doneSteps} / ${totalSteps}</span>
       </div>
       <div class="tk-step-text">${esc(nextStep.text)}</div>`;
@@ -145,7 +143,7 @@ function render(p: Payload) {
     : (p.reason || '到点了，先给它一个明确去向');
   el.stage.setAttribute('data-stage', 'banner');
 
-  renderActions(p, it);
+  renderActions(p);
 
   if (tickTimer !== null) clearInterval(tickTimer);
   tickTimer = window.setInterval(() => {
@@ -179,11 +177,11 @@ async function askSteps() {
   await send('smaller', { stepEdits: edits });
 }
 
-async function act(kind: string, anchor: HTMLElement, to?: number, stepId?: string) {
+async function act(kind: string, anchor: HTMLElement, to?: number) {
   const it = item();
   if (!it) return;
   switch (kind) {
-    case 'done': await send('done', stepId ? { stepId } : {}); break;
+    case 'done': await send('done'); break;
     case 'smaller': await askSteps(); break;
     case 'later': if (to) await send('later', { to }); break;
     case 'later-custom':
@@ -209,15 +207,14 @@ async function act(kind: string, anchor: HTMLElement, to?: number, stepId?: stri
 
 document.addEventListener('click', (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-act]');
-  if (b) void act(b.dataset.act!, b, b.dataset.to ? Number(b.dataset.to) : undefined, b.dataset.step);
+  if (b) void act(b.dataset.act!, b, b.dataset.to ? Number(b.dataset.to) : undefined);
 });
 
 // Esc 不结束强提醒，且当有弹窗打开时先交由弹窗处理
 document.addEventListener('keydown', (ev) => {
   if (document.querySelector('.md-mask, .dp-pop')) return;
   if (ev.key === 'Enter' && item()) {
-    const next = item()!.steps.find((s) => s.state !== 'done');
-    void act('done', el.root, undefined, next?.id);
+    void act('done', el.root);
   }
   if (ev.key === 'Escape') {
     void emit('takeover:close-blocked', {});

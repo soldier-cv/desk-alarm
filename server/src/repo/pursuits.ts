@@ -1,7 +1,7 @@
 import {
   defaultDueMs, importanceForStrength, strengthOfImportance,
   type Commitment, type CreatePursuitRequest, type EntryKind, type Importance,
-  type Pursuit, type PursuitContext, type PursuitNature, type PursuitStatus, type RecurrenceRule,
+  type Pursuit, type PursuitContext, type PursuitStatus, type RecurrenceRule,
   type Step, type UpdatePursuitRequest,
 } from '../../../shared/types.js';
 import { one, rows, toDt, toMs, tx, type Tx } from '../db.js';
@@ -15,7 +15,6 @@ interface PursuitRow {
   kind: string;
   url: string | null;
   path: string | null;
-  nature: string;
   importance: number;
   due_at: Date | null;
   recurrence: RecurrenceRule | null;
@@ -45,7 +44,6 @@ export function mapPursuit(row: any, steps: Step[], deviceIds: string[], nowMs: 
     kind: r.kind as EntryKind,
     url: r.url,
     path: r.path,
-    nature: r.nature as PursuitNature,
     strength: r.importance >= 3 ? 'strong' : 'weak',
     importance: r.importance as Importance,
     dueAt: toMs(r.due_at),
@@ -140,9 +138,9 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
   const id = await tx(async (q) => {
     const r = await q.one<{ id: string }>(
       `INSERT INTO pursuits
-         (user_id, text, note, kind, url, path, nature, importance, due_at,
+         (user_id, text, note, kind, url, path, importance, due_at,
           recurrence, context, commitment, status, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [userId,
        req.text.trim(),
@@ -150,7 +148,6 @@ export async function createPursuit(userId: string, req: CreatePursuitRequest): 
        (req.kind ?? 'text') as EntryKind,
        req.url ?? null,
        req.path ?? null,
-       (req.nature ?? 'one_off') as PursuitNature,
        importance,
        dueAt,
        req.recurrence ?? null,
@@ -174,11 +171,11 @@ export async function clonePursuit(id: string, userId: string): Promise<Pursuit 
   const newId = await tx(async (q) => {
     const r = await q.one<{ id: string }>(
       `INSERT INTO pursuits
-         (user_id, text, note, kind, url, path, nature, importance, due_at,
+         (user_id, text, note, kind, url, path, importance, due_at,
           recurrence, context, commitment, status, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,$9,$10,$11,'active',$12)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,'active',$11)
        RETURNING id`,
-      [userId, src.text, src.note, src.kind, src.url, src.path, src.nature,
+      [userId, src.text, src.note, src.kind, src.url, src.path,
         src.importance, src.recurrence, src.context, src.commitment, src.source],
     );
     if (!r) throw new Error('INSERT_FAILED');
@@ -206,7 +203,6 @@ export async function updatePursuit(
     if ('note' in req) add('note', req.note?.trim() || null);
     if (req.strength !== undefined) add('importance', importanceForStrength(req.strength));
     else if (req.importance !== undefined) add('importance', req.importance);
-    if (req.nature !== undefined) add('nature', req.nature);
     if ('dueAt' in req) add('due_at', toDt(req.dueAt));
     if ('recurrence' in req) add('recurrence', req.recurrence);
     if ('context' in req) add('context', req.context);

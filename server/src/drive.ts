@@ -16,7 +16,7 @@ import {
   getPursuit, listActiveUserIds, listPursuits, setDueAt, setImportance, setStatus,
 } from './repo/pursuits.js';
 import { getSettings } from './repo/settings.js';
-import { insertSteps, markStepDone, replaceSteps } from './repo/steps.js';
+import { insertSteps, replaceSteps } from './repo/steps.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -182,17 +182,8 @@ export async function followUp(
 
   switch (req.action) {
     case 'done':
-      if (req.stepId) {
-        const remaining = p.steps.filter((s) => s.id !== req.stepId && s.state !== 'done');
-        if (remaining.length > 0) dueAt = new Date(nextDue(p, strength, nowMs, requested));
-        else {
-          status = 'done';
-          completedAt = new Date(nowMs);
-        }
-      } else {
-        status = 'done';
-        completedAt = new Date(nowMs);
-      }
+      status = 'done';
+      completedAt = new Date(nowMs);
       break;
     case 'reopen':
       status = 'active';
@@ -217,9 +208,6 @@ export async function followUp(
     if (!cur) throw new Error('NOT_FOUND');
     if (cur.version !== req.version) throw new Error('VERSION_CONFLICT');
 
-    if (req.action === 'done' && req.stepId && status !== 'done') {
-      await markStepDone(q, req.stepId, userId);
-    }
     await insertFollowup(q, pursuitId, userId, level, req.action, req.note ?? null);
     await ackPendingForPursuit(q, pursuitId, req.action);
     const n = await q.run(

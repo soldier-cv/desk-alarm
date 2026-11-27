@@ -105,7 +105,6 @@ agent 建的事项 `source` 是 `mcp`，界面上能认出来；重复调用同�
     {
       "id": "p_xxx",
       "text": "写季度报告",
-      "nature": "project",
       "importance": 3,
       "status": "active",
       "progress": 0.5,

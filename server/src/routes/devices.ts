@@ -93,7 +93,7 @@ export async function deviceRoutes(app: FastifyInstance) {
     const sample: Pursuit = {
       id: 'ping', userId: req.session!.user.id,
       text: '试响：能听到声音说明这台设备没问题', note: null, kind: 'text',
-      url: null, path: null, nature: 'one_off', strength: 'strong', importance: 3,
+      url: null, path: null, strength: 'strong', importance: 3,
       dueAt: now, recurrence: null, context: null, commitment: null,
       status: 'active', importanceSort: 0, version: 1,
       createdAt: now, updatedAt: now, completedAt: null, lastActivityAt: now,

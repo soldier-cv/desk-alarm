@@ -17,7 +17,6 @@ import { addStep, deleteStep, updateStep } from '../repo/steps.js';
 import { getSettings, saveSettings } from '../repo/settings.js';
 
 const KINDS = ['text', 'link', 'path', 'image', 'audio'] as const;
-const NATURES = ['one_off', 'project'] as const;
 const STATUSES = ['inbox', 'active', 'paused', 'done', 'archived'] as const;
 const STEP_STATES = ['todo', 'doing', 'done'] as const;
 const FREQS = ['daily', 'weekly', 'monthly', 'quarterly', 'yearly'] as const;
@@ -87,9 +86,6 @@ export async function pursuitRoutes(app: FastifyInstance) {
     if (body.kind !== undefined && !oneOf(KINDS, body.kind)) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'kind 取值不合法' });
     }
-    if (body.nature !== undefined && !oneOf(NATURES, body.nature)) {
-      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'nature 取值不合法' });
-    }
     if (body.strength !== undefined && !['strong', 'weak'].includes(body.strength)) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'strength 只能是 strong 或 weak' });
     }
@@ -112,7 +108,7 @@ export async function pursuitRoutes(app: FastifyInstance) {
     const userId = uid(req);
     const pursuit = await createPursuit(userId, body);
     hub.broadcastToUser(userId, { t: 'pursuit.created', pursuit });
-    log.info('pursuit created', { id: pursuit.id, nature: pursuit.nature, source: pursuit.source });
+    log.info('pursuit created', { id: pursuit.id, strength: pursuit.strength, source: pursuit.source });
     return reply.code(201).send({ pursuit });
   });
 
@@ -122,9 +118,6 @@ export async function pursuitRoutes(app: FastifyInstance) {
     const body = (req.body ?? {}) as UpdatePursuitRequest;
     if (typeof body.version !== 'number') {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'version 必填' });
-    }
-    if (body.nature !== undefined && !oneOf(NATURES, body.nature)) {
-      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'nature 取值不合法' });
     }
     if (body.strength !== undefined && !['strong', 'weak'].includes(body.strength)) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'strength 只能是 strong 或 weak' });

@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AgentScope, CreatePursuitRequest, FollowupAction, FollowupRequest,
-  FocusResult, Importance, Pursuit, PursuitNature, PursuitStatus,
+  FocusResult, Importance, Pursuit, PursuitStatus,
 } from '../../../shared/types.js';
 import { FOLLOWUP_ACTIONS } from '../../../shared/types.js';
 import { buildFocus, decompose, followUp, reprioritize } from '../drive.js';
@@ -28,7 +28,6 @@ const plans = new Map<string, {
   summary: string;
 }>();
 
-const NATURES: readonly string[] = ['one_off', 'project'];
 const STATUSES: readonly string[] = ['inbox', 'active', 'paused', 'done', 'archived'];
 const READ_TOOLS = new Set(['today_digest', 'list_pursuits', 'get_pursuit']);
 
@@ -80,7 +79,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'create_pursuit',
     description:
-      '建推进项，steps 可一次给多个步骤。默认 nature=one_off、importance=1(P2)、status=active。' +
+      '建推进项，steps 可一次给多个步骤。默认 importance=1(P2)、status=active。' +
       'importance=3(P0) 或会很快升级到强打扰时，必须同时给 reason 说明依据。' +
       '本工具只生成预览和 plan_id，不落库；跟用户确认后调 apply_changes 才真正执行。',
     inputSchema: {
@@ -91,7 +90,6 @@ export const TOOLS: ToolDef[] = [
         kind: { type: 'string', enum: ['text', 'link', 'path', 'image', 'audio'] },
         url: { type: 'string' },
         path: { type: 'string' },
-        nature: { type: 'string', enum: ['one_off', 'project'] },
         importance: { type: 'integer', minimum: 1, maximum: 3, description: '1=P2 默认，2=P1，3=P0' },
         dueAt: { type: ['integer', 'string', 'null'], description: 'epoch 毫秒或日期字符串' },
         recurrence: { type: 'object' },
@@ -184,7 +182,6 @@ export const TOOLS: ToolDef[] = [
               id: { type: 'string', description: '除 create 外都要' },
               text: { type: 'string', description: 'create 用' },
               steps: { type: 'array', items: { type: 'string' } },
-              nature: { type: 'string' },
               importance: { type: 'integer' },
               dueAt: { type: ['integer', 'string', 'null'] },
               reason: { type: 'string' },
@@ -255,7 +252,6 @@ async function todayDigest(userId: string) {
     聚焦: focus.items.map((it) => ({
       id: it.pursuit.id,
       text: it.pursuit.text,
-      nature: it.pursuit.nature,
       importance: it.pursuit.importance,
       status: it.pursuit.status,
       progress: it.pursuit.progress,
@@ -447,9 +443,7 @@ async function describeOp(op: Op, i: number, userId: string): Promise<Record<str
       return {
         序号: n, 动作: '新建推进项', 目标: op.req.text,
         详情: {
-          性质: op.req.nature ?? 'one_off',
           重要性: op.req.importance ?? 1,
-          
           状态: op.req.status ?? 'active',
           步骤: op.req.steps ?? [],
           截止: op.req.dueAt ?? null,
@@ -590,11 +584,6 @@ function buildCreateRequest(args: Record<string, unknown>): CreatePursuitRequest
   if (args.url !== undefined) req.url = String(args.url);
   if (args.path !== undefined) req.path = String(args.path);
 
-  if (args.nature !== undefined) {
-    const v = String(args.nature);
-    if (!NATURES.includes(v)) throw new Error(`未知 nature ${v}`);
-    req.nature = v as PursuitNature;
-  }
   if (args.importance !== undefined) {
     const n = Number(args.importance);
     if (!Number.isInteger(n) || n < 1 || n > 3) throw new Error('importance 必须是 1=P2 / 2=P1 / 3=P0');
