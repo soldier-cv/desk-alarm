@@ -64,15 +64,14 @@ strSeg.addEventListener('click', (ev) => {
   input.focus();
 });
 
-document.addEventListener('keydown', (ev) => {
+document.addEventListener('keydown', async (ev) => {
+  if (ev.isComposing) return;
   if (ev.altKey && ev.key.toLowerCase() === 's') {
     ev.preventDefault();
     strength = strength === 'strong' ? 'weak' : 'strong';
     renderParse(input.value);
+    return;
   }
-});
-
-input.addEventListener('keydown', async (ev) => {
   if (ev.key === 'Escape') {
     input.value = '';
     strength = 'weak';
@@ -81,11 +80,12 @@ input.addEventListener('keydown', async (ev) => {
     await invoke('hide_capture');
     return;
   }
-  if (ev.key !== 'Enter') return;
+  if (ev.key !== 'Enter' || ev.repeat) return;
 
   const text = input.value.trim();
   if (!text) return;
 
+  ev.preventDefault();
   await emit('capture:submit', {
     text,
     dueAt: picked.remindAt,
