@@ -5,9 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
-## [Unreleased]
+## [v2.2.1] - 2026-11-28
 
 ### Changed
+- 安卓端核对：移动端使用独立的 `styles-mobile.css` 与底部快速记面板，桌面输入条高度、弹窗尺寸与快捷键提示调整都不影响安卓；保存成功 toast、上线 `welcome` 补弹与全屏强提醒保持原样，Kotlin 无需改动。
 - 快速记弹窗与列表内嵌输入条统一：弹窗新增「记一条」按钮，强弱标签改为「弱 / 强」，移除底部快捷键说明、右侧全局快捷键提示与输入就绪横线；弹窗高度从 172px 收到 102px，底部不再留空。
 - 快速记保存成功后在弹窗中央短暂显示「已保存，可接着记下一条」提示；失败时同位置显示红色错误原因。
 
