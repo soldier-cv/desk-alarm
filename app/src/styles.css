@@ -408,7 +408,7 @@ select.input option { background: var(--md-surface-container-high); color: var(-
   width: 24px; height: 24px; flex: none;
 }
 .capture-in input {
-  flex: 1; min-width: 0; background: none; border: none;
+  flex: 1; min-width: 0; align-self: stretch; background: none; border: none;
   font-size: 14px; color: var(--md-on-surface);
 }
 .capture-in input:focus, .capture-in input:focus-visible { outline: none; }

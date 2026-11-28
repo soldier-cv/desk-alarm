@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [Unreleased]
+
+### Fixed
+- 主界面与快速记小窗的输入框：`<input>` 按内容高度居中，只有中间约 16px 可点击，点框上方无效；改为撑满 46px 容器高度，整块区域都能聚焦输入。
+
 ## [v2.2.0] - 2026-11-27
 
 ### Added
