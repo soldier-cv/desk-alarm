@@ -46,7 +46,7 @@
         "url": "capture.html",
         "title": "快速记一条",
         "width": 580,
-        "height": 114,
+        "height": 102,
         "resizable": false,
         "decorations": false,
         "alwaysOnTop": true,

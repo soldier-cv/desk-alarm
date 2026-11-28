@@ -39,8 +39,6 @@
     .cap-str-seg { -webkit-app-region: no-drag; }
     #parse { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; min-height: 26px; align-items: center; -webkit-app-region: no-drag; }
     .hint { font-size: 11.5px; color: var(--md-on-surface-muted); }
-    #bar { height: 2px; border-radius: var(--shape-full); background: var(--md-outline-variant); margin-top: 10px; overflow: hidden; }
-    #bar.ready { background: linear-gradient(90deg, var(--md-primary) 45%, var(--md-outline-variant) 45%); }
   </style>
 </head>
 <body>
@@ -55,7 +53,6 @@
       <button type="button" class="btn sm solid" id="q-go">记一条</button>
     </div>
     <div id="parse"></div>
-    <div id="bar"></div>
     <div class="saved" id="saved" role="status" aria-live="polite" hidden>
       <span class="chk" id="saved-chk">✓</span><span id="saved-text">已保存，可接着记下一条</span>
     </div>

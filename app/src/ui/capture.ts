@@ -14,7 +14,6 @@ listen<{ theme: 'dark' | 'morandi' }>('theme:changed', (ev) => applyTheme(ev.pay
 
 const input = document.querySelector<HTMLInputElement>('#q')!;
 const parse = document.querySelector<HTMLDivElement>('#parse')!;
-const bar = document.querySelector<HTMLDivElement>('#bar')!;
 const strSeg = document.querySelector<HTMLDivElement>('#str-seg')!;
 const qGo = document.querySelector<HTMLButtonElement>('#q-go')!;
 const saved = document.querySelector<HTMLDivElement>('#saved')!;
@@ -74,7 +73,6 @@ function renderParse(raw: string) {
 
 input.addEventListener('input', () => {
   renderParse(input.value);
-  bar.classList.toggle('ready', input.value.trim().length > 0);
 });
 
 strSeg.addEventListener('click', (ev) => {
@@ -96,7 +94,6 @@ async function submit() {
   });
   input.value = '';
   strength = 'weak';
-  bar.classList.remove('ready');
   renderParse('');
   input.focus();
 }
@@ -114,7 +111,6 @@ document.addEventListener('keydown', async (ev) => {
   if (ev.key === 'Escape') {
     input.value = '';
     strength = 'weak';
-    bar.classList.remove('ready');
     renderParse('');
     if (savedTimer !== null) clearTimeout(savedTimer);
     saved.classList.remove('on');
