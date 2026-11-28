@@ -164,8 +164,8 @@ pub fn is_autostart_enabled(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
-/// 试响。用系统提示音，让用户确认这台设备能真的出声。
-/// dev 模式下通知图标显示成 PowerShell 是正常的，打包后才正常。
+/// 试响。通知插件按 exe 是否在 target 下判断「未安装」，dev / 裸 exe 会退回 PowerShell AUMID，
+/// 来源显示成 PowerShell；安装包才显示 DeskAlarm。
 #[tauri::command]
 pub fn ping(app: AppHandle, title: String, body: String, sound: Option<String>) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
