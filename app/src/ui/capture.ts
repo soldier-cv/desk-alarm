@@ -1,5 +1,5 @@
 /**
- * 快速捕获窗口。全局热键唤起，Enter 存完立刻接着记下一条，Alt+S 快捷切强/弱提醒。
+ * 快速捕获窗口。全局热键唤起，Enter/「记一条」存完立刻接着记下一条，Alt+S 快捷切强/弱提醒。
  */
 import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -14,10 +14,12 @@ listen<{ theme: 'dark' | 'morandi' }>('theme:changed', (ev) => applyTheme(ev.pay
 
 const input = document.querySelector<HTMLInputElement>('#q')!;
 const parse = document.querySelector<HTMLDivElement>('#parse')!;
-const hint = document.querySelector<HTMLDivElement>('#hint')!;
 const bar = document.querySelector<HTMLDivElement>('#bar')!;
 const strSeg = document.querySelector<HTMLDivElement>('#str-seg')!;
+const qGo = document.querySelector<HTMLButtonElement>('#q-go')!;
 const saved = document.querySelector<HTMLDivElement>('#saved')!;
+const savedChk = document.querySelector<HTMLSpanElement>('#saved-chk')!;
+const savedText = document.querySelector<HTMLSpanElement>('#saved-text')!;
 const capIco = document.querySelector<HTMLElement>('#cap-ico');
 if (capIco) capIco.innerHTML = ICO.add(24);
 
@@ -29,8 +31,11 @@ function esc(s: string): string {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 }
 
-function showSaved() {
+function showResult(ok: boolean, message?: string) {
   if (savedTimer !== null) clearTimeout(savedTimer);
+  saved.classList.toggle('err', !ok);
+  savedChk.textContent = ok ? '✓' : '!';
+  savedText.textContent = ok ? '已保存，可接着记下一条' : (message ?? '保存失败');
   saved.hidden = false;
   void saved.offsetWidth;
   saved.classList.add('on');
@@ -40,7 +45,7 @@ function showSaved() {
       saved.hidden = true;
       savedTimer = null;
     }, 200);
-  }, 900);
+  }, ok ? 900 : 2200);
 }
 
 function syncStrengthUI() {
@@ -80,6 +85,24 @@ strSeg.addEventListener('click', (ev) => {
   input.focus();
 });
 
+async function submit() {
+  const text = input.value.trim();
+  if (!text) return;
+  await emit('capture:submit', {
+    text,
+    dueAt: picked.remindAt,
+    kind: picked.kind,
+    strength,
+  });
+  input.value = '';
+  strength = 'weak';
+  bar.classList.remove('ready');
+  renderParse('');
+  input.focus();
+}
+
+qGo.addEventListener('click', () => void submit());
+
 document.addEventListener('keydown', async (ev) => {
   if (ev.isComposing) return;
   if (ev.altKey && ev.key.toLowerCase() === 's') {
@@ -100,41 +123,14 @@ document.addEventListener('keydown', async (ev) => {
     return;
   }
   if (ev.key !== 'Enter' || ev.repeat) return;
-
-  const text = input.value.trim();
-  if (!text) return;
+  if (!input.value.trim()) return;
 
   ev.preventDefault();
-  await emit('capture:submit', {
-    text,
-    dueAt: picked.remindAt,
-    kind: picked.kind,
-    strength,
-  });
-
-  input.value = '';
-  strength = 'weak';
-  bar.classList.remove('ready');
-  renderParse('');
-  input.focus();
+  await submit();
 });
 
 listen<{ ok: boolean; message?: string }>('capture:result', (ev) => {
-  if (ev.payload.ok) {
-    showSaved();
-    hint.textContent = '已保存，可接着记下一条';
-    hint.className = 'hint ok';
-  } else {
-    if (savedTimer !== null) clearTimeout(savedTimer);
-    saved.classList.remove('on');
-    saved.hidden = true;
-    hint.textContent = ev.payload.message ?? '保存失败';
-    hint.className = 'hint err';
-  }
-  window.setTimeout(() => {
-    hint.textContent = 'Enter 保存 · Alt+S 切强弱 · Esc 关闭';
-    hint.className = 'hint';
-  }, 2200);
+  showResult(ev.payload.ok, ev.payload.message);
 });
 
 listen('capture:focus', () => {

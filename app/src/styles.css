@@ -390,7 +390,7 @@ select.input option { background: var(--md-surface-container-high); color: var(-
 /* 列表内嵌 M3 Capture Bar（仅在待办类视图显示） */
 .capture-bar { flex: none; padding: 0 24px 14px; }
 .capture-in {
-  display: flex; align-items: center; gap: 10px; height: 46px;
+  display: flex; align-items: center; gap: 10px; height: 36px;
   background: var(--md-surface-container);
   border: 1px solid var(--md-outline-variant);
   border-radius: var(--shape-md);

@@ -19,25 +19,26 @@
     .saved {
       position: absolute; left: 50%; top: 50%; z-index: 5;
       display: flex; align-items: center; gap: 8px; padding: 10px 18px;
+      max-width: calc(100% - 32px);
       border-radius: var(--shape-full); border: 1px solid var(--md-tertiary);
       background: var(--md-tertiary-container); color: var(--md-on-tertiary-container);
       font-size: 13px; font-weight: 600; box-shadow: var(--elev-3);
       pointer-events: none; opacity: 0; transform: translate(-50%, -50%) scale(.94);
       transition: opacity .16s var(--ease), transform .2s var(--ease);
     }
+    #saved-text { overflow-wrap: anywhere; }
     .saved.on { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    .saved.err { border-color: var(--md-error); background: var(--md-error-container); color: var(--md-on-error-container); }
     .saved .chk {
       display: grid; place-items: center; width: 18px; height: 18px;
       border-radius: var(--shape-full); background: var(--md-tertiary);
       color: var(--md-on-tertiary); font-size: 12px;
     }
-    .capture-in { height: 46px; -webkit-app-region: no-drag; }
+    .saved.err .chk { background: var(--md-error); color: var(--md-on-error); }
+    .capture-in { -webkit-app-region: no-drag; }
     .cap-str-seg { -webkit-app-region: no-drag; }
     #parse { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; min-height: 26px; align-items: center; -webkit-app-region: no-drag; }
-    .foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 10px; }
     .hint { font-size: 11.5px; color: var(--md-on-surface-muted); }
-    .hint.ok { color: var(--md-tertiary); font-weight: 600; }
-    .hint.err { color: var(--md-error); font-weight: 600; }
     #bar { height: 2px; border-radius: var(--shape-full); background: var(--md-outline-variant); margin-top: 10px; overflow: hidden; }
     #bar.ready { background: linear-gradient(90deg, var(--md-primary) 45%, var(--md-outline-variant) 45%); }
   </style>
@@ -48,18 +49,15 @@
       <span class="prompt" id="cap-ico"></span>
       <input id="q" placeholder="写一句话、链接或路径，带时间自动设截止" autocomplete="off" spellcheck="false">
       <div class="cap-str-seg" id="str-seg">
-        <button type="button" class="on" data-strength="weak" title="到点发通知，未填时间默认 1 天后">弱提醒</button>
-        <button type="button" data-strength="strong" title="到点弹接管窗，未填时间默认 2 小时后（Alt+S 切换）">强提醒</button>
+        <button type="button" class="on" data-strength="weak" title="到点发通知，未填时间默认 1 天后">弱</button>
+        <button type="button" data-strength="strong" title="到点弹接管窗，未填时间默认 2 小时后">强</button>
       </div>
+      <button type="button" class="btn sm solid" id="q-go">记一条</button>
     </div>
     <div id="parse"></div>
     <div id="bar"></div>
-    <div class="foot">
-      <span class="hint" id="hint">Enter 保存 · Alt+S 切强弱 · Esc 关闭</span>
-      <span class="hint mono">Ctrl+Shift+Space</span>
-    </div>
     <div class="saved" id="saved" role="status" aria-live="polite" hidden>
-      <span class="chk">✓</span><span>已保存，可接着记下一条</span>
+      <span class="chk" id="saved-chk">✓</span><span id="saved-text">已保存，可接着记下一条</span>
     </div>
   </div>
   <script type="module" src="/src/ui/capture.ts"></script>
