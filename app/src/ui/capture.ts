@@ -17,14 +17,30 @@ const parse = document.querySelector<HTMLDivElement>('#parse')!;
 const hint = document.querySelector<HTMLDivElement>('#hint')!;
 const bar = document.querySelector<HTMLDivElement>('#bar')!;
 const strSeg = document.querySelector<HTMLDivElement>('#str-seg')!;
+const saved = document.querySelector<HTMLDivElement>('#saved')!;
 const capIco = document.querySelector<HTMLElement>('#cap-ico');
 if (capIco) capIco.innerHTML = ICO.add(24);
 
 let picked: Parsed = parseInput('');
 let strength: ReminderStrength = 'weak';
+let savedTimer: number | null = null;
 
 function esc(s: string): string {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+}
+
+function showSaved() {
+  if (savedTimer !== null) clearTimeout(savedTimer);
+  saved.hidden = false;
+  void saved.offsetWidth;
+  saved.classList.add('on');
+  savedTimer = window.setTimeout(() => {
+    saved.classList.remove('on');
+    savedTimer = window.setTimeout(() => {
+      saved.hidden = true;
+      savedTimer = null;
+    }, 200);
+  }, 900);
 }
 
 function syncStrengthUI() {
@@ -77,6 +93,9 @@ document.addEventListener('keydown', async (ev) => {
     strength = 'weak';
     bar.classList.remove('ready');
     renderParse('');
+    if (savedTimer !== null) clearTimeout(savedTimer);
+    saved.classList.remove('on');
+    saved.hidden = true;
     await invoke('hide_capture');
     return;
   }
@@ -102,9 +121,13 @@ document.addEventListener('keydown', async (ev) => {
 
 listen<{ ok: boolean; message?: string }>('capture:result', (ev) => {
   if (ev.payload.ok) {
+    showSaved();
     hint.textContent = '已保存，可接着记下一条';
     hint.className = 'hint ok';
   } else {
+    if (savedTimer !== null) clearTimeout(savedTimer);
+    saved.classList.remove('on');
+    saved.hidden = true;
     hint.textContent = ev.payload.message ?? '保存失败';
     hint.className = 'hint err';
   }
